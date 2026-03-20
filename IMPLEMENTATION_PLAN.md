@@ -45,6 +45,7 @@
 | Cost Explorer tests | ✅ Done | `internal/spending/costs_test.go` | Comprehensive |
 | Runtime cost monitoring tests | ✅ Done | `internal/spending/monitor_test.go` | Comprehensive |
 | MCP server integration test | ✅ Done | `internal/main_test.go` | 11 tests (does not test main()) |
+| Graceful shutdown | ✅ Done | `internal/main.go` | In-flight requests complete, defers run |
 | Expired plan cleanup (24-hour expiration, hourly cleanup) | ✅ Done | `internal/state/cleanup.go` | Full cleanup service |
 | Expired plan cleanup tests | ✅ Done | `internal/state/cleanup_test.go` | Comprehensive |
 | State reconciliation | ⚠️ Partial | `internal/state/reconcile.go` | No AWS pagination (see P3.1) |
@@ -88,7 +89,7 @@
 
 ---
 
-## P0 — Critical Issues (Security/Cost Risks, Broken Functionality)
+## P0 — Critical Issues (Security/Cost Risks, Broken Functionality) ✅ ALL COMPLETED
 
 ### P0.1 CI/CD Workflows ✅ COMPLETED
 
@@ -119,12 +120,13 @@
 - **Location:** `internal/providers/aws.go`, `internal/state/types.go`, `go.mod`
 - **Completed:** 2026-03-20
 
-### P0.4 Graceful Shutdown Issues ❌
+### P0.4 Graceful Shutdown Issues ✅ COMPLETED
 
-- [ ] HTTP mode uses `Close()` instead of `Shutdown()` for graceful shutdown
-- [ ] `os.Exit(0)` bypasses defers in shutdown path
-- **Impact:** In-flight requests may be dropped; cleanup may not run
+- [x] ✅ HTTP mode now uses `Shutdown()` instead of `Close()` for graceful shutdown with 30s timeout
+- [x] ✅ Removed `os.Exit(0)` from stdio shutdown path - now returns naturally to allow defers to run
+- [x] ✅ Replaced `os.Exit(1)` with `return` to allow cleanup on errors
 - **Location:** `internal/main.go`
+- **Completed:** 2026-03-20
 
 ---
 
@@ -574,12 +576,12 @@ go tool cover -html=coverage.out          # View coverage report
 
 | Priority | Count | Items |
 |----------|-------|-------|
-| **P0 Critical** | 1 | Graceful shutdown (P0.4) |
+| **P0 Critical** | 0 | ✅ All completed |
 | **P1 Spec Gaps** | 18 | Cost estimation, logging, ports, env vars, HTTPS, VPC, subnets, approval, health wait, etc. |
 | **P2 Test Gaps** | 11 | awsclient (0%), errors (0%), config (0%), provider.go (0%), aws.go (8.3%), mocking, coverage |
 | **P3 Quality** | 8 | Pagination, ALB tags, version, region, errors, disclaimer, Makefile, unused AddTime |
 | **P5 Stretch** | 3 | CloudFormation, multi-cloud, secrets |
-| **Total** | **44** | |
+| **Total** | **40** | |
 
 ---
 

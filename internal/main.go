@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/cjmartian/agent-deploy/internal/awsclient"
 	"github.com/cjmartian/agent-deploy/internal/logging"
@@ -222,28 +223,32 @@ func main() {
 		go func() {
 			<-sigCh
 			shutdown()
-			if err := httpServer.Close(); err != nil {
-				log.Error("failed to close HTTP server", logging.Err(err))
+			// Use Shutdown for graceful shutdown - waits for in-flight requests.
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer shutdownCancel()
+			if err := httpServer.Shutdown(shutdownCtx); err != nil {
+				log.Error("failed to gracefully shutdown HTTP server", logging.Err(err))
 			}
 		}()
 
 		log.Info("listening on HTTP", slog.String("address", *httpAddr))
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Error("HTTP server failed", logging.Err(err))
-			os.Exit(1)
+			return // Return instead of os.Exit to allow defers to run
 		}
 	} else {
 		// For stdio, handle shutdown signal in goroutine.
 		go func() {
 			<-sigCh
 			shutdown()
-			os.Exit(0)
+			// Don't os.Exit here - let main function return naturally
+			// The server.Run() call will return when context is canceled
 		}()
 
 		log.Info("running on stdio transport")
 		if err := server.Run(ctx, &mcp.StdioTransport{}); err != nil {
 			log.Error("server failed", logging.Err(err))
-			os.Exit(1)
+			return // Return instead of os.Exit to allow defers to run
 		}
 	}
 }
