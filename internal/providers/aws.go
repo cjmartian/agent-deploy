@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/ecr"
@@ -126,6 +128,20 @@ type teardownOutput struct {
 
 // planInfra analyzes requirements and creates an infrastructure plan with cost estimate.
 func (p *AWSProvider) planInfra(ctx context.Context, _ *mcp.CallToolRequest, in planInfraInput) (*mcp.CallToolResult, planInfraOutput, error) {
+	// Validate input.
+	if strings.TrimSpace(in.AppDescription) == "" {
+		return nil, planInfraOutput{}, fmt.Errorf("app_description is required and cannot be empty")
+	}
+	if strings.TrimSpace(in.Region) == "" {
+		return nil, planInfraOutput{}, fmt.Errorf("region is required and cannot be empty")
+	}
+	if in.ExpectedUsers <= 0 {
+		return nil, planInfraOutput{}, fmt.Errorf("expected_users must be a positive integer, got %d", in.ExpectedUsers)
+	}
+	if in.LatencyMS <= 0 {
+		return nil, planInfraOutput{}, fmt.Errorf("latency_ms must be a positive integer, got %d", in.LatencyMS)
+	}
+
 	// Select services based on requirements.
 	services := []string{"VPC", "ECS Fargate", "ALB", "CloudWatch Logs"}
 	if in.ExpectedUsers > 1000 {
@@ -246,6 +262,12 @@ func (p *AWSProvider) createInfra(ctx context.Context, _ *mcp.CallToolRequest, i
 	if err := p.provisionALB(ctx, cfg, infra, tags); err != nil {
 		p.store.SetInfraStatus(infraID, state.InfraStatusFailed)
 		return nil, createInfraOutput{}, fmt.Errorf("provision ALB: %w", err)
+	}
+
+	// Create CloudWatch log group for ECS task logs.
+	if err := p.provisionLogGroup(ctx, cfg, infra, tags); err != nil {
+		p.store.SetInfraStatus(infraID, state.InfraStatusFailed)
+		return nil, createInfraOutput{}, fmt.Errorf("provision log group: %w", err)
 	}
 
 	// Mark infrastructure as ready.
@@ -415,6 +437,16 @@ func (p *AWSProvider) teardown(ctx context.Context, _ *mcp.CallToolRequest, in t
 	// Delete ALB and target group.
 	if err := p.deleteALB(ctx, cfg, infra); err != nil {
 		log.Printf("[aws_teardown] Warning: failed to delete ALB: %v", err)
+	}
+
+	// Delete ECR repository.
+	if err := p.deleteECRRepository(ctx, cfg, infra); err != nil {
+		log.Printf("[aws_teardown] Warning: failed to delete ECR repository: %v", err)
+	}
+
+	// Delete CloudWatch log group.
+	if err := p.deleteLogGroup(ctx, cfg, infra); err != nil {
+		log.Printf("[aws_teardown] Warning: failed to delete log group: %v", err)
 	}
 
 	// Delete VPC resources (security groups, subnets, internet gateway, VPC).
@@ -696,6 +728,37 @@ func (p *AWSProvider) provisionALB(ctx context.Context, cfg aws.Config, infra *s
 	return nil
 }
 
+// provisionLogGroup creates a CloudWatch log group for ECS task logs.
+func (p *AWSProvider) provisionLogGroup(ctx context.Context, cfg aws.Config, infra *state.Infrastructure, tags map[string]string) error {
+	cwlClient := cloudwatchlogs.NewFromConfig(cfg)
+
+	logGroupName := "/ecs/agent-deploy-" + infra.ID
+
+	_, err := cwlClient.CreateLogGroup(ctx, &cloudwatchlogs.CreateLogGroupInput{
+		LogGroupName: aws.String(logGroupName),
+		Tags:         tags,
+	})
+	if err != nil {
+		// Log group may already exist, which is fine.
+		log.Printf("[provisionLogGroup] Note: %v", err)
+	}
+
+	// Set log retention to 7 days to manage costs.
+	_, err = cwlClient.PutRetentionPolicy(ctx, &cloudwatchlogs.PutRetentionPolicyInput{
+		LogGroupName:    aws.String(logGroupName),
+		RetentionInDays: aws.Int32(7),
+	})
+	if err != nil {
+		log.Printf("[provisionLogGroup] Warning: could not set retention policy: %v", err)
+	}
+
+	p.store.UpdateInfraResource(infra.ID, state.ResourceLogGroup, logGroupName)
+	infra.Resources[state.ResourceLogGroup] = logGroupName
+
+	log.Printf("[provisionLogGroup] Log group %s created", logGroupName)
+	return nil
+}
+
 func (p *AWSProvider) ensureECRRepository(ctx context.Context, cfg aws.Config, infra *state.Infrastructure, deployID string, tags map[string]string) error {
 	ecrClient := ecr.NewFromConfig(cfg)
 
@@ -724,6 +787,18 @@ func (p *AWSProvider) createTaskDefinition(ctx context.Context, cfg aws.Config, 
 		image = "nginx:latest"
 	}
 
+	// Get log group name from infrastructure.
+	logGroupName := infra.Resources[state.ResourceLogGroup]
+	if logGroupName == "" {
+		logGroupName = "/ecs/agent-deploy-" + infra.ID
+	}
+
+	// Extract region from log group or use a default.
+	region := infra.Region
+	if region == "" {
+		region = "us-east-1"
+	}
+
 	resp, err := ecsClient.RegisterTaskDefinition(ctx, &ecs.RegisterTaskDefinitionInput{
 		Family:                  aws.String("agent-deploy-" + deployID[:12]),
 		RequiresCompatibilities: []ecstypes.Compatibility{ecstypes.CompatibilityFargate},
@@ -739,6 +814,14 @@ func (p *AWSProvider) createTaskDefinition(ctx context.Context, cfg aws.Config, 
 				ContainerPort: aws.Int32(80),
 				Protocol:      ecstypes.TransportProtocolTcp,
 			}},
+			LogConfiguration: &ecstypes.LogConfiguration{
+				LogDriver: ecstypes.LogDriverAwslogs,
+				Options: map[string]string{
+					"awslogs-group":         logGroupName,
+					"awslogs-region":        region,
+					"awslogs-stream-prefix": "ecs",
+				},
+			},
 		}},
 	})
 	if err != nil {
@@ -746,7 +829,7 @@ func (p *AWSProvider) createTaskDefinition(ctx context.Context, cfg aws.Config, 
 	}
 
 	taskDefARN := *resp.TaskDefinition.TaskDefinitionArn
-	log.Printf("[createTaskDefinition] Task definition %s created", taskDefARN)
+	log.Printf("[createTaskDefinition] Task definition %s created with logs to %s", taskDefARN, logGroupName)
 	return taskDefARN, nil
 }
 
@@ -883,6 +966,45 @@ func (p *AWSProvider) deleteALB(ctx context.Context, cfg aws.Config, infra *stat
 		}
 	}
 
+	return nil
+}
+
+func (p *AWSProvider) deleteECRRepository(ctx context.Context, cfg aws.Config, infra *state.Infrastructure) error {
+	ecrClient := ecr.NewFromConfig(cfg)
+
+	repoName := infra.Resources[state.ResourceECRRepository]
+	if repoName == "" {
+		return nil
+	}
+
+	_, err := ecrClient.DeleteRepository(ctx, &ecr.DeleteRepositoryInput{
+		RepositoryName: aws.String(repoName),
+		Force:          true, // Delete even if images exist.
+	})
+	if err != nil {
+		log.Printf("[deleteECRRepository] Warning: could not delete ECR repository: %v", err)
+	} else {
+		log.Printf("[deleteECRRepository] ECR repository %s deleted", repoName)
+	}
+	return nil
+}
+
+func (p *AWSProvider) deleteLogGroup(ctx context.Context, cfg aws.Config, infra *state.Infrastructure) error {
+	cwlClient := cloudwatchlogs.NewFromConfig(cfg)
+
+	logGroupName := infra.Resources[state.ResourceLogGroup]
+	if logGroupName == "" {
+		return nil
+	}
+
+	_, err := cwlClient.DeleteLogGroup(ctx, &cloudwatchlogs.DeleteLogGroupInput{
+		LogGroupName: aws.String(logGroupName),
+	})
+	if err != nil {
+		log.Printf("[deleteLogGroup] Warning: could not delete log group: %v", err)
+	} else {
+		log.Printf("[deleteLogGroup] Log group %s deleted", logGroupName)
+	}
 	return nil
 }
 

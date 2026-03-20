@@ -2,7 +2,7 @@
 
 **Project Goal:** Natural language deployment of applications via MCP server → Cloud provider. Allow users to end-to-end create applications and make them publicly available while ensuring spend does not cross user-defined boundaries.
 
-**Last Updated:** 2026-03-20
+**Last Updated:** 2026-03-21
 
 ---
 
@@ -23,19 +23,19 @@
 | State storage (P1.3) | ✅ Done | `internal/state/store.go` — full Store implementation |
 | AWS client config (P1.4) | ✅ Done | `internal/awsclient/client.go` — LoadConfig(), ResourceTags() |
 | Wire Store into AWSProvider (P1.5) | ✅ Done | `internal/providers/aws.go` — store field, NewAWSProvider constructor |
-| planInfra (P2.1) | ✅ Done | `internal/providers/aws.go` — analyzes requirements, estimates costs, persists plan |
+| planInfra (P2.1) | ✅ Done | `internal/providers/aws.go` — analyzes requirements, estimates costs, persists plan, input validation (app_description, region, expected_users, latency_ms) |
 | Spending limits config (P2.2) | ✅ Done | `internal/spending/config.go` — Limits, LoadLimits(), env var support |
 | Pre-provisioning budget check (P2.3) | ✅ Done | `internal/spending/check.go` — CheckBudget(), CheckResult |
-| createInfra (P2.4) | ✅ Done | `internal/providers/aws.go` — VPC, subnets, IGW, route tables, SGs, ECS, ALB |
-| deploy (P2.5) | ✅ Done | `internal/providers/aws.go` — ECR repo, task def, ECS service, ALB URLs |
+| createInfra (P2.4) | ✅ Done | `internal/providers/aws.go` — VPC, subnets, IGW, route tables, SGs, ECS, ALB, CloudWatch log group (7-day retention) |
+| deploy (P2.5) | ✅ Done | `internal/providers/aws.go` — ECR repo, task def with awslogs driver, ECS service, ALB URLs |
 | status (P2.6) | ✅ Done | `internal/providers/aws.go` — queries ECS service status, ALB URLs |
-| teardown (P2.7) | ✅ Done | `internal/providers/aws.go` — deletes all resources in reverse order |
+| teardown (P2.7) | ✅ Done | `internal/providers/aws.go` — deletes all resources in reverse order, ECR cleanup (force=true), CloudWatch log group cleanup |
 | deploymentsResource (P2.8) | ✅ Done | `internal/providers/aws.go` — JSON list of deployments from store |
 | Error handling patterns (TD.1) | ✅ Done | `internal/errors/errors.go` — domain errors |
 | ID generation tests (P4.1) | ✅ Done | `internal/id/id_test.go` |
 | State storage tests (P4.2) | ✅ Done | `internal/state/store_test.go` |
 | Spending check tests (P4.3) | ✅ Done | `internal/spending/check_test.go` |
-| AWS provider tests (P4.4) | ✅ Partial | `internal/providers/aws_test.go` — planInfra, deploymentsResource, statusOutput |
+| AWS provider tests (P4.4) | ✅ Done | `internal/providers/aws_test.go` — planInfra, deploymentsResource, statusOutput, input validation (7 test cases) |
 | Cost Explorer integration (P3.1) | ✅ Done | `internal/spending/costs.go` — CostTracker, GetDeploymentCosts, GetTotalMonthlySpend, GetCostsByDeployment, CheckAlerts, GetDeploymentsOverBudget, GenerateMonitoringReport |
 | Cost Explorer tests (P3.1) | ✅ Done | `internal/spending/costs_test.go` — comprehensive unit tests |
 | Runtime cost monitoring (P3.2) | ✅ Done | `internal/spending/monitor.go` — CostMonitor, MonitorConfig, Start/Stop lifecycle, CheckNow, background cost checking, alert processing, auto-teardown |

@@ -157,3 +157,114 @@ func TestStatusOutput_JSON(t *testing.T) {
 		t.Errorf("DeploymentID = %q, want %q", parsed.DeploymentID, output.DeploymentID)
 	}
 }
+
+// TestPlanInfra_InputValidation tests that planInfra rejects invalid inputs.
+func TestPlanInfra_InputValidation(t *testing.T) {
+	store, _ := state.NewStore(t.TempDir())
+	provider := NewAWSProvider(store)
+
+	tests := []struct {
+		name  string
+		input planInfraInput
+		want  string // substring expected in error message
+	}{
+		{
+			name: "empty app description",
+			input: planInfraInput{
+				AppDescription: "",
+				ExpectedUsers:  100,
+				LatencyMS:      100,
+				Region:         "us-east-1",
+			},
+			want: "app_description",
+		},
+		{
+			name: "whitespace only app description",
+			input: planInfraInput{
+				AppDescription: "   ",
+				ExpectedUsers:  100,
+				LatencyMS:      100,
+				Region:         "us-east-1",
+			},
+			want: "app_description",
+		},
+		{
+			name: "empty region",
+			input: planInfraInput{
+				AppDescription: "Test app",
+				ExpectedUsers:  100,
+				LatencyMS:      100,
+				Region:         "",
+			},
+			want: "region",
+		},
+		{
+			name: "zero expected users",
+			input: planInfraInput{
+				AppDescription: "Test app",
+				ExpectedUsers:  0,
+				LatencyMS:      100,
+				Region:         "us-east-1",
+			},
+			want: "expected_users",
+		},
+		{
+			name: "negative expected users",
+			input: planInfraInput{
+				AppDescription: "Test app",
+				ExpectedUsers:  -10,
+				LatencyMS:      100,
+				Region:         "us-east-1",
+			},
+			want: "expected_users",
+		},
+		{
+			name: "zero latency",
+			input: planInfraInput{
+				AppDescription: "Test app",
+				ExpectedUsers:  100,
+				LatencyMS:      0,
+				Region:         "us-east-1",
+			},
+			want: "latency_ms",
+		},
+		{
+			name: "negative latency",
+			input: planInfraInput{
+				AppDescription: "Test app",
+				ExpectedUsers:  100,
+				LatencyMS:      -50,
+				Region:         "us-east-1",
+			},
+			want: "latency_ms",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, err := provider.planInfra(context.Background(), nil, tt.input)
+			if err == nil {
+				t.Error("Expected validation error, got nil")
+				return
+			}
+			if !containsSubstring(err.Error(), tt.want) {
+				t.Errorf("Error %q should contain %q", err.Error(), tt.want)
+			}
+		})
+	}
+}
+
+// containsSubstring checks if s contains substr (case-sensitive).
+func containsSubstring(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
+		(len(s) > 0 && len(substr) > 0 && findSubstring(s, substr)))
+}
+
+func findSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
