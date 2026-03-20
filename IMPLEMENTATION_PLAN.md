@@ -61,6 +61,8 @@
 | Configurable health check path | ✅ Done | `internal/providers/aws.go` | HealthCheckPath parameter (default: /) |
 | Configurable desired count | ✅ Done | `internal/providers/aws.go` | DesiredCount parameter (default: 1) |
 | Environment variables support | ✅ Done | `internal/providers/aws.go` | Environment map parameter |
+| Structured logging migration | ✅ Done | `internal/providers/`, `internal/spending/costs.go` | All log.Printf migrated to slog |
+| Wait for healthy deployment | ✅ Done | `internal/providers/aws.go` | waitForHealthyDeployment polls ECS/ALB |
 
 ---
 
@@ -86,9 +88,9 @@
 | Auto Scaling | ❌ **NOT IMPLEMENTED** | Service name added but not configured |
 | Private subnets | ❌ **NOT CREATED** | Spec requires public/private subnet architecture |
 | Plan approval | ❌ **BYPASSED** | Auto-approves plans, no user confirmation |
-| Wait for healthy deployment | ❌ **MISSING** | Returns immediately, doesn't wait for healthy (spec requires this) |
+| Wait for healthy deployment | ✅ **Done** | waitForHealthyDeployment polls ECS/ALB |
 | Test coverage | ⚠️ **Gaps** | `awsclient/`, `errors/`, `spending/config.go`, `providers/provider.go` have 0%; `aws.go` at 8.3% |
-| Structured logging | ⚠️ **Partial** | 32 `log.Printf` instances remaining (30 in aws.go, 1 in provider.go, 1 in costs.go) |
+| Structured logging | ✅ **Done** | All log.Printf migrated to slog (30 in aws.go, 1 in provider.go, ~4 in costs.go) |
 | Makefile | ⚠️ **Incomplete** | Missing coverage, coverage-html, test-race, install, run, all, help targets |
 
 ---
@@ -201,14 +203,14 @@
 - **Impact:** Production deployments require HTTPS; currently HTTP only
 - **Location:** `internal/providers/aws.go` (ALB listener creation)
 
-### P1.8 AWS Provider Not Using Structured Logging (32 instances) ❌
+### P1.8 AWS Provider Not Using Structured Logging (32 instances) ✅ COMPLETED
 
-- [ ] Migrate 30 instances of `log.Printf()` in `aws.go` to `slog`-based structured logging
-- [ ] Migrate 1 instance in `provider.go`
-- [ ] Migrate 1 instance in `costs.go`
-- [ ] Use existing `internal/logging/logging.go` infrastructure
+- [x] Migrate 30 instances of `log.Printf()` in `aws.go` to `slog`-based structured logging
+- [x] Migrate 1 instance in `provider.go`
+- [x] Migrate ~4 instances in `costs.go`
+- [x] Use existing `internal/logging/logging.go` infrastructure
 - **Impact:** Inconsistent logging; structured logging infrastructure built but not adopted
-- **Location:** `internal/providers/aws.go` (30), `internal/providers/provider.go` (1), `internal/spending/costs.go` (1)
+- **Location:** `internal/providers/aws.go` (30), `internal/providers/provider.go` (1), `internal/spending/costs.go` (~4)
 - **Audit (2026-03-20):** Total of 32 `log.Printf` instances identified
 
 ### P1.9 VPC CIDR Hardcoded ❌
@@ -248,12 +250,12 @@
 - **Location:** `internal/providers/aws.go`
 - **Audit (2026-03-20):** Verified auto-approval without user confirmation
 
-### P1.14 No Wait for Healthy Deployment ❌
+### P1.14 No Wait for Healthy Deployment ✅ COMPLETED
 
-- [ ] Currently returns immediately after creating service
-- [ ] Implement wait for ECS service to reach RUNNING state
-- [ ] Check ALB health check passes
-- [ ] Spec `ralph/specs/aws-provider.md` requires waiting for healthy deployment
+- [x] Currently returns immediately after creating service
+- [x] Implement wait for ECS service to reach RUNNING state
+- [x] Check ALB health check passes
+- [x] Spec `ralph/specs/aws-provider.md` requires waiting for healthy deployment
 - **Impact:** Users think deployment succeeded when it may still be starting/failing
 - **Location:** `internal/providers/aws.go`
 - **Audit (2026-03-20):** Verified returns immediately without waiting
@@ -583,11 +585,11 @@ go tool cover -html=coverage.out          # View coverage report
 | Priority | Count | Items |
 |----------|-------|-------|
 | **P0 Critical** | 0 | ✅ All completed |
-| **P1 Spec Gaps** | 14 | Cost estimation, logging, HTTPS, VPC, subnets, approval, health wait, etc. |
+| **P1 Spec Gaps** | 12 | Cost estimation, HTTPS, VPC, subnets, approval, etc. |
 | **P2 Test Gaps** | 11 | awsclient (0%), errors (0%), config (0%), provider.go (0%), aws.go (8.3%), mocking, coverage |
 | **P3 Quality** | 8 | Pagination, ALB tags, version, region, errors, disclaimer, Makefile, unused AddTime |
 | **P5 Stretch** | 3 | CloudFormation, multi-cloud, secrets |
-| **Total** | **36** | |
+| **Total** | **34** | |
 
 ---
 
@@ -599,7 +601,7 @@ go tool cover -html=coverage.out          # View coverage report
 | **aws-provider.md** | 1 resource (aws:deployments) | ✅ Implemented |
 | **aws-provider.md** | 1 prompt (aws_deploy_plan) | ✅ Implemented |
 | **aws-provider.md** | AWS Pricing API for cost estimation | ❌ NOT IMPLEMENTED (hardcoded) |
-| **aws-provider.md** | Wait for healthy deployment in aws_deploy | ❌ NOT IMPLEMENTED |
+| **aws-provider.md** | Wait for healthy deployment in aws_deploy | ✅ IMPLEMENTED |
 | **aws-provider.md** | Plan approval before provisioning | ❌ NOT IMPLEMENTED (auto-approves) |
 | **deployment-state.md** | Plan, Infrastructure, Deployment types | ✅ Implemented |
 | **deployment-state.md** | File-backed JSON at ~/.agent-deploy/state/ | ✅ Implemented |

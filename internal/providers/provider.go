@@ -3,8 +3,9 @@ package providers
 
 import (
 	"context"
-	"log"
+	"log/slog"
 
+	"github.com/cjmartian/agent-deploy/internal/logging"
 	"github.com/cjmartian/agent-deploy/internal/state"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -28,7 +29,9 @@ type TeardownProvider interface {
 func All() []Provider {
 	store, err := state.NewStore("")
 	if err != nil {
-		log.Printf("Warning: could not initialize state store: %v", err)
+		slog.Warn("could not initialize state store",
+			slog.String("component", logging.ComponentAWSProvider),
+			logging.Err(err))
 		// Create provider anyway with nil store for graceful degradation.
 		return []Provider{
 			&AWSProvider{},

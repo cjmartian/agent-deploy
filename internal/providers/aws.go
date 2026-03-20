@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"log/slog"
 	"net/url"
 	"strings"
@@ -26,6 +25,7 @@ import (
 	"github.com/cjmartian/agent-deploy/internal/awsclient"
 	apperrors "github.com/cjmartian/agent-deploy/internal/errors"
 	"github.com/cjmartian/agent-deploy/internal/id"
+	"github.com/cjmartian/agent-deploy/internal/logging"
 	"github.com/cjmartian/agent-deploy/internal/spending"
 	"github.com/cjmartian/agent-deploy/internal/state"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -197,7 +197,11 @@ func (p *AWSProvider) planInfra(ctx context.Context, _ *mcp.CallToolRequest, in 
 		return nil, planInfraOutput{}, fmt.Errorf("save plan: %w", err)
 	}
 
-	log.Printf("[aws_plan_infra] Created plan %s for %q (est. $%.2f/mo)", plan.ID, in.AppDescription, estimatedCost)
+	slog.Info("created plan",
+		slog.String("component", "aws_plan_infra"),
+		logging.PlanID(plan.ID),
+		slog.String("app_description", in.AppDescription),
+		logging.Cost(estimatedCost))
 
 	return nil, planInfraOutput{
 		PlanID:          plan.ID,
@@ -306,7 +310,10 @@ func (p *AWSProvider) createInfra(ctx context.Context, _ *mcp.CallToolRequest, i
 		return nil, createInfraOutput{}, err
 	}
 
-	log.Printf("[aws_create_infra] Infrastructure %s ready in %s", infraID, plan.Region)
+	slog.Info("infrastructure ready",
+		slog.String("component", "aws_create_infra"),
+		logging.InfraID(infraID),
+		logging.Region(plan.Region))
 
 	return nil, createInfraOutput{
 		InfraID: infraID,
@@ -399,7 +406,9 @@ func (p *AWSProvider) deploy(ctx context.Context, _ *mcp.CallToolRequest, in dep
 	// Get ALB DNS name for URL.
 	urls, err := p.getALBURLs(ctx, cfg, infra)
 	if err != nil {
-		log.Printf("[aws_deploy] Warning: could not get ALB URLs: %v", err)
+		slog.Warn("could not get ALB URLs",
+			slog.String("component", "aws_deploy"),
+			logging.Err(err))
 	}
 
 	// Update deployment with URLs and status.
@@ -411,7 +420,16 @@ func (p *AWSProvider) deploy(ctx context.Context, _ *mcp.CallToolRequest, in dep
 	deployment.TaskDefARN = taskDefARN
 	deployment.ServiceARN = serviceARN
 
-	log.Printf("[aws_deploy] Deployment %s running at %v", deployID, urls)
+	// Wait for deployment to become healthy (default 5 minute timeout).
+	if err := p.waitForHealthyDeployment(ctx, cfg, infra, deployment, 5*time.Minute); err != nil {
+		slog.Warn("deployment may not be fully healthy", logging.Err(err), logging.DeploymentID(deployID))
+		// Don't fail - deployment was created, just might not be healthy yet.
+	}
+
+	slog.Info("deployment running",
+		slog.String("component", "aws_deploy"),
+		logging.DeploymentID(deployID),
+		slog.Any("urls", urls))
 
 	return nil, deployOutput{
 		DeploymentID: deployID,
@@ -485,37 +503,51 @@ func (p *AWSProvider) teardown(ctx context.Context, _ *mcp.CallToolRequest, in t
 
 	// Delete ECS service.
 	if err := p.deleteECSService(ctx, cfg, infra, deployment); err != nil {
-		log.Printf("[aws_teardown] Warning: failed to delete ECS service: %v", err)
+		slog.Warn("failed to delete ECS service",
+			slog.String("component", "aws_teardown"),
+			logging.Err(err))
 	}
 
 	// Delete ECS cluster.
 	if err := p.deleteECSCluster(ctx, cfg, infra); err != nil {
-		log.Printf("[aws_teardown] Warning: failed to delete ECS cluster: %v", err)
+		slog.Warn("failed to delete ECS cluster",
+			slog.String("component", "aws_teardown"),
+			logging.Err(err))
 	}
 
 	// Delete ALB and target group.
 	if err := p.deleteALB(ctx, cfg, infra); err != nil {
-		log.Printf("[aws_teardown] Warning: failed to delete ALB: %v", err)
+		slog.Warn("failed to delete ALB",
+			slog.String("component", "aws_teardown"),
+			logging.Err(err))
 	}
 
 	// Delete ECR repository.
 	if err := p.deleteECRRepository(ctx, cfg, infra); err != nil {
-		log.Printf("[aws_teardown] Warning: failed to delete ECR repository: %v", err)
+		slog.Warn("failed to delete ECR repository",
+			slog.String("component", "aws_teardown"),
+			logging.Err(err))
 	}
 
 	// Delete CloudWatch log group.
 	if err := p.deleteLogGroup(ctx, cfg, infra); err != nil {
-		log.Printf("[aws_teardown] Warning: failed to delete log group: %v", err)
+		slog.Warn("failed to delete log group",
+			slog.String("component", "aws_teardown"),
+			logging.Err(err))
 	}
 
 	// Delete IAM execution role.
 	if err := p.deleteExecutionRole(ctx, cfg, infra); err != nil {
-		log.Printf("[aws_teardown] Warning: failed to delete execution role: %v", err)
+		slog.Warn("failed to delete execution role",
+			slog.String("component", "aws_teardown"),
+			logging.Err(err))
 	}
 
 	// Delete VPC resources (security groups, subnets, internet gateway, VPC).
 	if err := p.deleteVPCResources(ctx, cfg, infra); err != nil {
-		log.Printf("[aws_teardown] Warning: failed to delete VPC resources: %v", err)
+		slog.Warn("failed to delete VPC resources",
+			slog.String("component", "aws_teardown"),
+			logging.Err(err))
 	}
 
 	// Update state (best-effort cleanup, log errors but continue).
@@ -526,7 +558,9 @@ func (p *AWSProvider) teardown(ctx context.Context, _ *mcp.CallToolRequest, in t
 		slog.Error("failed to set infra status during teardown", "infraID", infra.ID, "error", err)
 	}
 
-	log.Printf("[aws_teardown] Deployment %s torn down", in.DeploymentID)
+	slog.Info("deployment torn down",
+		slog.String("component", "aws_teardown"),
+		logging.DeploymentID(in.DeploymentID))
 
 	return nil, teardownOutput{
 		DeploymentID: in.DeploymentID,
@@ -715,7 +749,11 @@ func (p *AWSProvider) provisionVPC(ctx context.Context, cfg aws.Config, infra *s
 		return fmt.Errorf("authorize ingress: %w", err)
 	}
 
-	log.Printf("[provisionVPC] VPC %s created with subnets %v, SG %s", vpcID, subnetIDs, sgID)
+	slog.Info("VPC created",
+		slog.String("component", "provisionVPC"),
+		slog.String("vpc_id", vpcID),
+		slog.Any("subnet_ids", subnetIDs),
+		slog.String("security_group_id", sgID))
 	return nil
 }
 
@@ -739,7 +777,9 @@ func (p *AWSProvider) provisionECSCluster(ctx context.Context, cfg aws.Config, i
 	}
 	infra.Resources[state.ResourceECSCluster] = clusterARN
 
-	log.Printf("[provisionECSCluster] Cluster %s created", clusterARN)
+	slog.Info("ECS cluster created",
+		slog.String("component", "provisionECSCluster"),
+		slog.String("cluster_arn", clusterARN))
 	return nil
 }
 
@@ -809,7 +849,10 @@ func (p *AWSProvider) provisionALB(ctx context.Context, cfg aws.Config, infra *s
 		return fmt.Errorf("create listener: %w", err)
 	}
 
-	log.Printf("[provisionALB] ALB %s and target group %s created", albARN, tgARN)
+	slog.Info("ALB and target group created",
+		slog.String("component", "provisionALB"),
+		slog.String("alb_arn", albARN),
+		slog.String("target_group_arn", tgARN))
 	return nil
 }
 
@@ -828,7 +871,8 @@ func (p *AWSProvider) provisionLogGroup(ctx context.Context, cfg aws.Config, inf
 		if !strings.Contains(err.Error(), "ResourceAlreadyExistsException") {
 			return fmt.Errorf("failed to create log group: %w", err)
 		}
-		log.Printf("[provisionLogGroup] Note: log group already exists")
+		slog.Debug("log group already exists",
+			slog.String("component", "provisionLogGroup"))
 	}
 
 	// Set log retention to 7 days to manage costs.
@@ -845,7 +889,9 @@ func (p *AWSProvider) provisionLogGroup(ctx context.Context, cfg aws.Config, inf
 	}
 	infra.Resources[state.ResourceLogGroup] = logGroupName
 
-	log.Printf("[provisionLogGroup] Log group %s created", logGroupName)
+	slog.Info("log group created",
+		slog.String("component", "provisionLogGroup"),
+		slog.String("log_group_name", logGroupName))
 	return nil
 }
 
@@ -935,7 +981,8 @@ func (p *AWSProvider) ensureECRRepository(ctx context.Context, cfg aws.Config, i
 		if !strings.Contains(err.Error(), "RepositoryAlreadyExistsException") {
 			return fmt.Errorf("failed to create ECR repository: %w", err)
 		}
-		log.Printf("[ensureECRRepository] Note: repository already exists")
+		slog.Debug("ECR repository already exists",
+			slog.String("component", "ensureECRRepository"))
 	}
 
 	if err := p.store.UpdateInfraResource(infra.ID, state.ResourceECRRepository, repoName); err != nil {
@@ -1012,7 +1059,10 @@ func (p *AWSProvider) createTaskDefinition(ctx context.Context, cfg aws.Config, 
 	}
 
 	taskDefARN := *resp.TaskDefinition.TaskDefinitionArn
-	log.Printf("[createTaskDefinition] Task definition %s created with logs to %s", taskDefARN, logGroupName)
+	slog.Info("task definition created",
+		slog.String("component", "createTaskDefinition"),
+		slog.String("task_def_arn", taskDefARN),
+		slog.String("log_group_name", logGroupName))
 	return taskDefARN, nil
 }
 
@@ -1053,8 +1103,126 @@ func (p *AWSProvider) createOrUpdateService(ctx context.Context, cfg aws.Config,
 	}
 
 	serviceARN := *resp.Service.ServiceArn
-	log.Printf("[createOrUpdateService] Service %s created", serviceARN)
+	slog.Info("ECS service created",
+		slog.String("component", "createOrUpdateService"),
+		slog.String("service_arn", serviceARN))
 	return serviceARN, nil
+}
+
+// waitForHealthyDeployment waits for the ECS service to be running and healthy.
+// It polls the service status and ALB target health until healthy or timeout.
+func (p *AWSProvider) waitForHealthyDeployment(ctx context.Context, cfg aws.Config, infra *state.Infrastructure, deployment *state.Deployment, timeout time.Duration) error {
+	ecsClient := ecs.NewFromConfig(cfg)
+	elbClient := elbv2.NewFromConfig(cfg)
+
+	clusterARN := infra.Resources[state.ResourceECSCluster]
+	targetGroupARN := infra.Resources[state.ResourceTargetGroup]
+
+	if clusterARN == "" || deployment.ServiceARN == "" {
+		return fmt.Errorf("missing cluster ARN or service ARN")
+	}
+
+	pollInterval := 10 * time.Second
+	deadline := time.Now().Add(timeout)
+
+	for {
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timeout waiting for healthy deployment after %v", timeout)
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		// Check ECS service status.
+		ecsResp, err := ecsClient.DescribeServices(ctx, &ecs.DescribeServicesInput{
+			Cluster:  aws.String(clusterARN),
+			Services: []string{deployment.ServiceARN},
+		})
+		if err != nil {
+			slog.Debug("error checking ECS service status",
+				slog.String("component", "waitForHealthyDeployment"),
+				logging.Err(err))
+			time.Sleep(pollInterval)
+			continue
+		}
+
+		if len(ecsResp.Services) == 0 {
+			slog.Debug("no services found",
+				slog.String("component", "waitForHealthyDeployment"))
+			time.Sleep(pollInterval)
+			continue
+		}
+
+		svc := ecsResp.Services[0]
+
+		// Check if we have deployments.
+		if len(svc.Deployments) == 0 {
+			slog.Debug("no deployments found in service",
+				slog.String("component", "waitForHealthyDeployment"))
+			time.Sleep(pollInterval)
+			continue
+		}
+
+		primaryDeployment := svc.Deployments[0]
+		runningCount := primaryDeployment.RunningCount
+		desiredCount := primaryDeployment.DesiredCount
+		rolloutState := primaryDeployment.RolloutState
+
+		slog.Debug("ECS deployment status",
+			slog.String("component", "waitForHealthyDeployment"),
+			slog.Int("running_count", int(runningCount)),
+			slog.Int("desired_count", int(desiredCount)),
+			slog.String("rollout_state", string(rolloutState)))
+
+		// Check if rollout is completed and running count matches desired.
+		ecsHealthy := rolloutState == ecstypes.DeploymentRolloutStateCompleted &&
+			runningCount >= desiredCount && desiredCount > 0
+
+		if !ecsHealthy {
+			time.Sleep(pollInterval)
+			continue
+		}
+
+		// ECS is healthy, now check ALB target health.
+		if targetGroupARN != "" {
+			healthResp, err := elbClient.DescribeTargetHealth(ctx, &elbv2.DescribeTargetHealthInput{
+				TargetGroupArn: aws.String(targetGroupARN),
+			})
+			if err != nil {
+				slog.Debug("error checking target health",
+					slog.String("component", "waitForHealthyDeployment"),
+					logging.Err(err))
+				time.Sleep(pollInterval)
+				continue
+			}
+
+			healthyTargets := 0
+			for _, target := range healthResp.TargetHealthDescriptions {
+				if target.TargetHealth != nil && target.TargetHealth.State == elbv2types.TargetHealthStateEnumHealthy {
+					healthyTargets++
+				}
+			}
+
+			slog.Debug("ALB target health",
+				slog.String("component", "waitForHealthyDeployment"),
+				slog.Int("healthy_targets", healthyTargets),
+				slog.Int("total_targets", len(healthResp.TargetHealthDescriptions)))
+
+			if healthyTargets == 0 {
+				time.Sleep(pollInterval)
+				continue
+			}
+		}
+
+		// Both ECS and ALB are healthy.
+		slog.Info("deployment is healthy",
+			slog.String("component", "waitForHealthyDeployment"),
+			logging.DeploymentID(deployment.ID))
+		return nil
+	}
 }
 
 // updateTargetGroupHealthCheck updates the target group's health check settings.
@@ -1075,7 +1243,10 @@ func (p *AWSProvider) updateTargetGroupHealthCheck(ctx context.Context, cfg aws.
 		return fmt.Errorf("modify target group health check: %w", err)
 	}
 
-	log.Printf("[updateTargetGroupHealthCheck] Updated health check to path=%s port=%d", healthCheckPath, containerPort)
+	slog.Info("target group health check updated",
+		slog.String("component", "updateTargetGroupHealthCheck"),
+		slog.String("health_check_path", healthCheckPath),
+		slog.Int("container_port", containerPort))
 	return nil
 }
 
@@ -1118,7 +1289,9 @@ func (p *AWSProvider) deleteECSService(ctx context.Context, cfg aws.Config, infr
 		DesiredCount: aws.Int32(0),
 	})
 	if err != nil {
-		log.Printf("[deleteECSService] Warning: could not scale down service: %v", err)
+		slog.Warn("could not scale down service",
+			slog.String("component", "deleteECSService"),
+			logging.Err(err))
 	}
 
 	// Delete service.
@@ -1189,7 +1362,9 @@ func (p *AWSProvider) deleteECRRepository(ctx context.Context, cfg aws.Config, i
 	if err != nil {
 		return fmt.Errorf("failed to delete ECR repository: %w", err)
 	}
-	log.Printf("[deleteECRRepository] ECR repository %s deleted", repoName)
+	slog.Info("ECR repository deleted",
+		slog.String("component", "deleteECRRepository"),
+		slog.String("repo_name", repoName))
 	return nil
 }
 
@@ -1207,7 +1382,9 @@ func (p *AWSProvider) deleteLogGroup(ctx context.Context, cfg aws.Config, infra 
 	if err != nil {
 		return fmt.Errorf("failed to delete log group: %w", err)
 	}
-	log.Printf("[deleteLogGroup] Log group %s deleted", logGroupName)
+	slog.Info("log group deleted",
+		slog.String("component", "deleteLogGroup"),
+		slog.String("log_group_name", logGroupName))
 	return nil
 }
 

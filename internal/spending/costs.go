@@ -5,7 +5,7 @@ package spending
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"strconv"
 	"time"
 
@@ -84,7 +84,10 @@ func (ct *CostTracker) GetDeploymentCosts(ctx context.Context, deploymentID stri
 			if amount, err := strconv.ParseFloat(*cost.Amount, 64); err == nil {
 				totalCost += amount
 			} else {
-				log.Printf("Warning: failed to parse cost amount %q: %v", *cost.Amount, err)
+				slog.Warn("failed to parse cost amount",
+					slog.String("component", "spending"),
+					slog.String("amount", *cost.Amount),
+					slog.Any("error", err))
 			}
 		}
 	}
@@ -142,7 +145,10 @@ func (ct *CostTracker) GetTotalMonthlySpend(ctx context.Context) (*CostSummary, 
 			if amount, err := strconv.ParseFloat(*cost.Amount, 64); err == nil {
 				summary.TotalCostUSD += amount
 			} else {
-				log.Printf("Warning: failed to parse cost amount %q: %v", *cost.Amount, err)
+				slog.Warn("failed to parse cost amount",
+					slog.String("component", "spending"),
+					slog.String("amount", *cost.Amount),
+					slog.Any("error", err))
 			}
 		}
 	}
@@ -224,7 +230,10 @@ func (ct *CostTracker) GetCostsByDeployment(ctx context.Context, startDate, endD
 				if amount, err := strconv.ParseFloat(*cost.Amount, 64); err == nil {
 					results[deploymentID].TotalCostUSD += amount
 				} else {
-					log.Printf("Warning: failed to parse cost amount %q: %v", *cost.Amount, err)
+					slog.Warn("failed to parse cost amount",
+						slog.String("component", "spending"),
+						slog.String("amount", *cost.Amount),
+						slog.Any("error", err))
 				}
 			}
 		}
@@ -307,8 +316,11 @@ func (ct *CostTracker) GetDeploymentsOverBudget(ctx context.Context, limits Limi
 	for deploymentID, summary := range costsByDeployment {
 		if summary.TotalCostUSD >= limits.PerDeploymentUSD {
 			overBudget = append(overBudget, deploymentID)
-			log.Printf("[spending] Deployment %s over budget: $%.2f >= $%.2f limit",
-				deploymentID, summary.TotalCostUSD, limits.PerDeploymentUSD)
+			slog.Warn("deployment over budget",
+				slog.String("component", "spending"),
+				slog.String("deployment_id", deploymentID),
+				slog.Float64("total_cost_usd", summary.TotalCostUSD),
+				slog.Float64("limit_usd", limits.PerDeploymentUSD))
 		}
 	}
 
