@@ -40,6 +40,7 @@
 | Cost Explorer tests (P3.1) | ✅ Done | `internal/spending/costs_test.go` — comprehensive unit tests |
 | Runtime cost monitoring (P3.2) | ✅ Done | `internal/spending/monitor.go` — CostMonitor, MonitorConfig, Start/Stop lifecycle, CheckNow, background cost checking, alert processing, auto-teardown |
 | Runtime cost monitoring tests (P3.2) | ✅ Done | `internal/spending/monitor_test.go` — comprehensive unit tests |
+| MCP server integration test (P4.6) | ✅ Done | `internal/main_test.go` — 11 tests: server creation, provider registration, tool/resource/prompt listing, server init, resource read, prompt retrieval, capabilities, ping |
 
 ---
 
@@ -72,15 +73,6 @@
   - Full workflow: plan → create → deploy → status → teardown
   - Verify resource cleanup
 - **Build tag:** `//go:build integration`
-
-### P4.6 MCP server integration test
-
-- [ ] Create `internal/main_test.go`
-- **Tasks:**
-  - Test server startup and tool registration via MCP client
-  - Start server in-process
-  - Call tools via MCP client SDK
-  - Verify tool listing, resource reading, prompt retrieval
 
 ---
 
@@ -161,6 +153,7 @@ go test -tags=integration ./...  # Integration tests
 | `internal/spending/costs.go` | AWS Cost Explorer integration |
 | `internal/spending/monitor.go` | Runtime cost monitoring with alerts and auto-teardown |
 | `internal/errors/errors.go` | Domain error types |
+| `internal/main_test.go` | MCP server integration tests (InMemoryTransport) |
 | `ralph/specs/aws-provider.md` | Tool/resource/prompt specifications |
 | `ralph/specs/deployment-state.md` | State model and storage spec |
 | `ralph/specs/spending-safeguards.md` | Budget enforcement spec |
@@ -170,6 +163,5 @@ go test -tags=integration ./...  # Integration tests
 | Priority | Item | Purpose |
 |----------|------|---------|
 | P4.5 | Integration tests | LocalStack/AWS sandbox testing |
-| P4.6 | MCP server tests | End-to-end server testing |
 | P5.1-5.4 | Stretch goals | Reconciliation, cleanup, CloudFormation, multi-cloud |
 | TD.2 | Structured logging | Replace log.Fatal with slog |
