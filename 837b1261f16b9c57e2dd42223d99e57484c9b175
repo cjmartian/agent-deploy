@@ -1,0 +1,29 @@
+P0.3 IAM Task Execution Role Implementation Notes:
+
+Files modified:
+- go.mod, go.sum: Added github.com/aws/aws-sdk-go-v2/service/iam v1.53.6
+- internal/state/types.go: Added ResourceExecutionRole constant
+- internal/providers/aws.go: Added IAM role provisioning and cleanup
+
+Key functions added:
+1. provisionExecutionRole(ctx, cfg, infra, tags) - Creates IAM role with:
+   - ECS tasks assume-role policy
+   - AmazonECSTaskExecutionRolePolicy attached
+   - Role name: agent-deploy-ecs-task-{infra_id} (max 64 chars)
+   - Role ARN stored in infra.Resources[ResourceExecutionRole]
+
+2. deleteExecutionRole(ctx, cfg, infra) - Cleanup that:
+   - Detaches managed policy first
+   - Deletes the IAM role
+   - Handles NoSuchEntity gracefully
+
+3. mapToIAMTags(tags) - Helper to convert map to IAM tag format
+
+Changes to existing code:
+- createInfra: Calls provisionExecutionRole before provisionLogGroup
+- createTaskDefinition: Uses execution role ARN from infra.Resources (was nil)
+- teardown: Calls deleteExecutionRole after deleteLogGroup
+
+Security impact:
+- ECS tasks now have proper least-privilege permissions
+- Role is tagged for tracking and cleanup
