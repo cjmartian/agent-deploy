@@ -1,0 +1,22 @@
+P0.2 Auto-Teardown Implementation Notes:
+
+Files modified:
+- internal/providers/aws.go: Added public Teardown(ctx, deploymentID) method
+- internal/providers/provider.go: Added TeardownProvider interface and GetAWSProvider() helper
+- internal/main.go: Wired TeardownCallback to call awsProvider.Teardown()
+- internal/providers/aws_test.go: Added tests for new functionality
+
+Key changes:
+1. AWSProvider now exposes Teardown() which wraps the internal teardown() tool
+2. TeardownProvider interface enables type-safe teardown capability checking
+3. main.go creates awsProvider early and passes it to the teardown callback
+4. When cost monitor detects budget exceeded, it now calls actual AWS teardown
+
+Security impact:
+- Before: Users enabled auto-teardown but deployments kept running (false sense of security)
+- After: Over-budget deployments are actually torn down, preventing cost overruns
+
+Test coverage:
+- TestPublicTeardown: Verifies Teardown method is callable
+- TestTeardownProvider_Interface: Verifies interface compliance
+- TestGetAWSProvider: Verifies helper function
