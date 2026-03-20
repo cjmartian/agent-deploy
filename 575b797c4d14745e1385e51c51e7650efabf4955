@@ -1,0 +1,20 @@
+P0.1 CI/CD Implementation Notes:
+
+Files created:
+- .github/workflows/ci.yml: GitHub Actions workflow with lint, test, build jobs
+- .golangci.yml: golangci-lint v2 configuration with standard + extra linters
+
+Linter fixes applied:
+- errcheck: 34 unchecked errors (store operations, AWS cleanup, session.Close)
+- errorlint: 4 issues (error wrapping with %w, errors.Is comparisons)
+- govet shadow: 24 variable shadowing issues in tests and aws.go
+- misspell: 2 instances of 'cancelled' -> 'canceled'
+- prealloc: 3 slice pre-allocations in store.go
+- staticcheck ST1000: added package comments to providers package
+- unparam: 7 functions that now return actual errors instead of nil
+
+CI workflow triggers on:
+- Push to any branch
+- Pull request to any branch
+
+Jobs run in order: lint -> test (with coverage) -> build (depends on lint+test)
