@@ -58,15 +58,14 @@ func TestProjectMonthlySpend(t *testing.T) {
 func TestCostSummaryAlertFields(t *testing.T) {
 	// Test that CostSummary correctly tracks alert states
 	summary := CostSummary{
-		DeploymentID:      "deploy-test",
-		TotalCostUSD:      20.0,
-		DailyCostUSD:      2.0,
-		ProjectedMonthUSD: 60.0,
-		DaysInPeriod:      10,
-		AlertThreshold:    false,
-		BudgetExceeded:    false,
+		DeploymentID:   "deploy-test",
+		AlertThreshold: false,
+		BudgetExceeded: false,
 	}
 
+	if summary.DeploymentID != "deploy-test" {
+		t.Error("DeploymentID mismatch")
+	}
 	if summary.AlertThreshold {
 		t.Error("AlertThreshold should be false initially")
 	}
@@ -103,27 +102,33 @@ func TestMonitoringReportStructure(t *testing.T) {
 	if report.Timestamp != now {
 		t.Error("Timestamp mismatch")
 	}
+	if report.TotalMonthlySpend != 50.0 {
+		t.Errorf("TotalMonthlySpend = %v, want 50.0", report.TotalMonthlySpend)
+	}
+	if report.ProjectedMonth != 75.0 {
+		t.Errorf("ProjectedMonth = %v, want 75.0", report.ProjectedMonth)
+	}
+	if report.MonthlyBudget != 100.0 {
+		t.Errorf("MonthlyBudget = %v, want 100.0", report.MonthlyBudget)
+	}
 	if report.BudgetUtilization != 50.0 {
 		t.Errorf("BudgetUtilization = %v, want 50.0", report.BudgetUtilization)
 	}
 	if report.RemainingBudget != 50.0 {
 		t.Errorf("RemainingBudget = %v, want 50.0", report.RemainingBudget)
 	}
+	if report.DeploymentCosts == nil {
+		t.Error("DeploymentCosts should not be nil")
+	}
 }
 
 func TestNewCostTracker(t *testing.T) {
-	// Test that NewCostTracker can be created (without making actual API calls)
-	// This validates the struct and constructor work correctly
-	
-	// We can't test with real AWS config in unit tests, but we can verify
-	// the function signature and that the returned tracker is non-nil
-	// with a mock/empty config in integration tests
-	
-	// For unit tests, we just verify the types compile correctly
-	var tracker *CostTracker
-	if tracker != nil {
-		t.Error("uninitialized tracker should be nil")
-	}
+	// Test that CostTracker struct can be instantiated.
+	// Actual functionality requires AWS config, which is tested in integration tests.
+	tracker := &CostTracker{}
+
+	// Verify the struct exists and has a valid memory address
+	_ = tracker // Use the variable to ensure it compiles
 }
 
 func TestCostSummaryJSONTags(t *testing.T) {
@@ -145,8 +150,20 @@ func TestCostSummaryJSONTags(t *testing.T) {
 	if summary.TotalCostUSD != 25.50 {
 		t.Error("TotalCostUSD mismatch")
 	}
+	if summary.DailyCostUSD != 1.50 {
+		t.Error("DailyCostUSD mismatch")
+	}
+	if summary.ProjectedMonthUSD != 45.0 {
+		t.Error("ProjectedMonthUSD mismatch")
+	}
 	if summary.DaysInPeriod != 17 {
 		t.Error("DaysInPeriod mismatch")
+	}
+	if !summary.AlertThreshold {
+		t.Error("AlertThreshold mismatch")
+	}
+	if summary.BudgetExceeded {
+		t.Error("BudgetExceeded mismatch")
 	}
 }
 

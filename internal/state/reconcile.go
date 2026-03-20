@@ -285,7 +285,7 @@ func (r *Reconciler) checkInfraResources(ctx context.Context, infra *Infrastruct
 }
 
 // countSyncedResources returns count of properly tracked resources.
-func (r *Reconciler) countSyncedResources(ctx context.Context) int {
+func (r *Reconciler) countSyncedResources(_ context.Context) int {
 	count := 0
 
 	infras, err := r.store.ListInfra()

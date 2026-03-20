@@ -1,6 +1,7 @@
 package state
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -30,7 +31,8 @@ func TestPlanCRUD(t *testing.T) {
 	}
 
 	// Create.
-	if err := store.CreatePlan(plan); err != nil {
+	err = store.CreatePlan(plan)
+	if err != nil {
 		t.Fatalf("CreatePlan: %v", err)
 	}
 
@@ -44,7 +46,8 @@ func TestPlanCRUD(t *testing.T) {
 	}
 
 	// Approve.
-	if err := store.ApprovePlan(plan.ID); err != nil {
+	err = store.ApprovePlan(plan.ID)
+	if err != nil {
 		t.Fatalf("ApprovePlan: %v", err)
 	}
 	got, _ = store.GetPlan(plan.ID)
@@ -67,7 +70,7 @@ func TestPlanNotFound(t *testing.T) {
 	store, _ := NewStore(dir)
 
 	_, err := store.GetPlan("nonexistent")
-	if err != apperrors.ErrPlanNotFound {
+	if !errors.Is(err, apperrors.ErrPlanNotFound) {
 		t.Errorf("GetPlan error = %v, want %v", err, apperrors.ErrPlanNotFound)
 	}
 }
@@ -82,10 +85,12 @@ func TestExpiredPlanCannotBeApproved(t *testing.T) {
 		CreatedAt: time.Now().Add(-48 * time.Hour),
 		ExpiresAt: time.Now().Add(-24 * time.Hour), // Already expired.
 	}
-	store.CreatePlan(plan)
+	if err := store.CreatePlan(plan); err != nil {
+		t.Fatalf("CreatePlan: %v", err)
+	}
 
 	err := store.ApprovePlan(plan.ID)
-	if err != apperrors.ErrPlanExpired {
+	if !errors.Is(err, apperrors.ErrPlanExpired) {
 		t.Errorf("ApprovePlan error = %v, want %v", err, apperrors.ErrPlanExpired)
 	}
 }
@@ -173,7 +178,7 @@ func TestDeploymentCRUD(t *testing.T) {
 		t.Fatalf("DeleteDeployment: %v", err)
 	}
 	_, err := store.GetDeployment(deploy.ID)
-	if err != apperrors.ErrDeploymentNotFound {
+	if !errors.Is(err, apperrors.ErrDeploymentNotFound) {
 		t.Errorf("GetDeployment after delete = %v, want %v", err, apperrors.ErrDeploymentNotFound)
 	}
 }

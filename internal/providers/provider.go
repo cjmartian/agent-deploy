@@ -1,3 +1,4 @@
+// Package providers implements cloud provider integrations for the MCP server.
 package providers
 
 import (

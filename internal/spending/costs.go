@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strconv"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -80,9 +81,11 @@ func (ct *CostTracker) GetDeploymentCosts(ctx context.Context, deploymentID stri
 	var totalCost float64
 	for _, result := range output.ResultsByTime {
 		if cost, ok := result.Total["UnblendedCost"]; ok && cost.Amount != nil {
-			var amount float64
-			fmt.Sscanf(*cost.Amount, "%f", &amount)
-			totalCost += amount
+			if amount, err := strconv.ParseFloat(*cost.Amount, 64); err == nil {
+				totalCost += amount
+			} else {
+				log.Printf("Warning: failed to parse cost amount %q: %v", *cost.Amount, err)
+			}
 		}
 	}
 
@@ -136,9 +139,11 @@ func (ct *CostTracker) GetTotalMonthlySpend(ctx context.Context) (*CostSummary, 
 
 	for _, result := range output.ResultsByTime {
 		if cost, ok := result.Total["UnblendedCost"]; ok && cost.Amount != nil {
-			var amount float64
-			fmt.Sscanf(*cost.Amount, "%f", &amount)
-			summary.TotalCostUSD += amount
+			if amount, err := strconv.ParseFloat(*cost.Amount, 64); err == nil {
+				summary.TotalCostUSD += amount
+			} else {
+				log.Printf("Warning: failed to parse cost amount %q: %v", *cost.Amount, err)
+			}
 		}
 	}
 
@@ -216,9 +221,11 @@ func (ct *CostTracker) GetCostsByDeployment(ctx context.Context, startDate, endD
 			}
 
 			if cost, ok := group.Metrics["UnblendedCost"]; ok && cost.Amount != nil {
-				var amount float64
-				fmt.Sscanf(*cost.Amount, "%f", &amount)
-				results[deploymentID].TotalCostUSD += amount
+				if amount, err := strconv.ParseFloat(*cost.Amount, 64); err == nil {
+					results[deploymentID].TotalCostUSD += amount
+				} else {
+					log.Printf("Warning: failed to parse cost amount %q: %v", *cost.Amount, err)
+				}
 			}
 		}
 	}

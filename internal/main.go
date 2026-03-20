@@ -214,7 +214,9 @@ func main() {
 		go func() {
 			<-sigCh
 			shutdown()
-			httpServer.Close()
+			if err := httpServer.Close(); err != nil {
+				log.Error("failed to close HTTP server", logging.Err(err))
+			}
 		}()
 
 		log.Info("listening on HTTP", slog.String("address", *httpAddr))

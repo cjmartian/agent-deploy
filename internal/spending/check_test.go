@@ -53,9 +53,9 @@ func TestCheckBudget_ExceedsRemainingMonthly(t *testing.T) {
 
 func TestLoadLimits_Defaults(t *testing.T) {
 	// Clear any env vars that might interfere.
-	os.Unsetenv("AGENT_DEPLOY_MONTHLY_BUDGET")
-	os.Unsetenv("AGENT_DEPLOY_PER_DEPLOYMENT_BUDGET")
-	os.Unsetenv("AGENT_DEPLOY_ALERT_THRESHOLD")
+	_ = os.Unsetenv("AGENT_DEPLOY_MONTHLY_BUDGET")
+	_ = os.Unsetenv("AGENT_DEPLOY_PER_DEPLOYMENT_BUDGET")
+	_ = os.Unsetenv("AGENT_DEPLOY_ALERT_THRESHOLD")
 
 	limits, err := LoadLimits()
 	if err != nil {
@@ -72,14 +72,9 @@ func TestLoadLimits_Defaults(t *testing.T) {
 }
 
 func TestLoadLimits_EnvOverrides(t *testing.T) {
-	os.Setenv("AGENT_DEPLOY_MONTHLY_BUDGET", "200.0")
-	os.Setenv("AGENT_DEPLOY_PER_DEPLOYMENT_BUDGET", "50.0")
-	os.Setenv("AGENT_DEPLOY_ALERT_THRESHOLD", "90")
-	defer func() {
-		os.Unsetenv("AGENT_DEPLOY_MONTHLY_BUDGET")
-		os.Unsetenv("AGENT_DEPLOY_PER_DEPLOYMENT_BUDGET")
-		os.Unsetenv("AGENT_DEPLOY_ALERT_THRESHOLD")
-	}()
+	t.Setenv("AGENT_DEPLOY_MONTHLY_BUDGET", "200.0")
+	t.Setenv("AGENT_DEPLOY_PER_DEPLOYMENT_BUDGET", "50.0")
+	t.Setenv("AGENT_DEPLOY_ALERT_THRESHOLD", "90")
 
 	limits, _ := LoadLimits()
 

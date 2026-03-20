@@ -108,7 +108,7 @@ func TestToolListing(t *testing.T) {
 
 	server := createTestServer()
 	session := connectClientToServer(ctx, t, server)
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 
 	// List tools
 	result, err := session.ListTools(ctx, nil)
@@ -145,7 +145,7 @@ func TestResourceListing(t *testing.T) {
 
 	server := createTestServer()
 	session := connectClientToServer(ctx, t, server)
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 
 	// List resources
 	result, err := session.ListResources(ctx, nil)
@@ -176,7 +176,7 @@ func TestPromptListing(t *testing.T) {
 
 	server := createTestServer()
 	session := connectClientToServer(ctx, t, server)
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 
 	// List prompts
 	result, err := session.ListPrompts(ctx, nil)
@@ -204,7 +204,7 @@ func TestServerInitialization(t *testing.T) {
 
 	server := createTestServer()
 	session := connectClientToServer(ctx, t, server)
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 
 	// Get initialize result
 	initResult := session.InitializeResult()
@@ -228,7 +228,7 @@ func TestResourceRead(t *testing.T) {
 
 	server := createTestServer()
 	session := connectClientToServer(ctx, t, server)
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 
 	// Read deployments resource
 	result, err := session.ReadResource(ctx, &mcp.ReadResourceParams{
@@ -269,7 +269,7 @@ func TestGetPrompt(t *testing.T) {
 
 	server := createTestServer()
 	session := connectClientToServer(ctx, t, server)
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 
 	// Get the aws_deploy_plan prompt
 	result, err := session.GetPrompt(ctx, &mcp.GetPromptParams{
@@ -309,7 +309,7 @@ func TestServerCapabilities(t *testing.T) {
 
 	server := createTestServer()
 	session := connectClientToServer(ctx, t, server)
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 
 	initResult := session.InitializeResult()
 	if initResult == nil {
@@ -336,7 +336,7 @@ func TestPing(t *testing.T) {
 
 	server := createTestServer()
 	session := connectClientToServer(ctx, t, server)
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 
 	// Ping should not error
 	if err := session.Ping(ctx, nil); err != nil {

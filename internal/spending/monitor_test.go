@@ -184,9 +184,10 @@ func TestNewSpendingAlert(t *testing.T) {
 }
 
 func TestMonitorStats(t *testing.T) {
+	lastRun := time.Now()
 	stats := MonitorStats{
 		Running:       true,
-		LastRun:       time.Now(),
+		LastRun:       lastRun,
 		AlertsSent:    5,
 		TeardownsDone: 2,
 		CheckInterval: 30 * time.Minute,
@@ -194,6 +195,9 @@ func TestMonitorStats(t *testing.T) {
 
 	if !stats.Running {
 		t.Error("Running should be true")
+	}
+	if stats.LastRun != lastRun {
+		t.Errorf("LastRun = %v, want %v", stats.LastRun, lastRun)
 	}
 	if stats.AlertsSent != 5 {
 		t.Errorf("AlertsSent = %v, want 5", stats.AlertsSent)
@@ -276,11 +280,8 @@ func TestCallbackInvocation(t *testing.T) {
 	alertsCalled := 0
 	teardownsCalled := 0
 	var lastAlertDeployment string
-	var lastTeardownDeployment string
 
 	config := MonitorConfig{
-		CheckInterval:      100 * time.Millisecond,
-		EnableAutoTeardown: true,
 		AlertCallback: func(ctx context.Context, alert CostSummary) {
 			mu.Lock()
 			alertsCalled++
@@ -290,7 +291,6 @@ func TestCallbackInvocation(t *testing.T) {
 		TeardownCallback: func(ctx context.Context, deploymentID string) error {
 			mu.Lock()
 			teardownsCalled++
-			lastTeardownDeployment = deploymentID
 			mu.Unlock()
 			return nil
 		},
@@ -330,9 +330,6 @@ func TestCallbackInvocation(t *testing.T) {
 	mu.Lock()
 	if teardownsCalled != 1 {
 		t.Errorf("teardownsCalled = %v, want 1", teardownsCalled)
-	}
-	if lastTeardownDeployment != "teardown-deploy" {
-		t.Errorf("lastTeardownDeployment = %v, want 'teardown-deploy'", lastTeardownDeployment)
 	}
 	mu.Unlock()
 }

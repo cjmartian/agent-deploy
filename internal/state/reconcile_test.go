@@ -8,6 +8,7 @@ import (
 
 // TestReconcileResult verifies the ReconcileResult struct.
 func TestReconcileResult(t *testing.T) {
+	timestamp := time.Now()
 	result := &ReconcileResult{
 		OrphanedResources: []OrphanedResource{
 			{
@@ -25,7 +26,7 @@ func TestReconcileResult(t *testing.T) {
 			},
 		},
 		SyncedCount: 5,
-		Timestamp:   time.Now(),
+		Timestamp:   timestamp,
 	}
 
 	if len(result.OrphanedResources) != 1 {
@@ -47,6 +48,10 @@ func TestReconcileResult(t *testing.T) {
 	if result.SyncedCount != 5 {
 		t.Errorf("Expected synced count 5, got %d", result.SyncedCount)
 	}
+
+	if result.Timestamp != timestamp {
+		t.Errorf("Expected timestamp %v, got %v", timestamp, result.Timestamp)
+	}
 }
 
 // TestOrphanedResource verifies the OrphanedResource struct.
@@ -64,12 +69,24 @@ func TestOrphanedResource(t *testing.T) {
 		t.Errorf("Expected resource type 'ecs_cluster', got %s", orphan.ResourceType)
 	}
 
+	if orphan.ResourceID != "arn:aws:ecs:us-east-1:123456789:cluster/test" {
+		t.Errorf("Expected resource ID 'arn:aws:ecs:us-east-1:123456789:cluster/test', got %s", orphan.ResourceID)
+	}
+
 	if orphan.Region != "us-east-1" {
 		t.Errorf("Expected region 'us-east-1', got %s", orphan.Region)
 	}
 
 	if orphan.DeploymentID != "deploy-abc" {
 		t.Errorf("Expected deployment ID 'deploy-abc', got %s", orphan.DeploymentID)
+	}
+
+	if orphan.InfraID != "infra-xyz" {
+		t.Errorf("Expected infra ID 'infra-xyz', got %s", orphan.InfraID)
+	}
+
+	if orphan.PlanID != "plan-123" {
+		t.Errorf("Expected plan ID 'plan-123', got %s", orphan.PlanID)
 	}
 }
 
@@ -83,6 +100,10 @@ func TestStaleEntry(t *testing.T) {
 
 	if stale.EntryType != "infra" {
 		t.Errorf("Expected entry type 'infra', got %s", stale.EntryType)
+	}
+
+	if stale.EntryID != "infra-123" {
+		t.Errorf("Expected entry ID 'infra-123', got %s", stale.EntryID)
 	}
 
 	if len(stale.MissingResources) != 2 {
@@ -112,7 +133,8 @@ func TestReconcilerWithMockStore(t *testing.T) {
 		CreatedAt: time.Now(),
 	}
 
-	if err := store.CreateInfra(infra); err != nil {
+	err = store.CreateInfra(infra)
+	if err != nil {
 		t.Fatalf("Failed to create infra: %v", err)
 	}
 
@@ -127,7 +149,8 @@ func TestReconcilerWithMockStore(t *testing.T) {
 		LastUpdated: time.Now(),
 	}
 
-	if err := store.CreateDeployment(deploy); err != nil {
+	err = store.CreateDeployment(deploy)
+	if err != nil {
 		t.Fatalf("Failed to create deployment: %v", err)
 	}
 
@@ -171,7 +194,8 @@ func TestCleanupStaleEntries(t *testing.T) {
 		LastUpdated: time.Now(),
 	}
 
-	if err := store.CreateDeployment(deploy); err != nil {
+	err = store.CreateDeployment(deploy)
+	if err != nil {
 		t.Fatalf("Failed to create deployment: %v", err)
 	}
 
@@ -187,7 +211,8 @@ func TestCleanupStaleEntries(t *testing.T) {
 		CreatedAt: time.Now(),
 	}
 
-	if err := store.CreateInfra(infra); err != nil {
+	err = store.CreateInfra(infra)
+	if err != nil {
 		t.Fatalf("Failed to create infra: %v", err)
 	}
 
@@ -209,11 +234,13 @@ func TestCleanupStaleEntries(t *testing.T) {
 	for _, entry := range staleEntries {
 		switch entry.EntryType {
 		case "deployment":
-			if err := store.UpdateDeploymentStatus(entry.EntryID, DeploymentStatusStopped, nil); err != nil {
+			err = store.UpdateDeploymentStatus(entry.EntryID, DeploymentStatusStopped, nil)
+			if err != nil {
 				t.Errorf("Failed to update deployment status: %v", err)
 			}
 		case "infra":
-			if err := store.SetInfraStatus(entry.EntryID, InfraStatusDestroyed); err != nil {
+			err = store.SetInfraStatus(entry.EntryID, InfraStatusDestroyed)
+			if err != nil {
 				t.Errorf("Failed to update infra status: %v", err)
 			}
 		}
@@ -285,13 +312,16 @@ func TestCountSyncedResourcesLogic(t *testing.T) {
 		CreatedAt: time.Now(),
 	}
 
-	if err := store.CreateInfra(infra1); err != nil {
+	err = store.CreateInfra(infra1)
+	if err != nil {
 		t.Fatalf("Failed to create infra1: %v", err)
 	}
-	if err := store.CreateInfra(infra2); err != nil {
+	err = store.CreateInfra(infra2)
+	if err != nil {
 		t.Fatalf("Failed to create infra2: %v", err)
 	}
-	if err := store.CreateInfra(infraDestroyed); err != nil {
+	err = store.CreateInfra(infraDestroyed)
+	if err != nil {
 		t.Fatalf("Failed to create destroyed infra: %v", err)
 	}
 
@@ -321,12 +351,17 @@ func TestCountSyncedResourcesLogic(t *testing.T) {
 
 // TestReconcileResultWithErrors verifies error handling in results.
 func TestReconcileResultWithErrors(t *testing.T) {
+	timestamp := time.Now()
 	result := &ReconcileResult{
-		Timestamp: time.Now(),
+		Timestamp: timestamp,
 		Errors: []string{
 			"failed to list VPCs: access denied",
 			"failed to describe ECS clusters: timeout",
 		},
+	}
+
+	if result.Timestamp != timestamp {
+		t.Errorf("Expected timestamp %v, got %v", timestamp, result.Timestamp)
 	}
 
 	if len(result.Errors) != 2 {
@@ -357,7 +392,8 @@ func TestFindStaleEntriesLogic(t *testing.T) {
 		LastUpdated: time.Now(),
 	}
 
-	if err := store.CreateDeployment(deploy); err != nil {
+	err = store.CreateDeployment(deploy)
+	if err != nil {
 		t.Fatalf("Failed to create deployment: %v", err)
 	}
 
@@ -410,7 +446,8 @@ func TestSkipDestroyedInfra(t *testing.T) {
 		CreatedAt: time.Now(),
 	}
 
-	if err := store.CreateInfra(infra); err != nil {
+	err = store.CreateInfra(infra)
+	if err != nil {
 		t.Fatalf("Failed to create infra: %v", err)
 	}
 
@@ -454,7 +491,8 @@ func TestSkipStoppedDeployments(t *testing.T) {
 		LastUpdated: time.Now(),
 	}
 
-	if err := store.CreateDeployment(deploy); err != nil {
+	err = store.CreateDeployment(deploy)
+	if err != nil {
 		t.Fatalf("Failed to create deployment: %v", err)
 	}
 

@@ -147,7 +147,7 @@ func (c *CleanupService) runLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Debug("context cancelled, stopping")
+			log.Debug("context canceled, stopping")
 			return
 		case <-c.stopCh:
 			return

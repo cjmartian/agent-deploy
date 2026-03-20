@@ -100,7 +100,7 @@ func (s *Store) ListPlans() ([]*Plan, error) {
 		return nil, fmt.Errorf("read dir: %w", err)
 	}
 
-	var plans []*Plan
+	plans := make([]*Plan, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
 			continue
@@ -237,7 +237,7 @@ func (s *Store) ListInfra() ([]*Infrastructure, error) {
 		return nil, fmt.Errorf("read dir: %w", err)
 	}
 
-	var items []*Infrastructure
+	items := make([]*Infrastructure, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
 			continue
@@ -325,7 +325,7 @@ func (s *Store) ListDeployments() ([]*Deployment, error) {
 		return nil, fmt.Errorf("read dir: %w", err)
 	}
 
-	var items []*Deployment
+	items := make([]*Deployment, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
 			continue

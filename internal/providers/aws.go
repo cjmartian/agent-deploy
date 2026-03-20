@@ -1,3 +1,4 @@
+// Package providers implements cloud provider integrations for the MCP server.
 package providers
 
 import (
@@ -5,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/url"
 	"strings"
 	"time"
@@ -205,7 +207,7 @@ func (p *AWSProvider) createInfra(ctx context.Context, _ *mcp.CallToolRequest, i
 
 	// Auto-approve if still in created status (for convenience).
 	if plan.Status == state.PlanStatusCreated {
-		if err := p.store.ApprovePlan(in.PlanID); err != nil {
+		if err = p.store.ApprovePlan(in.PlanID); err != nil {
 			return nil, createInfraOutput{}, err
 		}
 	}
@@ -223,7 +225,7 @@ func (p *AWSProvider) createInfra(ctx context.Context, _ *mcp.CallToolRequest, i
 
 	check := spending.CheckBudget(plan.EstimatedCostMo, limits, currentSpend)
 	if !check.Allowed {
-		return nil, createInfraOutput{}, fmt.Errorf("%s: %s", apperrors.ErrBudgetExceeded, check.Reason)
+		return nil, createInfraOutput{}, fmt.Errorf("%w: %s", apperrors.ErrBudgetExceeded, check.Reason)
 	}
 
 	// Load AWS config.
@@ -250,23 +252,31 @@ func (p *AWSProvider) createInfra(ctx context.Context, _ *mcp.CallToolRequest, i
 
 	// Provision resources in order.
 	if err := p.provisionVPC(ctx, cfg, infra, tags); err != nil {
-		p.store.SetInfraStatus(infraID, state.InfraStatusFailed)
+		if statusErr := p.store.SetInfraStatus(infraID, state.InfraStatusFailed); statusErr != nil {
+			slog.Error("failed to set infra status", "infraID", infraID, "error", statusErr)
+		}
 		return nil, createInfraOutput{}, fmt.Errorf("provision VPC: %w", err)
 	}
 
 	if err := p.provisionECSCluster(ctx, cfg, infra, tags); err != nil {
-		p.store.SetInfraStatus(infraID, state.InfraStatusFailed)
+		if statusErr := p.store.SetInfraStatus(infraID, state.InfraStatusFailed); statusErr != nil {
+			slog.Error("failed to set infra status", "infraID", infraID, "error", statusErr)
+		}
 		return nil, createInfraOutput{}, fmt.Errorf("provision ECS cluster: %w", err)
 	}
 
 	if err := p.provisionALB(ctx, cfg, infra, tags); err != nil {
-		p.store.SetInfraStatus(infraID, state.InfraStatusFailed)
+		if statusErr := p.store.SetInfraStatus(infraID, state.InfraStatusFailed); statusErr != nil {
+			slog.Error("failed to set infra status", "infraID", infraID, "error", statusErr)
+		}
 		return nil, createInfraOutput{}, fmt.Errorf("provision ALB: %w", err)
 	}
 
 	// Create CloudWatch log group for ECS task logs.
 	if err := p.provisionLogGroup(ctx, cfg, infra, tags); err != nil {
-		p.store.SetInfraStatus(infraID, state.InfraStatusFailed)
+		if statusErr := p.store.SetInfraStatus(infraID, state.InfraStatusFailed); statusErr != nil {
+			slog.Error("failed to set infra status", "infraID", infraID, "error", statusErr)
+		}
 		return nil, createInfraOutput{}, fmt.Errorf("provision log group: %w", err)
 	}
 
@@ -311,29 +321,35 @@ func (p *AWSProvider) deploy(ctx context.Context, _ *mcp.CallToolRequest, in dep
 		CreatedAt:   time.Now(),
 		LastUpdated: time.Now(),
 	}
-	if err := p.store.CreateDeployment(deployment); err != nil {
+	if err = p.store.CreateDeployment(deployment); err != nil {
 		return nil, deployOutput{}, fmt.Errorf("save deployment: %w", err)
 	}
 
 	tags := awsclient.ResourceTags("", infra.ID, deployID)
 
 	// Create ECR repository if needed.
-	if err := p.ensureECRRepository(ctx, cfg, infra, deployID, tags); err != nil {
-		p.store.UpdateDeploymentStatus(deployID, state.DeploymentStatusFailed, nil)
+	if err = p.ensureECRRepository(ctx, cfg, infra, deployID, tags); err != nil {
+		if statusErr := p.store.UpdateDeploymentStatus(deployID, state.DeploymentStatusFailed, nil); statusErr != nil {
+			slog.Error("failed to update deployment status", "deployID", deployID, "error", statusErr)
+		}
 		return nil, deployOutput{}, fmt.Errorf("ECR setup: %w", err)
 	}
 
 	// Create ECS task definition.
 	taskDefARN, err := p.createTaskDefinition(ctx, cfg, infra, in.ImageRef, deployID)
 	if err != nil {
-		p.store.UpdateDeploymentStatus(deployID, state.DeploymentStatusFailed, nil)
+		if statusErr := p.store.UpdateDeploymentStatus(deployID, state.DeploymentStatusFailed, nil); statusErr != nil {
+			slog.Error("failed to update deployment status", "deployID", deployID, "error", statusErr)
+		}
 		return nil, deployOutput{}, fmt.Errorf("task definition: %w", err)
 	}
 
 	// Create or update ECS service.
 	serviceARN, err := p.createOrUpdateService(ctx, cfg, infra, taskDefARN, deployID)
 	if err != nil {
-		p.store.UpdateDeploymentStatus(deployID, state.DeploymentStatusFailed, nil)
+		if statusErr := p.store.UpdateDeploymentStatus(deployID, state.DeploymentStatusFailed, nil); statusErr != nil {
+			slog.Error("failed to update deployment status", "deployID", deployID, "error", statusErr)
+		}
 		return nil, deployOutput{}, fmt.Errorf("ECS service: %w", err)
 	}
 
@@ -454,9 +470,13 @@ func (p *AWSProvider) teardown(ctx context.Context, _ *mcp.CallToolRequest, in t
 		log.Printf("[aws_teardown] Warning: failed to delete VPC resources: %v", err)
 	}
 
-	// Update state.
-	p.store.UpdateDeploymentStatus(in.DeploymentID, state.DeploymentStatusStopped, nil)
-	p.store.SetInfraStatus(infra.ID, state.InfraStatusDestroyed)
+	// Update state (best-effort cleanup, log errors but continue).
+	if err := p.store.UpdateDeploymentStatus(in.DeploymentID, state.DeploymentStatusStopped, nil); err != nil {
+		slog.Error("failed to update deployment status during teardown", "deploymentID", in.DeploymentID, "error", err)
+	}
+	if err := p.store.SetInfraStatus(infra.ID, state.InfraStatusDestroyed); err != nil {
+		slog.Error("failed to set infra status during teardown", "infraID", infra.ID, "error", err)
+	}
 
 	log.Printf("[aws_teardown] Deployment %s torn down", in.DeploymentID)
 
@@ -485,7 +505,9 @@ func (p *AWSProvider) provisionVPC(ctx context.Context, cfg aws.Config, infra *s
 		return fmt.Errorf("create VPC: %w", err)
 	}
 	vpcID := *vpcResp.Vpc.VpcId
-	p.store.UpdateInfraResource(infra.ID, state.ResourceVPC, vpcID)
+	if storeErr := p.store.UpdateInfraResource(infra.ID, state.ResourceVPC, vpcID); storeErr != nil {
+		slog.Error("failed to update infra resource", "infraID", infra.ID, "resource", state.ResourceVPC, "error", storeErr)
+	}
 	infra.Resources[state.ResourceVPC] = vpcID
 
 	// Enable DNS hostnames for ALB.
@@ -508,7 +530,9 @@ func (p *AWSProvider) provisionVPC(ctx context.Context, cfg aws.Config, infra *s
 		return fmt.Errorf("create IGW: %w", err)
 	}
 	igwID := *igwResp.InternetGateway.InternetGatewayId
-	p.store.UpdateInfraResource(infra.ID, state.ResourceInternetGateway, igwID)
+	if storeErr := p.store.UpdateInfraResource(infra.ID, state.ResourceInternetGateway, igwID); storeErr != nil {
+		slog.Error("failed to update infra resource", "infraID", infra.ID, "resource", state.ResourceInternetGateway, "error", storeErr)
+	}
 	infra.Resources[state.ResourceInternetGateway] = igwID
 
 	// Attach IGW to VPC.
@@ -531,11 +555,12 @@ func (p *AWSProvider) provisionVPC(ctx context.Context, cfg aws.Config, infra *s
 
 	// Create public subnets in 2 AZs (required for ALB).
 	var subnetIDs []string
+	var subnetResp *ec2.CreateSubnetOutput
 	for i := 0; i < 2; i++ {
 		az := *azResp.AvailabilityZones[i].ZoneName
 		cidr := fmt.Sprintf("10.0.%d.0/24", i+1)
 
-		subnetResp, err := ec2Client.CreateSubnet(ctx, &ec2.CreateSubnetInput{
+		subnetResp, err = ec2Client.CreateSubnet(ctx, &ec2.CreateSubnetInput{
 			VpcId:            aws.String(vpcID),
 			CidrBlock:        aws.String(cidr),
 			AvailabilityZone: aws.String(az),
@@ -558,7 +583,9 @@ func (p *AWSProvider) provisionVPC(ctx context.Context, cfg aws.Config, infra *s
 			return fmt.Errorf("enable public IP for subnet %d: %w", i, err)
 		}
 	}
-	p.store.UpdateInfraResource(infra.ID, state.ResourceSubnetPublic, subnetIDs[0]+","+subnetIDs[1])
+	if storeErr := p.store.UpdateInfraResource(infra.ID, state.ResourceSubnetPublic, subnetIDs[0]+","+subnetIDs[1]); storeErr != nil {
+		slog.Error("failed to update infra resource", "infraID", infra.ID, "resource", state.ResourceSubnetPublic, "error", storeErr)
+	}
 	infra.Resources[state.ResourceSubnetPublic] = subnetIDs[0] + "," + subnetIDs[1]
 
 	// Create route table with internet route.
@@ -573,7 +600,9 @@ func (p *AWSProvider) provisionVPC(ctx context.Context, cfg aws.Config, infra *s
 		return fmt.Errorf("create route table: %w", err)
 	}
 	rtID := *rtResp.RouteTable.RouteTableId
-	p.store.UpdateInfraResource(infra.ID, state.ResourceRouteTable, rtID)
+	if storeErr := p.store.UpdateInfraResource(infra.ID, state.ResourceRouteTable, rtID); storeErr != nil {
+		slog.Error("failed to update infra resource", "infraID", infra.ID, "resource", state.ResourceRouteTable, "error", storeErr)
+	}
 	infra.Resources[state.ResourceRouteTable] = rtID
 
 	// Add route to internet gateway.
@@ -611,7 +640,9 @@ func (p *AWSProvider) provisionVPC(ctx context.Context, cfg aws.Config, infra *s
 		return fmt.Errorf("create security group: %w", err)
 	}
 	sgID := *sgResp.GroupId
-	p.store.UpdateInfraResource(infra.ID, state.ResourceSecurityGroup, sgID)
+	if storeErr := p.store.UpdateInfraResource(infra.ID, state.ResourceSecurityGroup, sgID); storeErr != nil {
+		slog.Error("failed to update infra resource", "infraID", infra.ID, "resource", state.ResourceSecurityGroup, "error", storeErr)
+	}
 	infra.Resources[state.ResourceSecurityGroup] = sgID
 
 	// Allow inbound HTTP (80) and HTTPS (443).
@@ -655,7 +686,9 @@ func (p *AWSProvider) provisionECSCluster(ctx context.Context, cfg aws.Config, i
 	}
 
 	clusterARN := *clusterResp.Cluster.ClusterArn
-	p.store.UpdateInfraResource(infra.ID, state.ResourceECSCluster, clusterARN)
+	if err := p.store.UpdateInfraResource(infra.ID, state.ResourceECSCluster, clusterARN); err != nil {
+		slog.Error("failed to update infra resource", "infraID", infra.ID, "resource", state.ResourceECSCluster, "error", err)
+	}
 	infra.Resources[state.ResourceECSCluster] = clusterARN
 
 	log.Printf("[provisionECSCluster] Cluster %s created", clusterARN)
@@ -688,7 +721,9 @@ func (p *AWSProvider) provisionALB(ctx context.Context, cfg aws.Config, infra *s
 	}
 
 	albARN := *albResp.LoadBalancers[0].LoadBalancerArn
-	p.store.UpdateInfraResource(infra.ID, state.ResourceALB, albARN)
+	if storeErr := p.store.UpdateInfraResource(infra.ID, state.ResourceALB, albARN); storeErr != nil {
+		slog.Error("failed to update infra resource", "infraID", infra.ID, "resource", state.ResourceALB, "error", storeErr)
+	}
 	infra.Resources[state.ResourceALB] = albARN
 
 	// Create target group.
@@ -706,7 +741,9 @@ func (p *AWSProvider) provisionALB(ctx context.Context, cfg aws.Config, infra *s
 	}
 
 	tgARN := *tgResp.TargetGroups[0].TargetGroupArn
-	p.store.UpdateInfraResource(infra.ID, state.ResourceTargetGroup, tgARN)
+	if storeErr := p.store.UpdateInfraResource(infra.ID, state.ResourceTargetGroup, tgARN); storeErr != nil {
+		slog.Error("failed to update infra resource", "infraID", infra.ID, "resource", state.ResourceTargetGroup, "error", storeErr)
+	}
 	infra.Resources[state.ResourceTargetGroup] = tgARN
 
 	// Create listener.
@@ -739,8 +776,11 @@ func (p *AWSProvider) provisionLogGroup(ctx context.Context, cfg aws.Config, inf
 		Tags:         tags,
 	})
 	if err != nil {
-		// Log group may already exist, which is fine.
-		log.Printf("[provisionLogGroup] Note: %v", err)
+		// Check if the log group already exists (ResourceAlreadyExistsException).
+		if !strings.Contains(err.Error(), "ResourceAlreadyExistsException") {
+			return fmt.Errorf("failed to create log group: %w", err)
+		}
+		log.Printf("[provisionLogGroup] Note: log group already exists")
 	}
 
 	// Set log retention to 7 days to manage costs.
@@ -749,10 +789,12 @@ func (p *AWSProvider) provisionLogGroup(ctx context.Context, cfg aws.Config, inf
 		RetentionInDays: aws.Int32(7),
 	})
 	if err != nil {
-		log.Printf("[provisionLogGroup] Warning: could not set retention policy: %v", err)
+		return fmt.Errorf("failed to set retention policy: %w", err)
 	}
 
-	p.store.UpdateInfraResource(infra.ID, state.ResourceLogGroup, logGroupName)
+	if err := p.store.UpdateInfraResource(infra.ID, state.ResourceLogGroup, logGroupName); err != nil {
+		slog.Error("failed to update infra resource", "infraID", infra.ID, "resource", state.ResourceLogGroup, "error", err)
+	}
 	infra.Resources[state.ResourceLogGroup] = logGroupName
 
 	log.Printf("[provisionLogGroup] Log group %s created", logGroupName)
@@ -769,11 +811,16 @@ func (p *AWSProvider) ensureECRRepository(ctx context.Context, cfg aws.Config, i
 		Tags:           mapToECRTags(tags),
 	})
 	if err != nil {
-		// Repository may already exist, which is fine.
-		log.Printf("[ensureECRRepository] Note: %v", err)
+		// Check if the repository already exists (RepositoryAlreadyExistsException).
+		if !strings.Contains(err.Error(), "RepositoryAlreadyExistsException") {
+			return fmt.Errorf("failed to create ECR repository: %w", err)
+		}
+		log.Printf("[ensureECRRepository] Note: repository already exists")
 	}
 
-	p.store.UpdateInfraResource(infra.ID, state.ResourceECRRepository, repoName)
+	if err := p.store.UpdateInfraResource(infra.ID, state.ResourceECRRepository, repoName); err != nil {
+		slog.Error("failed to update infra resource", "infraID", infra.ID, "resource", state.ResourceECRRepository, "error", err)
+	}
 	return nil
 }
 
@@ -949,7 +996,7 @@ func (p *AWSProvider) deleteALB(ctx context.Context, cfg aws.Config, infra *stat
 			LoadBalancerArn: aws.String(albARN),
 		})
 		if err != nil {
-			log.Printf("[deleteALB] Warning: could not delete ALB: %v", err)
+			return fmt.Errorf("failed to delete ALB: %w", err)
 		}
 	}
 
@@ -962,7 +1009,7 @@ func (p *AWSProvider) deleteALB(ctx context.Context, cfg aws.Config, infra *stat
 			TargetGroupArn: aws.String(tgARN),
 		})
 		if err != nil {
-			log.Printf("[deleteALB] Warning: could not delete target group: %v", err)
+			return fmt.Errorf("failed to delete target group: %w", err)
 		}
 	}
 
@@ -982,10 +1029,9 @@ func (p *AWSProvider) deleteECRRepository(ctx context.Context, cfg aws.Config, i
 		Force:          true, // Delete even if images exist.
 	})
 	if err != nil {
-		log.Printf("[deleteECRRepository] Warning: could not delete ECR repository: %v", err)
-	} else {
-		log.Printf("[deleteECRRepository] ECR repository %s deleted", repoName)
+		return fmt.Errorf("failed to delete ECR repository: %w", err)
 	}
+	log.Printf("[deleteECRRepository] ECR repository %s deleted", repoName)
 	return nil
 }
 
@@ -1001,10 +1047,9 @@ func (p *AWSProvider) deleteLogGroup(ctx context.Context, cfg aws.Config, infra 
 		LogGroupName: aws.String(logGroupName),
 	})
 	if err != nil {
-		log.Printf("[deleteLogGroup] Warning: could not delete log group: %v", err)
-	} else {
-		log.Printf("[deleteLogGroup] Log group %s deleted", logGroupName)
+		return fmt.Errorf("failed to delete log group: %w", err)
 	}
+	log.Printf("[deleteLogGroup] Log group %s deleted", logGroupName)
 	return nil
 }
 
@@ -1018,7 +1063,7 @@ func (p *AWSProvider) deleteVPCResources(ctx context.Context, cfg aws.Config, in
 			GroupId: aws.String(sgID),
 		})
 		if err != nil {
-			log.Printf("[deleteVPCResources] Warning: could not delete security group: %v", err)
+			return fmt.Errorf("failed to delete security group: %w", err)
 		}
 	}
 
@@ -1029,18 +1074,25 @@ func (p *AWSProvider) deleteVPCResources(ctx context.Context, cfg aws.Config, in
 		rtResp, err := ec2Client.DescribeRouteTables(ctx, &ec2.DescribeRouteTablesInput{
 			RouteTableIds: []string{rtID},
 		})
-		if err == nil && len(rtResp.RouteTables) > 0 {
+		if err != nil {
+			return fmt.Errorf("failed to describe route tables: %w", err)
+		}
+		if len(rtResp.RouteTables) > 0 {
 			for _, assoc := range rtResp.RouteTables[0].Associations {
 				if assoc.RouteTableAssociationId != nil && !*assoc.Main {
-					ec2Client.DisassociateRouteTable(ctx, &ec2.DisassociateRouteTableInput{
+					if _, err := ec2Client.DisassociateRouteTable(ctx, &ec2.DisassociateRouteTableInput{
 						AssociationId: assoc.RouteTableAssociationId,
-					})
+					}); err != nil {
+						return fmt.Errorf("failed to disassociate route table: %w", err)
+					}
 				}
 			}
 		}
-		ec2Client.DeleteRouteTable(ctx, &ec2.DeleteRouteTableInput{
+		if _, err := ec2Client.DeleteRouteTable(ctx, &ec2.DeleteRouteTableInput{
 			RouteTableId: aws.String(rtID),
-		})
+		}); err != nil {
+			return fmt.Errorf("failed to delete route table: %w", err)
+		}
 	}
 
 	// Delete subnets.
@@ -1051,7 +1103,7 @@ func (p *AWSProvider) deleteVPCResources(ctx context.Context, cfg aws.Config, in
 				SubnetId: aws.String(subnetID),
 			})
 			if err != nil {
-				log.Printf("[deleteVPCResources] Warning: could not delete subnet %s: %v", subnetID, err)
+				return fmt.Errorf("failed to delete subnet %s: %w", subnetID, err)
 			}
 		}
 	}
@@ -1060,13 +1112,17 @@ func (p *AWSProvider) deleteVPCResources(ctx context.Context, cfg aws.Config, in
 	igwID := infra.Resources[state.ResourceInternetGateway]
 	vpcID := infra.Resources[state.ResourceVPC]
 	if igwID != "" && vpcID != "" {
-		ec2Client.DetachInternetGateway(ctx, &ec2.DetachInternetGatewayInput{
+		if _, err := ec2Client.DetachInternetGateway(ctx, &ec2.DetachInternetGatewayInput{
 			InternetGatewayId: aws.String(igwID),
 			VpcId:             aws.String(vpcID),
-		})
-		ec2Client.DeleteInternetGateway(ctx, &ec2.DeleteInternetGatewayInput{
+		}); err != nil {
+			return fmt.Errorf("failed to detach internet gateway: %w", err)
+		}
+		if _, err := ec2Client.DeleteInternetGateway(ctx, &ec2.DeleteInternetGatewayInput{
 			InternetGatewayId: aws.String(igwID),
-		})
+		}); err != nil {
+			return fmt.Errorf("failed to delete internet gateway: %w", err)
+		}
 	}
 
 	// Delete VPC.
@@ -1075,7 +1131,7 @@ func (p *AWSProvider) deleteVPCResources(ctx context.Context, cfg aws.Config, in
 			VpcId: aws.String(vpcID),
 		})
 		if err != nil {
-			log.Printf("[deleteVPCResources] Warning: could not delete VPC: %v", err)
+			return fmt.Errorf("failed to delete VPC: %w", err)
 		}
 	}
 

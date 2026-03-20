@@ -1,0 +1,60 @@
+# golangci-lint configuration for agent-deploy
+#
+# WHY: Enforces code quality standards as required by ralph/specs/ci.md.
+# Balance between strictness and practicality for cloud deployment tooling.
+#
+version: "2"
+
+run:
+  timeout: 5m
+  modules-download-mode: readonly
+
+linters:
+  default: standard
+  enable:
+    # Additional quality linters
+    - bodyclose     # Check HTTP response body is closed
+    - contextcheck  # Check context usage
+    - durationcheck # Check for time.Duration multiplication
+    - errorlint     # Find issues with error wrapping
+    - misspell      # Find misspelled words
+    - nilerr        # Find code returning nil error incorrectly
+    - noctx         # Find HTTP requests without context
+    - prealloc      # Find slice preallocation opportunities
+    - unconvert     # Remove unnecessary type conversions
+    - unparam       # Find unused function parameters
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: false
+
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment  # Too strict for readability
+
+    staticcheck:
+      checks: ["all"]
+
+    misspell:
+      locale: US
+
+    goimports:
+      local-prefixes:
+        - github.com/cjmartian/agent-deploy
+
+issues:
+  exclude-rules:
+    # Test files can have longer functions and more complexity
+    - path: _test\.go
+      linters:
+        - errcheck
+        - unparam
+
+    # Allow Printf in tests for debugging
+    - path: _test\.go
+      text: "use of `fmt.Printf`"
+
+  max-issues-per-linter: 50
+  max-same-issues: 10

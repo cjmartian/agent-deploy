@@ -105,8 +105,12 @@ func TestDeploymentsResource(t *testing.T) {
 		LastUpdated: time.Now(),
 	}
 
-	store.CreateDeployment(deploy1)
-	store.CreateDeployment(deploy2)
+	if err := store.CreateDeployment(deploy1); err != nil {
+		t.Fatalf("CreateDeployment(deploy1): %v", err)
+	}
+	if err := store.CreateDeployment(deploy2); err != nil {
+		t.Fatalf("CreateDeployment(deploy2): %v", err)
+	}
 
 	// Call resource handler.
 	req := &mcp.ReadResourceRequest{

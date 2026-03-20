@@ -22,7 +22,8 @@ func TestDeletePlan(t *testing.T) {
 		ExpiresAt:      time.Now().Add(24 * time.Hour),
 	}
 
-	if err := store.CreatePlan(plan); err != nil {
+	err = store.CreatePlan(plan)
+	if err != nil {
 		t.Fatalf("CreatePlan: %v", err)
 	}
 
@@ -33,7 +34,8 @@ func TestDeletePlan(t *testing.T) {
 	}
 
 	// Delete it
-	if err := store.DeletePlan(plan.ID); err != nil {
+	err = store.DeletePlan(plan.ID)
+	if err != nil {
 		t.Fatalf("DeletePlan: %v", err)
 	}
 
@@ -72,7 +74,8 @@ func TestDeleteExpiredPlans(t *testing.T) {
 		CreatedAt:      now.Add(-48 * time.Hour),
 		ExpiresAt:      now.Add(-24 * time.Hour), // Expired 24 hours ago
 	}
-	if err := store.CreatePlan(expiredPlan); err != nil {
+	err = store.CreatePlan(expiredPlan)
+	if err != nil {
 		t.Fatalf("CreatePlan (expired): %v", err)
 	}
 
@@ -84,7 +87,8 @@ func TestDeleteExpiredPlans(t *testing.T) {
 		CreatedAt:      now,
 		ExpiresAt:      now.Add(24 * time.Hour), // Expires in 24 hours
 	}
-	if err := store.CreatePlan(validPlan); err != nil {
+	err = store.CreatePlan(validPlan)
+	if err != nil {
 		t.Fatalf("CreatePlan (valid): %v", err)
 	}
 
@@ -125,7 +129,8 @@ func TestDeleteExpiredPlans_NoExpired(t *testing.T) {
 		CreatedAt:      time.Now(),
 		ExpiresAt:      time.Now().Add(24 * time.Hour),
 	}
-	if err := store.CreatePlan(plan); err != nil {
+	err = store.CreatePlan(plan)
+	if err != nil {
 		t.Fatalf("CreatePlan: %v", err)
 	}
 
@@ -224,7 +229,8 @@ func TestCleanupService_CleanupNow(t *testing.T) {
 		CreatedAt:      time.Now().Add(-48 * time.Hour),
 		ExpiresAt:      time.Now().Add(-24 * time.Hour),
 	}
-	if err := store.CreatePlan(plan); err != nil {
+	err = store.CreatePlan(plan)
+	if err != nil {
 		t.Fatalf("CreatePlan: %v", err)
 	}
 
@@ -278,7 +284,8 @@ func TestCleanupService_OnCleanupCallback(t *testing.T) {
 		CreatedAt:      time.Now().Add(-48 * time.Hour),
 		ExpiresAt:      time.Now().Add(-24 * time.Hour),
 	}
-	if err := store.CreatePlan(plan); err != nil {
+	err = store.CreatePlan(plan)
+	if err != nil {
 		t.Fatalf("CreatePlan: %v", err)
 	}
 
