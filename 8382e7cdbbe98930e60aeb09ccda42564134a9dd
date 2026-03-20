@@ -1,0 +1,41 @@
+Implementation details for P3.1 - AWS Cost Explorer Integration:
+
+## Architecture Decisions
+- Cost Explorer API only available in us-east-1, so CostTracker auto-switches region
+- Uses UnblendedCost metric (actual costs) rather than BlendedCost
+- Filters by 'agent-deploy:created-by' tag for total spend
+- Filters by 'agent-deploy:deployment-id' tag for per-deployment costs
+- Group-by functionality for cost breakdown by deployment
+
+## Key Components Added
+1. CostTracker - main struct wrapping costexplorer.Client
+2. CostSummary - cost data with projections and alert flags
+3. MonitoringReport - comprehensive spend report structure
+
+## API Methods
+- GetDeploymentCosts(ctx, deploymentID, start, end) - single deployment costs
+- GetTotalMonthlySpend(ctx) - aggregate monthly spend
+- GetCostsByDeployment(ctx, start, end) - grouped costs
+- CheckAlerts(ctx, limits) - threshold/budget checks
+- GetDeploymentsOverBudget(ctx, limits) - list overbudget deployments
+- GenerateMonitoringReport(ctx, limits) - full report
+
+## Testing Strategy
+- Unit tests for calculation logic (projectMonthlySpend)
+- Alert threshold boundary testing
+- Budget utilization percentage calculations
+- Structure/field validation tests
+- Integration tests would require AWS credentials (not included)
+
+## Spec Compliance
+- spending-safeguards.md:96-104 - Cost Explorer queries ✅
+- spending-safeguards.md:60-68 - Alert thresholds ✅
+- spending-safeguards.md:106-113 - Resource tag filtering ✅
+
+## Dependencies Added
+- github.com/aws/aws-sdk-go-v2/service/costexplorer v1.63.5
+
+## Remaining Work (P3.2)
+- Runtime monitoring with periodic checks
+- Auto-teardown when hard limit exceeded
+- Integration with AWS provider for automatic cost checks
