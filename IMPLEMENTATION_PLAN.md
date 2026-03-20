@@ -43,6 +43,8 @@
 | MCP server integration test (P4.6) | ✅ Done | `internal/main_test.go` — 11 tests: server creation, provider registration, tool/resource/prompt listing, server init, resource read, prompt retrieval, capabilities, ping |
 | Expired plan cleanup (P5.2) | ✅ Done | `internal/state/cleanup.go` — DeletePlan, DeleteExpiredPlans, CleanupService (background goroutine), CleanupConfig, CleanupNow, CleanupStats, OnCleanup callback |
 | Expired plan cleanup tests (P5.2) | ✅ Done | `internal/state/cleanup_test.go` — TestDeletePlan, TestDeletePlan_NotFound, TestDeleteExpiredPlans, TestDeleteExpiredPlans_NoExpired, TestCleanupService_StartStop, TestCleanupService_Stats, TestCleanupService_CleanupNow, TestCleanupService_OnCleanupCallback, TestCleanupService_DoubleStart/Stop |
+| State reconciliation (P5.1) | ✅ Done | `internal/state/reconcile.go` — Reconciler, findOrphanedResources, findStaleEntries, CleanupStaleEntries |
+| Reconciliation tests | ✅ Done | `internal/state/reconcile_test.go` — comprehensive unit tests |
 | Structured logging (TD.2) | ✅ Done | `internal/logging/logging.go` — Initialize(), WithLevel/Format/Output/Source options, text/JSON formats, ParseLevel/ParseFormat, WithComponent, Debug/Info/Warn/Error, attribute helpers (DeploymentID, InfraID, PlanID, Region, Cost, Count, Err) |
 | Structured logging tests (TD.2) | ✅ Done | `internal/logging/logging_test.go` — comprehensive unit tests |
 | Structured logging migration | ✅ Done | `internal/state/cleanup.go`, `internal/spending/monitor.go` — migrated from log.Printf to slog |
@@ -68,6 +70,7 @@
 | Structured logging package | ✅ **Exists** | `internal/logging/` |
 | Unit tests | ✅ **Exist** | `internal/*/` |
 | Cleanup service | ✅ **Integrated** | `internal/state/cleanup.go` |
+| State reconciliation | ✅ **Integrated** | `internal/state/reconcile.go` |
 | Cost monitoring | ✅ **Integrated** | `internal/spending/monitor.go` |
 | Background services (cleanup + cost monitor) | ✅ **Integrated** | `internal/main.go` |
 | Makefile | ✅ **Working** | `Makefile` |
@@ -88,17 +91,6 @@
 ---
 
 ## P5 — Stretch Goals
-
-### P5.1 State reconciliation on startup
-
-- [ ] Sync local state with AWS resource tags on server start
-- **Spec:** `ralph/specs/deployment-state.md:152-156`
-- **Tasks:**
-  - List all resources tagged with `agent-deploy:*`
-  - Compare against local state files
-  - Alert on orphaned resources
-  - Clean up stale local entries
-- **Depends on:** P1.3, P0.2
 
 ### P5.3 CloudFormation-based provisioning
 
@@ -131,6 +123,8 @@ make build           # Build the binary
 # Background services
 ./agent-deploy -enable-cost-monitor    # Enable runtime cost monitoring (requires AWS credentials)
 ./agent-deploy -enable-auto-teardown   # Enable automatic teardown of over-budget deployments
+./agent-deploy -enable-reconcile           # Enable state reconciliation on startup
+./agent-deploy -reconcile-region us-west-2 # Specify AWS region for reconciliation (default: us-east-1)
 ```
 
 ### Test Commands
@@ -151,6 +145,7 @@ go test -tags=integration ./...  # Integration tests
 | `internal/providers/aws.go` | AWS provider (5 tools, 1 resource, 1 prompt) |
 | `internal/state/store.go` | File-backed state storage |
 | `internal/state/types.go` | Plan, Infrastructure, Deployment structs |
+| `internal/state/reconcile.go` | State reconciliation with AWS resource tags |
 | `internal/id/id.go` | ULID-based ID generation |
 | `internal/awsclient/client.go` | Shared AWS SDK configuration |
 | `internal/spending/config.go` | Spending limits configuration |
@@ -170,4 +165,4 @@ go test -tags=integration ./...  # Integration tests
 | Priority | Item | Purpose |
 |----------|------|---------|
 | P4.5 | Integration tests | LocalStack/AWS sandbox testing |
-| P5.1, P5.3-5.4 | Stretch goals | Reconciliation, CloudFormation, multi-cloud |
+| P5.3, P5.4 | Stretch goals | CloudFormation, multi-cloud |

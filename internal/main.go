@@ -18,11 +18,13 @@ import (
 )
 
 var (
-	httpAddr          = flag.String("http", "", "if set, use streamable HTTP at this address instead of stdin/stdout")
-	logLevel          = flag.String("log-level", "info", "log level: debug, info, warn, error")
-	logFormat         = flag.String("log-format", "text", "log format: text, json")
-	enableCostMonitor = flag.Bool("enable-cost-monitor", false, "enable runtime cost monitoring (requires AWS credentials)")
+	httpAddr           = flag.String("http", "", "if set, use streamable HTTP at this address instead of stdin/stdout")
+	logLevel           = flag.String("log-level", "info", "log level: debug, info, warn, error")
+	logFormat          = flag.String("log-format", "text", "log format: text, json")
+	enableCostMonitor  = flag.Bool("enable-cost-monitor", false, "enable runtime cost monitoring (requires AWS credentials)")
 	enableAutoTeardown = flag.Bool("enable-auto-teardown", false, "enable automatic teardown of over-budget deployments")
+	enableReconcile    = flag.Bool("enable-reconcile", false, "enable state reconciliation on startup (requires AWS credentials)")
+	reconcileRegion    = flag.String("reconcile-region", "us-east-1", "AWS region for state reconciliation")
 )
 
 func main() {
@@ -66,6 +68,42 @@ func main() {
 			log.Warn("could not start cleanup service", logging.Err(err))
 		} else {
 			log.Debug("started cleanup service")
+		}
+	}
+
+	// Perform state reconciliation on startup if enabled.
+	if *enableReconcile && store != nil {
+		awsCfg, err := awsclient.LoadConfig(ctx, *reconcileRegion)
+		if err != nil {
+			log.Warn("could not load AWS config for reconciliation, feature disabled",
+				logging.Err(err))
+		} else {
+			reconciler := state.NewReconciler(store, awsCfg)
+			result, err := reconciler.Reconcile(ctx)
+			if err != nil {
+				log.Error("reconciliation failed", logging.Err(err))
+			} else {
+				log.Info("state reconciliation complete",
+					slog.Int("orphaned_resources", len(result.OrphanedResources)),
+					slog.Int("stale_entries", len(result.StaleLocalEntries)),
+					slog.Int("synced", result.SyncedCount))
+
+				// Log warnings for orphaned resources
+				for _, orphan := range result.OrphanedResources {
+					log.Warn("orphaned AWS resource detected",
+						slog.String("type", orphan.ResourceType),
+						slog.String("id", orphan.ResourceID),
+						logging.InfraID(orphan.InfraID))
+				}
+
+				// Log warnings for stale entries
+				for _, stale := range result.StaleLocalEntries {
+					log.Warn("stale local entry detected",
+						slog.String("type", stale.EntryType),
+						slog.String("id", stale.EntryID),
+						slog.Any("missing", stale.MissingResources))
+				}
+			}
 		}
 	}
 
