@@ -107,8 +107,12 @@ type createInfraOutput struct {
 }
 
 type deployInput struct {
-	InfraID  string `json:"infra_id"  jsonschema:"infrastructure ID from aws_create_infra"`
-	ImageRef string `json:"image_ref" jsonschema:"container image or artifact reference to deploy"`
+	InfraID         string            `json:"infra_id"             jsonschema:"infrastructure ID from aws_create_infra"`
+	ImageRef        string            `json:"image_ref"            jsonschema:"container image or artifact reference to deploy"`
+	ContainerPort   int               `json:"container_port,omitempty"   jsonschema:"container port (default: 80)"`
+	HealthCheckPath string            `json:"health_check_path,omitempty" jsonschema:"ALB health check path (default: /)"`
+	DesiredCount    int               `json:"desired_count,omitempty"    jsonschema:"number of tasks to run (default: 1)"`
+	Environment     map[string]string `json:"environment,omitempty"      jsonschema:"environment variables for the container"`
 }
 
 type deployOutput struct {
@@ -321,6 +325,20 @@ func (p *AWSProvider) deploy(ctx context.Context, _ *mcp.CallToolRequest, in dep
 		return nil, deployOutput{}, apperrors.ErrInfraNotReady
 	}
 
+	// Apply defaults for optional parameters.
+	containerPort := in.ContainerPort
+	if containerPort == 0 {
+		containerPort = 80
+	}
+	healthCheckPath := in.HealthCheckPath
+	if healthCheckPath == "" {
+		healthCheckPath = "/"
+	}
+	desiredCount := in.DesiredCount
+	if desiredCount == 0 {
+		desiredCount = 1
+	}
+
 	// Load AWS config.
 	cfg, err := awsclient.LoadConfig(ctx, infra.Region)
 	if err != nil {
@@ -353,7 +371,7 @@ func (p *AWSProvider) deploy(ctx context.Context, _ *mcp.CallToolRequest, in dep
 	}
 
 	// Create ECS task definition.
-	taskDefARN, err := p.createTaskDefinition(ctx, cfg, infra, in.ImageRef, deployID)
+	taskDefARN, err := p.createTaskDefinition(ctx, cfg, infra, in.ImageRef, deployID, containerPort, in.Environment)
 	if err != nil {
 		if statusErr := p.store.UpdateDeploymentStatus(deployID, state.DeploymentStatusFailed, nil); statusErr != nil {
 			slog.Error("failed to update deployment status", "deployID", deployID, "error", statusErr)
@@ -361,8 +379,16 @@ func (p *AWSProvider) deploy(ctx context.Context, _ *mcp.CallToolRequest, in dep
 		return nil, deployOutput{}, fmt.Errorf("task definition: %w", err)
 	}
 
+	// Update target group health check settings for this deployment.
+	if err = p.updateTargetGroupHealthCheck(ctx, cfg, infra, healthCheckPath, containerPort); err != nil {
+		if statusErr := p.store.UpdateDeploymentStatus(deployID, state.DeploymentStatusFailed, nil); statusErr != nil {
+			slog.Error("failed to update deployment status", "deployID", deployID, "error", statusErr)
+		}
+		return nil, deployOutput{}, fmt.Errorf("target group health check: %w", err)
+	}
+
 	// Create or update ECS service.
-	serviceARN, err := p.createOrUpdateService(ctx, cfg, infra, taskDefARN, deployID)
+	serviceARN, err := p.createOrUpdateService(ctx, cfg, infra, taskDefARN, deployID, containerPort, desiredCount)
 	if err != nil {
 		if statusErr := p.store.UpdateDeploymentStatus(deployID, state.DeploymentStatusFailed, nil); statusErr != nil {
 			slog.Error("failed to update deployment status", "deployID", deployID, "error", statusErr)
@@ -918,7 +944,7 @@ func (p *AWSProvider) ensureECRRepository(ctx context.Context, cfg aws.Config, i
 	return nil
 }
 
-func (p *AWSProvider) createTaskDefinition(ctx context.Context, cfg aws.Config, infra *state.Infrastructure, imageRef, deployID string) (string, error) {
+func (p *AWSProvider) createTaskDefinition(ctx context.Context, cfg aws.Config, infra *state.Infrastructure, imageRef, deployID string, containerPort int, environment map[string]string) (string, error) {
 	ecsClient := ecs.NewFromConfig(cfg)
 
 	// Use the provided image reference directly if it looks like a full URI,
@@ -946,6 +972,15 @@ func (p *AWSProvider) createTaskDefinition(ctx context.Context, cfg aws.Config, 
 		return "", fmt.Errorf("execution role not found in infrastructure resources")
 	}
 
+	// Build environment variables for the container.
+	envVars := make([]ecstypes.KeyValuePair, 0, len(environment))
+	for k, v := range environment {
+		envVars = append(envVars, ecstypes.KeyValuePair{
+			Name:  aws.String(k),
+			Value: aws.String(v),
+		})
+	}
+
 	resp, err := ecsClient.RegisterTaskDefinition(ctx, &ecs.RegisterTaskDefinitionInput{
 		Family:                  aws.String("agent-deploy-" + deployID[:12]),
 		RequiresCompatibilities: []ecstypes.Compatibility{ecstypes.CompatibilityFargate},
@@ -954,11 +989,12 @@ func (p *AWSProvider) createTaskDefinition(ctx context.Context, cfg aws.Config, 
 		Memory:                  aws.String("512"),
 		ExecutionRoleArn:        aws.String(executionRoleARN),
 		ContainerDefinitions: []ecstypes.ContainerDefinition{{
-			Name:      aws.String("app"),
-			Image:     aws.String(image),
-			Essential: aws.Bool(true),
+			Name:        aws.String("app"),
+			Image:       aws.String(image),
+			Essential:   aws.Bool(true),
+			Environment: envVars,
 			PortMappings: []ecstypes.PortMapping{{
-				ContainerPort: aws.Int32(80),
+				ContainerPort: aws.Int32(int32(containerPort)),
 				Protocol:      ecstypes.TransportProtocolTcp,
 			}},
 			LogConfiguration: &ecstypes.LogConfiguration{
@@ -980,7 +1016,7 @@ func (p *AWSProvider) createTaskDefinition(ctx context.Context, cfg aws.Config, 
 	return taskDefARN, nil
 }
 
-func (p *AWSProvider) createOrUpdateService(ctx context.Context, cfg aws.Config, infra *state.Infrastructure, taskDefARN, deployID string) (string, error) {
+func (p *AWSProvider) createOrUpdateService(ctx context.Context, cfg aws.Config, infra *state.Infrastructure, taskDefARN, deployID string, containerPort, desiredCount int) (string, error) {
 	ecsClient := ecs.NewFromConfig(cfg)
 
 	subnetStr := infra.Resources[state.ResourceSubnetPublic]
@@ -997,7 +1033,7 @@ func (p *AWSProvider) createOrUpdateService(ctx context.Context, cfg aws.Config,
 		Cluster:        aws.String(infra.Resources[state.ResourceECSCluster]),
 		ServiceName:    aws.String(serviceName),
 		TaskDefinition: aws.String(taskDefARN),
-		DesiredCount:   aws.Int32(1),
+		DesiredCount:   aws.Int32(int32(desiredCount)),
 		LaunchType:     ecstypes.LaunchTypeFargate,
 		NetworkConfiguration: &ecstypes.NetworkConfiguration{
 			AwsvpcConfiguration: &ecstypes.AwsVpcConfiguration{
@@ -1009,7 +1045,7 @@ func (p *AWSProvider) createOrUpdateService(ctx context.Context, cfg aws.Config,
 		LoadBalancers: []ecstypes.LoadBalancer{{
 			TargetGroupArn: aws.String(infra.Resources[state.ResourceTargetGroup]),
 			ContainerName:  aws.String("app"),
-			ContainerPort:  aws.Int32(80),
+			ContainerPort:  aws.Int32(int32(containerPort)),
 		}},
 	})
 	if err != nil {
@@ -1019,6 +1055,28 @@ func (p *AWSProvider) createOrUpdateService(ctx context.Context, cfg aws.Config,
 	serviceARN := *resp.Service.ServiceArn
 	log.Printf("[createOrUpdateService] Service %s created", serviceARN)
 	return serviceARN, nil
+}
+
+// updateTargetGroupHealthCheck updates the target group's health check settings.
+func (p *AWSProvider) updateTargetGroupHealthCheck(ctx context.Context, cfg aws.Config, infra *state.Infrastructure, healthCheckPath string, containerPort int) error {
+	elbClient := elbv2.NewFromConfig(cfg)
+
+	targetGroupARN := infra.Resources[state.ResourceTargetGroup]
+	if targetGroupARN == "" {
+		return fmt.Errorf("target group not found in infrastructure resources")
+	}
+
+	_, err := elbClient.ModifyTargetGroup(ctx, &elbv2.ModifyTargetGroupInput{
+		TargetGroupArn:  aws.String(targetGroupARN),
+		HealthCheckPath: aws.String(healthCheckPath),
+		HealthCheckPort: aws.String(fmt.Sprintf("%d", containerPort)),
+	})
+	if err != nil {
+		return fmt.Errorf("modify target group health check: %w", err)
+	}
+
+	log.Printf("[updateTargetGroupHealthCheck] Updated health check to path=%s port=%d", healthCheckPath, containerPort)
+	return nil
 }
 
 func (p *AWSProvider) getALBURLs(ctx context.Context, cfg aws.Config, infra *state.Infrastructure) ([]string, error) {

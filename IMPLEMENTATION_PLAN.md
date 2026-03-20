@@ -57,6 +57,10 @@
 | Integration tests | ✅ Done | `internal/providers/aws_integration_test.go` | Full workflow tests |
 | CI/CD workflows | ✅ Done | `.github/workflows/ci.yml`, `.golangci.yml` | lint, test, build on push/PR |
 | IAM task execution role | ✅ Done | `internal/providers/aws.go`, `internal/state/types.go` | ECS tasks can now pull from ECR and write to CloudWatch |
+| Configurable container port | ✅ Done | `internal/providers/aws.go` | ContainerPort parameter (default: 80) |
+| Configurable health check path | ✅ Done | `internal/providers/aws.go` | HealthCheckPath parameter (default: /) |
+| Configurable desired count | ✅ Done | `internal/providers/aws.go` | DesiredCount parameter (default: 1) |
+| Environment variables support | ✅ Done | `internal/providers/aws.go` | Environment map parameter |
 
 ---
 
@@ -69,7 +73,7 @@
 | **Cleanup service** | ✅ **Working** | `internal/state/cleanup.go` — 24-hour plan expiration with hourly cleanup |
 | **Cost monitoring** | ✅ **Working** | `internal/spending/monitor.go` |
 | **State reconciliation** | ⚠️ **No pagination** | Will miss resources beyond first page (see P3.1) |
-| AWS 5 tools | ⚠️ **13+ hardcoded values** | See P1 issues below |
+| AWS 5 tools | ⚠️ **9+ hardcoded values** | See P1 issues below |
 | AWS `aws:deployments` resource | ✅ **Implemented** | `internal/providers/aws.go` |
 | AWS `aws_deploy_plan` prompt | ✅ **Implemented** | `internal/providers/aws.go` |
 | Cost estimation (planInfra) | ❌ **Hardcoded** | `baseCost=15.0, ecsCost=users*0.02, albCost=20.0` (aws.go:153-158) |
@@ -155,37 +159,39 @@
 - **Depends on:** None (P0.3 now completed)
 - **Audit (2026-03-20):** Verified Cost Explorer implemented but not wired to planInfra
 
-### P1.3 Container Port Hardcoded to 80 (5 locations) ❌
+### P1.3 Container Port Hardcoded to 80 (5 locations) ✅ COMPLETED
 
-- [ ] Add `container_port` input parameter to deploy tool
-- [ ] Update task definition to use configurable port (`aws.go:814`)
-- [ ] Update ALB target group health checks (`aws.go:865`)
-- [ ] 5 hardcoded port 80 references across `aws.go`
+- [x] Add `container_port` input parameter to deploy tool
+- [x] Update task definition to use configurable port (`aws.go:814`)
+- [x] Update ALB target group health checks (`aws.go:865`)
+- [x] 5 hardcoded port 80 references across `aws.go`
 - **Impact:** Cannot deploy apps on non-80 ports (Node.js uses 3000, Go uses 8080, etc.)
-- **Location:** `internal/providers/aws.go:814, 865` + 3 other locations
+- **Location:** `internal/providers/aws.go`
+- **Completed:** ContainerPort parameter added with default value of 80
 
-### P1.4 Health Check Path Not Configurable ❌
+### P1.4 Health Check Path Not Configurable ✅ COMPLETED
 
-- [ ] Add `health_check_path` input parameter
-- [ ] Update target group health check configuration (currently "/" at `aws.go:701`)
+- [x] Add `health_check_path` input parameter
+- [x] Update target group health check configuration (currently "/" at `aws.go:701`)
 - **Impact:** Apps with custom health endpoints (`/health`, `/healthz`) fail ALB health checks
-- **Location:** `internal/providers/aws.go:701`
-- **Audit (2026-03-20):** Verified hardcoded "/" health check path
+- **Location:** `internal/providers/aws.go`
+- **Completed:** HealthCheckPath parameter added with default value of /
 
-### P1.5 Single Replica Deployments Only ❌
+### P1.5 Single Replica Deployments Only ✅ COMPLETED
 
-- [ ] Add `desired_count` parameter to deploy tool
-- [ ] Update ECS service `DesiredCount` (currently always 1 at `aws.go:853`)
+- [x] Add `desired_count` parameter to deploy tool
+- [x] Update ECS service `DesiredCount` (currently always 1 at `aws.go:853`)
 - **Impact:** No high availability; single point of failure; cannot scale
-- **Location:** `internal/providers/aws.go:853`
-- **Audit (2026-03-20):** Verified DesiredCount always 1
+- **Location:** `internal/providers/aws.go`
+- **Completed:** DesiredCount parameter added with default value of 1
 
-### P1.6 No Environment Variables Support ❌
+### P1.6 No Environment Variables Support ✅ COMPLETED
 
-- [ ] Add `environment` map input to deploy tool
-- [ ] Pass environment to container definition
+- [x] Add `environment` map input to deploy tool
+- [x] Pass environment to container definition
 - **Impact:** Cannot configure apps via environment variables (common pattern)
-- **Location:** `internal/providers/aws.go` (container definition)
+- **Location:** `internal/providers/aws.go`
+- **Completed:** Environment map parameter added for container environment variables
 
 ### P1.7 No HTTPS/TLS Support ❌
 
@@ -554,7 +560,7 @@ go tool cover -html=coverage.out          # View coverage report
 | `ralph/specs/spending-safeguards.md` | Budget enforcement spec |
 | `ralph/specs/ci.md` | CI/CD requirements spec |
 
-### Hardcoded Values Summary (13+ issues in aws.go)
+### Hardcoded Values Summary (9+ issues in aws.go)
 
 | Value | Location | Impact |
 |-------|----------|--------|
@@ -562,9 +568,9 @@ go tool cover -html=coverage.out          # View coverage report
 | Subnet CIDRs: `10.0.1.0/24`, `10.0.2.0/24` | `aws.go:536` | Network conflicts |
 | ECS Task CPU: `"256"` | `aws.go:806` | Resource limits |
 | ECS Task Memory: `"512"` | `aws.go:807` | Resource limits |
-| ECS Desired Count: `1` | `aws.go:853` | No HA |
-| Container Port: `80` | `aws.go:814, 865` | Port flexibility |
-| Health Check Path: `"/"` | `aws.go:701` | Health check compatibility |
+| ~~ECS Desired Count: `1`~~ | ~~`aws.go:853`~~ | ✅ Now configurable (P1.5) |
+| ~~Container Port: `80`~~ | ~~`aws.go:814, 865`~~ | ✅ Now configurable (P1.3) |
+| ~~Health Check Path: `"/"`~~ | ~~`aws.go:701`~~ | ✅ Now configurable (P1.4) |
 | Log Retention: `7` days | `aws.go:749` | Compliance |
 | Default Image: `nginx:latest` | `aws.go:787` | Accidental deployments |
 | Cost baseCost: `15.0` | `aws.go:153` | Inaccurate estimates |
@@ -577,11 +583,11 @@ go tool cover -html=coverage.out          # View coverage report
 | Priority | Count | Items |
 |----------|-------|-------|
 | **P0 Critical** | 0 | ✅ All completed |
-| **P1 Spec Gaps** | 18 | Cost estimation, logging, ports, env vars, HTTPS, VPC, subnets, approval, health wait, etc. |
+| **P1 Spec Gaps** | 14 | Cost estimation, logging, HTTPS, VPC, subnets, approval, health wait, etc. |
 | **P2 Test Gaps** | 11 | awsclient (0%), errors (0%), config (0%), provider.go (0%), aws.go (8.3%), mocking, coverage |
 | **P3 Quality** | 8 | Pagination, ALB tags, version, region, errors, disclaimer, Makefile, unused AddTime |
 | **P5 Stretch** | 3 | CloudFormation, multi-cloud, secrets |
-| **Total** | **40** | |
+| **Total** | **36** | |
 
 ---
 
