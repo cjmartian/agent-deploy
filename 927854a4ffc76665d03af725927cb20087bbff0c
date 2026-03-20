@@ -1,0 +1,31 @@
+Implementation details for CloudWatch Logs, input validation, and ECR cleanup:
+
+## CloudWatch Logs Integration (spec compliance fix)
+- Spec: aws-provider.md line 60 - 'Set up CloudWatch logging'
+- provisionLogGroup(): Creates /ecs/agent-deploy-{infraID} log group
+- Retention policy: 7 days (balances debuggability vs cost)
+- createTaskDefinition(): Adds LogConfiguration with awslogs driver
+- deleteLogGroup(): Cleanup during teardown
+
+## Input Validation (robustness fix)
+- planInfra now validates all required inputs before processing
+- Catches empty/whitespace strings for app_description and region
+- Catches non-positive integers for expected_users and latency_ms
+- Error messages identify which field failed validation
+
+## ECR Repository Cleanup (cost management)
+- deleteECRRepository(): Added to teardown sequence
+- Uses force=true to delete repository even with images
+- Prevents storage cost accumulation from orphaned repos
+
+## Testing
+- 7 new test cases in TestPlanInfra_InputValidation
+- Tests cover all validation scenarios (empty, whitespace, zero, negative)
+
+## Dependencies
+- Added github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs v1.64.1
+
+## Why These Changes Matter
+1. CloudWatch Logs: Essential for debugging deployed applications
+2. Input validation: Prevents invalid plans from being created
+3. ECR cleanup: Prevents cost leaks from orphaned repositories
