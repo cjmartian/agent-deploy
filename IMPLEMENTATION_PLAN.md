@@ -38,6 +38,8 @@
 | AWS provider tests (P4.4) | ✅ Partial | `internal/providers/aws_test.go` — planInfra, deploymentsResource, statusOutput |
 | Cost Explorer integration (P3.1) | ✅ Done | `internal/spending/costs.go` — CostTracker, GetDeploymentCosts, GetTotalMonthlySpend, GetCostsByDeployment, CheckAlerts, GetDeploymentsOverBudget, GenerateMonitoringReport |
 | Cost Explorer tests (P3.1) | ✅ Done | `internal/spending/costs_test.go` — comprehensive unit tests |
+| Runtime cost monitoring (P3.2) | ✅ Done | `internal/spending/monitor.go` — CostMonitor, MonitorConfig, Start/Stop lifecycle, CheckNow, background cost checking, alert processing, auto-teardown |
+| Runtime cost monitoring tests (P3.2) | ✅ Done | `internal/spending/monitor_test.go` — comprehensive unit tests |
 
 ---
 
@@ -57,19 +59,6 @@
 | Domain errors package | ✅ **Exists** | `internal/errors/` |
 | Unit tests | ✅ **Exist** | `internal/*/` |
 | Makefile | ✅ **Working** | `Makefile` |
-
----
-
-## P3 — Spending Safeguards (Advanced)
-
-Per README: "Ensure spend does not cross some boundary set by the user."
-
-### P3.2 Runtime cost monitoring (stretch)
-
-- [ ] Alert when actual spend reaches `alert_threshold_percent` of budget
-- [ ] Optional auto-teardown when hard limit exceeded
-- **Spec:** `ralph/specs/spending-safeguards.md:60-68, 115-123`
-- **Depends on:** P3.1, P2.7
 
 ---
 
@@ -170,6 +159,7 @@ go test -tags=integration ./...  # Integration tests
 | `internal/spending/config.go` | Spending limits configuration |
 | `internal/spending/check.go` | Pre-provisioning budget check |
 | `internal/spending/costs.go` | AWS Cost Explorer integration |
+| `internal/spending/monitor.go` | Runtime cost monitoring with alerts and auto-teardown |
 | `internal/errors/errors.go` | Domain error types |
 | `ralph/specs/aws-provider.md` | Tool/resource/prompt specifications |
 | `ralph/specs/deployment-state.md` | State model and storage spec |
@@ -179,7 +169,6 @@ go test -tags=integration ./...  # Integration tests
 
 | Priority | Item | Purpose |
 |----------|------|---------|
-| P3.2 | Runtime cost monitoring | Alert/auto-teardown on budget |
 | P4.5 | Integration tests | LocalStack/AWS sandbox testing |
 | P4.6 | MCP server tests | End-to-end server testing |
 | P5.1-5.4 | Stretch goals | Reconciliation, cleanup, CloudFormation, multi-cloud |
