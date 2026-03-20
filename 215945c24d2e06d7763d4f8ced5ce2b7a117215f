@@ -1,0 +1,38 @@
+Implementation details for P5.1 - State Reconciliation:
+
+## Architecture
+- Reconciler struct: wraps Store + AWS clients (EC2, ECS, ELBv2)
+- findOrphanedResources: queries AWS for agent-deploy:* tagged resources
+- findStaleEntries: checks local state references against AWS
+- CleanupStaleEntries: marks stale entries as destroyed/stopped
+
+## AWS Resource Discovery
+- VPCs: DescribeVpcs with tag-key filter
+- ECS Clusters: ListClusters + DescribeClusters with TAGS include
+- ALBs: DescribeLoadBalancers + DescribeTags
+
+## Detection Logic
+1. Orphaned: AWS resource has agent-deploy:infra-id tag but no matching local entry
+2. Stale: Local entry references VPC/ECS/ALB that doesn't exist in AWS
+
+## CLI Integration
+- -enable-reconcile: opt-in flag (default: false)
+- -reconcile-region: AWS region to query (default: us-east-1)
+- Runs once at startup, before MCP server begins accepting requests
+
+## Error Handling
+- Non-fatal: continues reconciliation even if some AWS queries fail
+- Errors collected in ReconcileResult.Errors for reporting
+- Each resource type checked independently
+
+## Test Strategy
+- Unit tests for data structures (ReconcileResult, OrphanedResource, StaleEntry)
+- Store integration tests (create/list/update operations)
+- Logic tests for counting and filtering (skip destroyed/stopped)
+- No AWS mocking - tests focus on local state logic
+
+## Why This Matters
+Without reconciliation, operator has no visibility into:
+- Forgotten AWS resources accruing costs
+- Local state pointing to deleted resources
+- Drift between local and cloud state
