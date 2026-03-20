@@ -50,6 +50,7 @@
 | Structured logging migration | ✅ Done | `internal/state/cleanup.go`, `internal/spending/monitor.go` — migrated from log.Printf to slog |
 | AllWithStore provider init | ✅ Done | `internal/providers/provider.go` — AllWithStore() for shared store instances |
 | Background services integration | ✅ Done | `internal/main.go` — CleanupService and CostMonitor integration, graceful shutdown, signal handling |
+| Integration tests (P4.5) | ✅ Done | `internal/providers/aws_integration_test.go` — full workflow, planning, resource, budget tests |
 
 ---
 
@@ -74,19 +75,6 @@
 | Cost monitoring | ✅ **Integrated** | `internal/spending/monitor.go` |
 | Background services (cleanup + cost monitor) | ✅ **Integrated** | `internal/main.go` |
 | Makefile | ✅ **Working** | `Makefile` |
-
----
-
-## P4 — Testing & Quality (Remaining)
-
-### P4.5 Integration tests
-
-- [ ] Create `internal/providers/aws_integration_test.go` (build-tagged)
-- **Tasks:**
-  - Test against LocalStack or AWS sandbox
-  - Full workflow: plan → create → deploy → status → teardown
-  - Verify resource cleanup
-- **Build tag:** `//go:build integration`
 
 ---
 
@@ -133,7 +121,7 @@ make build           # Build the binary
 go test ./...                    # Unit tests
 go test -v ./...                 # Verbose
 go test -race ./...              # With race detector
-go test -tags=integration ./...  # Integration tests
+go test -tags=integration ./...  # Integration tests (requires LocalStack or AWS)
 ```
 
 ### Key Files
