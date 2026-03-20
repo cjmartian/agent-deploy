@@ -30,3 +30,17 @@ func All() []Provider {
 		NewAWSProvider(store),
 	}
 }
+
+// AllWithStore returns every available provider using the provided store.
+// This allows sharing a single store instance between providers and services.
+func AllWithStore(store *state.Store) []Provider {
+	if store == nil {
+		// Graceful degradation with nil store.
+		return []Provider{
+			&AWSProvider{},
+		}
+	}
+	return []Provider{
+		NewAWSProvider(store),
+	}
+}

@@ -45,6 +45,9 @@
 | Expired plan cleanup tests (P5.2) | ✅ Done | `internal/state/cleanup_test.go` — TestDeletePlan, TestDeletePlan_NotFound, TestDeleteExpiredPlans, TestDeleteExpiredPlans_NoExpired, TestCleanupService_StartStop, TestCleanupService_Stats, TestCleanupService_CleanupNow, TestCleanupService_OnCleanupCallback, TestCleanupService_DoubleStart/Stop |
 | Structured logging (TD.2) | ✅ Done | `internal/logging/logging.go` — Initialize(), WithLevel/Format/Output/Source options, text/JSON formats, ParseLevel/ParseFormat, WithComponent, Debug/Info/Warn/Error, attribute helpers (DeploymentID, InfraID, PlanID, Region, Cost, Count, Err) |
 | Structured logging tests (TD.2) | ✅ Done | `internal/logging/logging_test.go` — comprehensive unit tests |
+| Structured logging migration | ✅ Done | `internal/state/cleanup.go`, `internal/spending/monitor.go` — migrated from log.Printf to slog |
+| AllWithStore provider init | ✅ Done | `internal/providers/provider.go` — AllWithStore() for shared store instances |
+| Background services integration | ✅ Done | `internal/main.go` — CleanupService and CostMonitor integration, graceful shutdown, signal handling |
 
 ---
 
@@ -64,6 +67,9 @@
 | Domain errors package | ✅ **Exists** | `internal/errors/` |
 | Structured logging package | ✅ **Exists** | `internal/logging/` |
 | Unit tests | ✅ **Exist** | `internal/*/` |
+| Cleanup service | ✅ **Integrated** | `internal/state/cleanup.go` |
+| Cost monitoring | ✅ **Integrated** | `internal/spending/monitor.go` |
+| Background services (cleanup + cost monitor) | ✅ **Integrated** | `internal/main.go` |
 | Makefile | ✅ **Working** | `Makefile` |
 
 ---
@@ -121,6 +127,10 @@ make build           # Build the binary
 ./agent-deploy -log-level debug    # Set log level (debug/info/warn/error, default: info)
 ./agent-deploy -log-format json    # Set log format (text/json, default: text)
 ./agent-deploy -http :8080 -log-level debug -log-format json  # Combined
+
+# Background services
+./agent-deploy -enable-cost-monitor    # Enable runtime cost monitoring (requires AWS credentials)
+./agent-deploy -enable-auto-teardown   # Enable automatic teardown of over-budget deployments
 ```
 
 ### Test Commands

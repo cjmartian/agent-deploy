@@ -5,11 +5,12 @@ package spending
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/cjmartian/agent-deploy/internal/logging"
 )
 
 // MonitorConfig configures the runtime cost monitor behavior.
@@ -81,8 +82,10 @@ func (m *CostMonitor) Start(ctx context.Context) error {
 	m.mu.Unlock()
 
 	go m.runLoop(ctx)
-	log.Printf("[cost-monitor] Started with interval %v, auto-teardown=%v",
-		m.config.CheckInterval, m.config.EnableAutoTeardown)
+	log := logging.WithComponent(logging.ComponentCostMonitor)
+	log.Info("cost monitor started",
+		slog.Duration("interval", m.config.CheckInterval),
+		slog.Bool("auto_teardown", m.config.EnableAutoTeardown))
 	return nil
 }
 
@@ -102,8 +105,10 @@ func (m *CostMonitor) Stop() {
 	m.running = false
 	m.mu.Unlock()
 
-	log.Printf("[cost-monitor] Stopped. Alerts sent: %d, Teardowns: %d",
-		m.alertsSent, m.teardownsDone)
+	log := logging.WithComponent(logging.ComponentCostMonitor)
+	log.Info("cost monitor stopped",
+		slog.Int("alerts_sent", m.alertsSent),
+		slog.Int("teardowns_done", m.teardownsDone))
 }
 
 // IsRunning returns whether the monitor is actively checking costs.
@@ -159,9 +164,11 @@ func (m *CostMonitor) CheckNow(ctx context.Context) (*MonitoringReport, error) {
 func (m *CostMonitor) runLoop(ctx context.Context) {
 	defer close(m.doneCh)
 
+	log := logging.WithComponent(logging.ComponentCostMonitor)
+
 	// Perform initial check immediately
 	if _, err := m.performCheck(ctx); err != nil {
-		log.Printf("[cost-monitor] Initial check failed: %v", err)
+		log.Error("initial cost check failed", logging.Err(err))
 	}
 
 	ticker := time.NewTicker(m.config.CheckInterval)
@@ -170,20 +177,21 @@ func (m *CostMonitor) runLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("[cost-monitor] Context cancelled, stopping")
+			log.Debug("context cancelled, stopping")
 			return
 		case <-m.stopCh:
 			return
 		case <-ticker.C:
 			if _, err := m.performCheck(ctx); err != nil {
-				log.Printf("[cost-monitor] Check failed: %v", err)
+				log.Error("cost check failed", logging.Err(err))
 			}
 		}
 	}
 }
 
 func (m *CostMonitor) performCheck(ctx context.Context) (*MonitoringReport, error) {
-	log.Printf("[cost-monitor] Performing cost check...")
+	log := logging.WithComponent(logging.ComponentCostMonitor)
+	log.Debug("performing cost check")
 
 	report, err := m.tracker.GenerateMonitoringReport(ctx, m.limits)
 	if err != nil {
@@ -205,23 +213,28 @@ func (m *CostMonitor) performCheck(ctx context.Context) (*MonitoringReport, erro
 	}
 
 	// Log summary
-	log.Printf("[cost-monitor] Check complete: $%.2f spent (%.1f%% of $%.2f budget), %d alerts",
-		report.TotalMonthlySpend,
-		report.BudgetUtilization,
-		report.MonthlyBudget,
-		len(report.AlertsTriggered))
+	log.Info("cost check complete",
+		logging.Cost(report.TotalMonthlySpend),
+		slog.Float64("budget_utilization_pct", report.BudgetUtilization),
+		slog.Float64("monthly_budget_usd", report.MonthlyBudget),
+		slog.Int("alerts", len(report.AlertsTriggered)))
 
 	return report, nil
 }
 
 func (m *CostMonitor) processAlert(ctx context.Context, alert CostSummary) {
+	log := logging.WithComponent(logging.ComponentCostMonitor)
+
 	// Skip the aggregate TOTAL alert for auto-teardown (can't teardown everything)
 	isDeploymentAlert := alert.DeploymentID != "" && alert.DeploymentID != "TOTAL"
 
 	if alert.AlertThreshold && !alert.BudgetExceeded {
 		// Threshold reached but not exceeded - send alert only
-		log.Printf("[cost-monitor] ALERT: %s at %.1f%% of budget ($%.2f)",
-			alertTarget(alert), (alert.TotalCostUSD/m.limits.PerDeploymentUSD)*100, alert.TotalCostUSD)
+		percentUsed := (alert.TotalCostUSD / m.limits.PerDeploymentUSD) * 100
+		log.Warn("spending alert threshold reached",
+			slog.String("target", alertTarget(alert)),
+			slog.Float64("percent_used", percentUsed),
+			logging.Cost(alert.TotalCostUSD))
 
 		m.mu.Lock()
 		m.alertsSent++
@@ -233,8 +246,10 @@ func (m *CostMonitor) processAlert(ctx context.Context, alert CostSummary) {
 	}
 
 	if alert.BudgetExceeded {
-		log.Printf("[cost-monitor] BUDGET EXCEEDED: %s at $%.2f (limit: $%.2f)",
-			alertTarget(alert), alert.TotalCostUSD, m.limits.PerDeploymentUSD)
+		log.Error("budget exceeded",
+			slog.String("target", alertTarget(alert)),
+			logging.Cost(alert.TotalCostUSD),
+			slog.Float64("limit_usd", m.limits.PerDeploymentUSD))
 
 		m.mu.Lock()
 		m.alertsSent++
@@ -246,14 +261,18 @@ func (m *CostMonitor) processAlert(ctx context.Context, alert CostSummary) {
 
 		// Auto-teardown if enabled and this is a specific deployment
 		if m.config.EnableAutoTeardown && isDeploymentAlert && m.config.TeardownCallback != nil {
-			log.Printf("[cost-monitor] Auto-teardown triggered for deployment %s", alert.DeploymentID)
+			log.Warn("auto-teardown triggered",
+				logging.DeploymentID(alert.DeploymentID))
 			if err := m.config.TeardownCallback(ctx, alert.DeploymentID); err != nil {
-				log.Printf("[cost-monitor] Auto-teardown failed for %s: %v", alert.DeploymentID, err)
+				log.Error("auto-teardown failed",
+					logging.DeploymentID(alert.DeploymentID),
+					logging.Err(err))
 			} else {
 				m.mu.Lock()
 				m.teardownsDone++
 				m.mu.Unlock()
-				log.Printf("[cost-monitor] Auto-teardown completed for %s", alert.DeploymentID)
+				log.Info("auto-teardown completed",
+					logging.DeploymentID(alert.DeploymentID))
 			}
 		}
 	}

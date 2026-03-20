@@ -3,9 +3,11 @@ package state
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/cjmartian/agent-deploy/internal/logging"
 )
 
 // CleanupConfig configures the background cleanup service.
@@ -66,7 +68,9 @@ func (c *CleanupService) Start(ctx context.Context) error {
 	c.mu.Unlock()
 
 	go c.runLoop(ctx)
-	log.Printf("[cleanup] Started with interval %v", c.config.Interval)
+	log := logging.WithComponent(logging.ComponentCleanup)
+	log.Info("cleanup service started",
+		slog.Duration("interval", c.config.Interval))
 	return nil
 }
 
@@ -86,7 +90,9 @@ func (c *CleanupService) Stop() {
 	c.running = false
 	c.mu.Unlock()
 
-	log.Printf("[cleanup] Stopped. Total plans deleted: %d", c.totalDeleted)
+	log := logging.WithComponent(logging.ComponentCleanup)
+	log.Info("cleanup service stopped",
+		slog.Int("total_deleted", c.totalDeleted))
 }
 
 // IsRunning returns whether the service is active.
@@ -126,11 +132,13 @@ func (c *CleanupService) CleanupNow() (int, error) {
 func (c *CleanupService) runLoop(ctx context.Context) {
 	defer close(c.doneCh)
 
+	log := logging.WithComponent(logging.ComponentCleanup)
+
 	// Perform initial cleanup
 	if deleted, err := c.performCleanup(); err != nil {
-		log.Printf("[cleanup] Initial cleanup failed: %v", err)
+		log.Error("initial cleanup failed", logging.Err(err))
 	} else if deleted > 0 {
-		log.Printf("[cleanup] Initial cleanup deleted %d expired plans", deleted)
+		log.Info("initial cleanup completed", logging.Count(deleted))
 	}
 
 	ticker := time.NewTicker(c.config.Interval)
@@ -139,15 +147,15 @@ func (c *CleanupService) runLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("[cleanup] Context cancelled, stopping")
+			log.Debug("context cancelled, stopping")
 			return
 		case <-c.stopCh:
 			return
 		case <-ticker.C:
 			if deleted, err := c.performCleanup(); err != nil {
-				log.Printf("[cleanup] Cleanup failed: %v", err)
+				log.Error("cleanup failed", logging.Err(err))
 			} else if deleted > 0 {
-				log.Printf("[cleanup] Deleted %d expired plans", deleted)
+				log.Info("cleanup completed", logging.Count(deleted))
 			}
 		}
 	}
