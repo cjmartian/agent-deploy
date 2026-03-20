@@ -1,0 +1,23 @@
+P0.4 Graceful Shutdown Implementation Notes:
+
+Changes to internal/main.go:
+1. HTTP mode now uses httpServer.Shutdown() instead of Close()
+   - Shutdown() allows in-flight requests to complete
+   - Uses 30-second timeout for graceful shutdown
+   - Falls back to force close if timeout exceeded
+
+2. Stdio mode removes os.Exit(0) from shutdown goroutine
+   - Previously: goroutine called os.Exit(0) bypassing defers
+   - Now: goroutine only calls shutdown(), lets main return naturally
+   - server.Run() returns when context is canceled
+
+3. Error paths use return instead of os.Exit(1)
+   - Allows any defers in main() to execute
+   - Cleanup services can properly stop
+
+Impact:
+- In-flight HTTP requests complete gracefully
+- Background services (cleanup, cost monitor) stop cleanly
+- No resource leaks from abrupt termination
+
+This completes all P0 Critical items.
