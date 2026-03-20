@@ -1,0 +1,27 @@
+Implementation details for background services integration:
+
+## Architecture Changes
+- main.go now manages lifecycle of CleanupService and CostMonitor
+- Shared state.Store instance used across providers and services
+- Context cancellation propagates to all background services
+
+## New CLI Flags
+- -enable-cost-monitor: Enable AWS Cost Explorer integration
+- -enable-auto-teardown: Enable automatic teardown when budget exceeded
+
+## Graceful Shutdown
+- Signal handling for SIGINT/SIGTERM
+- CleanupService.Stop() waits for current cleanup to complete
+- CostMonitor.Stop() waits for current check to complete
+- HTTP server uses graceful Close() instead of immediate shutdown
+
+## Logging Migration
+- cleanup.go: log.Printf → logging.WithComponent + slog methods
+- monitor.go: log.Printf → logging.WithComponent + slog methods
+- Consistent structured logging across all services
+
+## Why This Matters
+- CleanupService was implemented but never started - expired plans accumulated
+- CostMonitor was implemented but never started - no runtime cost enforcement
+- Now both services run automatically when server starts
+- Cost monitoring is opt-in via flag to avoid AWS API calls when not needed
