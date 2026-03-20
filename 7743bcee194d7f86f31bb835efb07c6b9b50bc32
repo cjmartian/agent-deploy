@@ -1,0 +1,46 @@
+Implementation details for P3.2 - Runtime Cost Monitoring:
+
+## Architecture Decisions
+- Background goroutine with configurable check interval (default: 1 hour)
+- Callbacks for alerts and teardown allow flexible integration
+- Auto-teardown disabled by default for safety
+- Stats tracking for observability (alerts sent, teardowns done)
+
+## Key Components Added
+1. CostMonitor - main monitoring struct with Start/Stop lifecycle
+2. MonitorConfig - configuration options (interval, callbacks, auto-teardown)
+3. MonitorStats - runtime statistics
+4. AlertLevel enum - none/warning/critical/exceeded
+5. SpendingAlert - rich alert context with message formatting
+
+## API Methods
+- NewCostMonitor(cfg, limits, config) - constructor
+- Start(ctx) / Stop() - lifecycle management
+- CheckNow(ctx) - on-demand check
+- IsRunning() / LastRunTime() / LastError() / Stats() - introspection
+
+## Alert Logic
+- Warning: 90% of alert threshold reached
+- Critical: alert threshold reached (default 80%)
+- Exceeded: over budget limit
+- Auto-teardown only triggers on Exceeded for specific deployments (not TOTAL)
+
+## Integration Points
+- Uses CostTracker.GenerateMonitoringReport() for data
+- TeardownCallback integrates with aws_teardown tool
+- AlertCallback for custom notification systems (email, Slack, etc.)
+
+## Testing Strategy
+- Unit tests for alert level calculations
+- Callback invocation tests
+- Boundary condition tests
+- Stats structure validation
+
+## Spec Compliance
+- spending-safeguards.md:60-68 - Alert at threshold ✅
+- spending-safeguards.md:115-123 - Auto-teardown option ✅
+
+## Remaining Integration Work
+- Wire CostMonitor into main.go server startup
+- Expose monitoring stats via MCP resource
+- Add configuration via env vars (AGENT_DEPLOY_MONITOR_INTERVAL, etc.)
