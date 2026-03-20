@@ -1,0 +1,34 @@
+Implementation details for P5.2 - Expired Plan Cleanup:
+
+## Architecture Decisions
+- Background goroutine with configurable interval (default: 1 hour)
+- Graceful deletion - no error if plan doesn't exist
+- Callback mechanism for external notification systems
+- Stats tracking for observability
+
+## Store Methods Added
+- DeletePlan(id string) error - removes single plan file
+- DeleteExpiredPlans() (int, error) - scans and deletes expired
+
+## CleanupService API
+- NewCleanupService(store, config) - constructor
+- Start(ctx) / Stop() - lifecycle management
+- CleanupNow() - on-demand cleanup
+- IsRunning() / Stats() - introspection
+
+## Spec Compliance
+- deployment-state.md:146-150 - Expired plans deleted ✅
+- Plans expire 24h after creation if not approved
+- Hourly check interval (configurable)
+
+## Testing Coverage
+- 11 new tests for cleanup functionality
+- Lifecycle tests (start/stop/double operations)
+- Expired vs valid plan handling
+- Callback invocation verification
+- Statistics tracking
+
+## Integration Points
+- Can be started in main.go alongside server
+- OnCleanup callback for logging/alerting
+- CleanupStats can be exposed via MCP resource
