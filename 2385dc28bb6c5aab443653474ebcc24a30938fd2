@@ -1,0 +1,32 @@
+Implementation details for P4.6 - MCP Server Integration Tests:
+
+## Architecture Decisions
+- Used InMemoryTransport for isolated client-server testing
+- Each test creates fresh server + client connection
+- 5-second timeout per test to catch hangs
+- Server runs in background goroutine during tests
+
+## Test Coverage
+1. TestServerCreation - Basic server instantiation
+2. TestProviderRegistration - Provider registration without panic
+3. TestAllProvidersHaveNames - Non-empty provider names
+4. TestToolListing - All 5 AWS tools registered
+5. TestResourceListing - aws:deployments resource present
+6. TestPromptListing - aws_deploy_plan prompt registered
+7. TestServerInitialization - Server info verification
+8. TestResourceRead - JSON response validation
+9. TestGetPrompt - Argument passing works
+10. TestServerCapabilities - Capabilities advertised
+11. TestPing - Server responsiveness
+
+## Testing Pattern
+- connectClientToServer() helper establishes connection
+- createTestServer() creates fully configured server
+- Uses ClientSession methods (ListTools, ReadResource, etc.)
+- Validates actual MCP protocol behavior, not just registration
+
+## Key Learnings
+- MCP SDK doesn't expose HandleMessage directly
+- Must use Client + Transport for testing
+- InMemoryTransport pairs: one for server, one for client
+- Server must start before client connects
