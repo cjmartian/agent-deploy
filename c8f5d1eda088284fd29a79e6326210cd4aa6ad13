@@ -1,0 +1,32 @@
+Implementation details for P4.5 - Integration Tests:
+
+## Test Coverage
+- TestIntegration_FullWorkflow: Complete plan→create→deploy→status→teardown cycle
+- TestIntegration_PlanOnly: Planning phase without provisioning AWS resources
+- TestIntegration_DeploymentsResource: aws:deployments MCP resource listing
+- TestIntegration_BudgetCheck: Spending limits enforcement
+- TestIntegration_ResourceCleanupOnFailure: Cleanup on partial provisioning (LocalStack)
+
+## Environment Detection
+- Auto-detects LocalStack via AWS_ENDPOINT_URL containing 'localhost'
+- Falls back to real AWS credentials if no LocalStack detected
+- Auto-skips tests if AWS not accessible (graceful degradation)
+
+## Build Configuration
+- Build tag: //go:build integration
+- Run: go test -tags=integration ./internal/providers/...
+- Short mode: tests skip with -short flag
+
+## LocalStack Setup
+docker run -d --name localstack -p 4566:4566 localstack/localstack
+export AWS_ENDPOINT_URL=http://localhost:4566
+export AWS_ACCESS_KEY_ID=test
+export AWS_SECRET_ACCESS_KEY=test
+export AWS_REGION=us-east-1
+
+## Why Integration Tests
+- Unit tests mock AWS clients, integration tests validate real API calls
+- Catches SDK version incompatibilities
+- Validates error handling paths
+- Ensures resource cleanup works correctly
+- Budget enforcement tested with actual cost calculations
