@@ -1,0 +1,40 @@
+Implementation details for TD.2 - Structured Logging:
+
+## Architecture Decisions
+- Uses Go 1.21+ stdlib log/slog (no external dependencies)
+- Options pattern for flexible configuration
+- Global logger with convenience functions
+- Component-based tagging for filtering
+
+## Logging Package API
+- Initialize(opts...Option) - setup global logger
+- WithLevel/WithFormat/WithOutput/WithSource - options
+- Debug/Info/Warn/Error - convenience functions
+- WithComponent(name) - returns tagged logger
+- Attr helpers: DeploymentID, InfraID, PlanID, Region, Cost, Err
+
+## CLI Flags Added
+- -log-level: debug|info|warn|error (default: info)
+- -log-format: text|json (default: text)
+
+## Output Formats
+- text: time=2024-01-01T00:00:00Z level=INFO msg="..." key=value
+- json: {"time":"...","level":"INFO","msg":"...","key":"value"}
+
+## Why slog?
+- Standard library (no dependencies)
+- Structured by design
+- Handler pattern for customization
+- Level-based filtering built in
+- Machine-parseable output
+
+## Migration Notes
+- Replaced log.Printf with slog.Info/Debug/etc
+- Replaced log.Fatal with slog.Error + os.Exit(1)
+- Other files still use standard log (can migrate incrementally)
+
+## Testing Strategy
+- Test both text and JSON output formats
+- Test level filtering
+- Test component tagging
+- Test attribute helpers
