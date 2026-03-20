@@ -43,6 +43,8 @@
 | MCP server integration test (P4.6) | ✅ Done | `internal/main_test.go` — 11 tests: server creation, provider registration, tool/resource/prompt listing, server init, resource read, prompt retrieval, capabilities, ping |
 | Expired plan cleanup (P5.2) | ✅ Done | `internal/state/cleanup.go` — DeletePlan, DeleteExpiredPlans, CleanupService (background goroutine), CleanupConfig, CleanupNow, CleanupStats, OnCleanup callback |
 | Expired plan cleanup tests (P5.2) | ✅ Done | `internal/state/cleanup_test.go` — TestDeletePlan, TestDeletePlan_NotFound, TestDeleteExpiredPlans, TestDeleteExpiredPlans_NoExpired, TestCleanupService_StartStop, TestCleanupService_Stats, TestCleanupService_CleanupNow, TestCleanupService_OnCleanupCallback, TestCleanupService_DoubleStart/Stop |
+| Structured logging (TD.2) | ✅ Done | `internal/logging/logging.go` — Initialize(), WithLevel/Format/Output/Source options, text/JSON formats, ParseLevel/ParseFormat, WithComponent, Debug/Info/Warn/Error, attribute helpers (DeploymentID, InfraID, PlanID, Region, Cost, Count, Err) |
+| Structured logging tests (TD.2) | ✅ Done | `internal/logging/logging_test.go` — comprehensive unit tests |
 
 ---
 
@@ -60,6 +62,7 @@
 | ID generation package | ✅ **Exists** | `internal/id/` |
 | AWS client config package | ✅ **Exists** | `internal/awsclient/` |
 | Domain errors package | ✅ **Exists** | `internal/errors/` |
+| Structured logging package | ✅ **Exists** | `internal/logging/` |
 | Unit tests | ✅ **Exist** | `internal/*/` |
 | Makefile | ✅ **Working** | `Makefile` |
 
@@ -105,15 +108,6 @@
 
 ---
 
-## Technical Debt (Remaining)
-
-### TD.2 Structured logging
-
-- [ ] Replace bare `log.Fatal` calls in `internal/main.go` with structured logger
-- [ ] Use `log/slog` (stdlib since Go 1.21)
-
----
-
 ## Quick Reference
 
 ### Build & Run
@@ -122,6 +116,11 @@
 make build           # Build the binary
 ./agent-deploy       # Run (stdio mode)
 ./agent-deploy -http :8080  # Run (HTTP mode)
+
+# Logging options
+./agent-deploy -log-level debug    # Set log level (debug/info/warn/error, default: info)
+./agent-deploy -log-format json    # Set log format (text/json, default: text)
+./agent-deploy -http :8080 -log-level debug -log-format json  # Combined
 ```
 
 ### Test Commands
@@ -150,6 +149,7 @@ go test -tags=integration ./...  # Integration tests
 | `internal/spending/monitor.go` | Runtime cost monitoring with alerts and auto-teardown |
 | `internal/state/cleanup.go` | Expired plan cleanup service |
 | `internal/errors/errors.go` | Domain error types |
+| `internal/logging/logging.go` | Structured logging with slog |
 | `internal/main_test.go` | MCP server integration tests (InMemoryTransport) |
 | `ralph/specs/aws-provider.md` | Tool/resource/prompt specifications |
 | `ralph/specs/deployment-state.md` | State model and storage spec |
@@ -161,4 +161,3 @@ go test -tags=integration ./...  # Integration tests
 |----------|------|---------|
 | P4.5 | Integration tests | LocalStack/AWS sandbox testing |
 | P5.1, P5.3-5.4 | Stretch goals | Reconciliation, CloudFormation, multi-cloud |
-| TD.2 | Structured logging | Replace log.Fatal with slog |
