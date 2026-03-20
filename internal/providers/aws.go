@@ -21,6 +21,8 @@ import (
 	ecstypes "github.com/aws/aws-sdk-go-v2/service/ecs/types"
 	elbv2 "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2"
 	elbv2types "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2/types"
+	"github.com/aws/aws-sdk-go-v2/service/iam"
+	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	"github.com/cjmartian/agent-deploy/internal/awsclient"
 	apperrors "github.com/cjmartian/agent-deploy/internal/errors"
 	"github.com/cjmartian/agent-deploy/internal/id"
@@ -279,6 +281,14 @@ func (p *AWSProvider) createInfra(ctx context.Context, _ *mcp.CallToolRequest, i
 		return nil, createInfraOutput{}, fmt.Errorf("provision ALB: %w", err)
 	}
 
+	// Create IAM execution role for ECS tasks (needed before tasks can run).
+	if err := p.provisionExecutionRole(ctx, cfg, infra, tags); err != nil {
+		if statusErr := p.store.SetInfraStatus(infraID, state.InfraStatusFailed); statusErr != nil {
+			slog.Error("failed to set infra status", "infraID", infraID, "error", statusErr)
+		}
+		return nil, createInfraOutput{}, fmt.Errorf("provision execution role: %w", err)
+	}
+
 	// Create CloudWatch log group for ECS task logs.
 	if err := p.provisionLogGroup(ctx, cfg, infra, tags); err != nil {
 		if statusErr := p.store.SetInfraStatus(infraID, state.InfraStatusFailed); statusErr != nil {
@@ -470,6 +480,11 @@ func (p *AWSProvider) teardown(ctx context.Context, _ *mcp.CallToolRequest, in t
 	// Delete CloudWatch log group.
 	if err := p.deleteLogGroup(ctx, cfg, infra); err != nil {
 		log.Printf("[aws_teardown] Warning: failed to delete log group: %v", err)
+	}
+
+	// Delete IAM execution role.
+	if err := p.deleteExecutionRole(ctx, cfg, infra); err != nil {
+		log.Printf("[aws_teardown] Warning: failed to delete execution role: %v", err)
 	}
 
 	// Delete VPC resources (security groups, subnets, internet gateway, VPC).
@@ -808,6 +823,78 @@ func (p *AWSProvider) provisionLogGroup(ctx context.Context, cfg aws.Config, inf
 	return nil
 }
 
+// provisionExecutionRole creates an IAM execution role for ECS Fargate tasks.
+// This role allows tasks to pull images from ECR and write logs to CloudWatch.
+func (p *AWSProvider) provisionExecutionRole(ctx context.Context, cfg aws.Config, infra *state.Infrastructure, tags map[string]string) error {
+	iamClient := iam.NewFromConfig(cfg)
+
+	// Create role name, truncated to 64 chars max (IAM role name limit).
+	roleName := "agent-deploy-ecs-task-" + infra.ID
+	if len(roleName) > 64 {
+		roleName = roleName[:64]
+	}
+
+	// ECS task assume role policy document.
+	assumeRolePolicy := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ecs-tasks.amazonaws.com"},"Action":"sts:AssumeRole"}]}`
+
+	// Create the IAM role.
+	createRoleResp, err := iamClient.CreateRole(ctx, &iam.CreateRoleInput{
+		RoleName:                 aws.String(roleName),
+		AssumeRolePolicyDocument: aws.String(assumeRolePolicy),
+		Tags:                     mapToIAMTags(tags),
+	})
+	var roleARN string
+	if err != nil {
+		// Check if the role already exists (EntityAlreadyExists).
+		if !strings.Contains(err.Error(), "EntityAlreadyExists") {
+			return fmt.Errorf("failed to create execution role: %w", err)
+		}
+		slog.Info("execution role already exists, retrieving it", "roleName", roleName)
+		// Retrieve the existing role.
+		getRoleResp, getErr := iamClient.GetRole(ctx, &iam.GetRoleInput{
+			RoleName: aws.String(roleName),
+		})
+		if getErr != nil {
+			return fmt.Errorf("failed to get existing execution role: %w", getErr)
+		}
+		roleARN = *getRoleResp.Role.Arn
+	} else {
+		roleARN = *createRoleResp.Role.Arn
+	}
+
+	// Attach the AWS managed ECS task execution policy.
+	managedPolicyARN := "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+	_, err = iamClient.AttachRolePolicy(ctx, &iam.AttachRolePolicyInput{
+		RoleName:  aws.String(roleName),
+		PolicyArn: aws.String(managedPolicyARN),
+	})
+	if err != nil {
+		// Policy might already be attached, which is fine.
+		if !strings.Contains(err.Error(), "already attached") && !strings.Contains(err.Error(), "LimitExceeded") {
+			return fmt.Errorf("failed to attach execution role policy: %w", err)
+		}
+		slog.Info("execution role policy already attached or limit reached", "roleName", roleName)
+	}
+
+	// Store the role ARN in infrastructure resources.
+	if err := p.store.UpdateInfraResource(infra.ID, state.ResourceExecutionRole, roleARN); err != nil {
+		slog.Error("failed to update infra resource", "infraID", infra.ID, "resource", state.ResourceExecutionRole, "error", err)
+	}
+	infra.Resources[state.ResourceExecutionRole] = roleARN
+
+	slog.Info("execution role provisioned", "roleName", roleName, "roleARN", roleARN)
+	return nil
+}
+
+// mapToIAMTags converts a map of tags to IAM tag format.
+func mapToIAMTags(tags map[string]string) []iamtypes.Tag {
+	result := make([]iamtypes.Tag, 0, len(tags))
+	for k, v := range tags {
+		result = append(result, iamtypes.Tag{Key: aws.String(k), Value: aws.String(v)})
+	}
+	return result
+}
+
 func (p *AWSProvider) ensureECRRepository(ctx context.Context, cfg aws.Config, infra *state.Infrastructure, deployID string, tags map[string]string) error {
 	ecrClient := ecr.NewFromConfig(cfg)
 
@@ -853,13 +940,19 @@ func (p *AWSProvider) createTaskDefinition(ctx context.Context, cfg aws.Config, 
 		region = "us-east-1"
 	}
 
+	// Get execution role ARN from infrastructure.
+	executionRoleARN := infra.Resources[state.ResourceExecutionRole]
+	if executionRoleARN == "" {
+		return "", fmt.Errorf("execution role not found in infrastructure resources")
+	}
+
 	resp, err := ecsClient.RegisterTaskDefinition(ctx, &ecs.RegisterTaskDefinitionInput{
 		Family:                  aws.String("agent-deploy-" + deployID[:12]),
 		RequiresCompatibilities: []ecstypes.Compatibility{ecstypes.CompatibilityFargate},
 		NetworkMode:             ecstypes.NetworkModeAwsvpc,
 		Cpu:                     aws.String("256"),
 		Memory:                  aws.String("512"),
-		ExecutionRoleArn:        nil, // Use default if available.
+		ExecutionRoleArn:        aws.String(executionRoleARN),
 		ContainerDefinitions: []ecstypes.ContainerDefinition{{
 			Name:      aws.String("app"),
 			Image:     aws.String(image),
@@ -1057,6 +1150,52 @@ func (p *AWSProvider) deleteLogGroup(ctx context.Context, cfg aws.Config, infra 
 		return fmt.Errorf("failed to delete log group: %w", err)
 	}
 	log.Printf("[deleteLogGroup] Log group %s deleted", logGroupName)
+	return nil
+}
+
+// deleteExecutionRole deletes the IAM execution role for ECS tasks.
+func (p *AWSProvider) deleteExecutionRole(ctx context.Context, cfg aws.Config, infra *state.Infrastructure) error {
+	iamClient := iam.NewFromConfig(cfg)
+
+	// Get role name from role ARN.
+	roleARN := infra.Resources[state.ResourceExecutionRole]
+	if roleARN == "" {
+		return nil
+	}
+
+	// Extract role name from ARN (format: arn:aws:iam::123456789012:role/role-name).
+	roleName := roleARN
+	if idx := strings.LastIndex(roleARN, "/"); idx >= 0 {
+		roleName = roleARN[idx+1:]
+	}
+
+	// Detach the managed policy first.
+	managedPolicyARN := "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+	_, err := iamClient.DetachRolePolicy(ctx, &iam.DetachRolePolicyInput{
+		RoleName:  aws.String(roleName),
+		PolicyArn: aws.String(managedPolicyARN),
+	})
+	if err != nil {
+		// Handle NoSuchEntity error gracefully.
+		if !strings.Contains(err.Error(), "NoSuchEntity") {
+			slog.Warn("failed to detach execution role policy", "roleName", roleName, "error", err)
+		}
+	}
+
+	// Delete the role.
+	_, err = iamClient.DeleteRole(ctx, &iam.DeleteRoleInput{
+		RoleName: aws.String(roleName),
+	})
+	if err != nil {
+		// Handle NoSuchEntity error gracefully.
+		if strings.Contains(err.Error(), "NoSuchEntity") {
+			slog.Info("execution role already deleted", "roleName", roleName)
+			return nil
+		}
+		return fmt.Errorf("failed to delete execution role: %w", err)
+	}
+
+	slog.Info("execution role deleted", "roleName", roleName)
 	return nil
 }
 

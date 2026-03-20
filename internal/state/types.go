@@ -56,6 +56,7 @@ const (
 	ResourceLogGroup        = "log_group"
 	ResourceInternetGateway = "internet_gateway"
 	ResourceRouteTable      = "route_table"
+	ResourceExecutionRole   = "execution_role"
 )
 
 // Deployment represents an application deployed onto infrastructure.

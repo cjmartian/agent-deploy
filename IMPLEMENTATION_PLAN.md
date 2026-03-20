@@ -55,6 +55,7 @@
 | Background services integration | ✅ Done | `internal/main.go` | CleanupService, CostMonitor, signal handling |
 | Integration tests | ✅ Done | `internal/providers/aws_integration_test.go` | Full workflow tests |
 | CI/CD workflows | ✅ Done | `.github/workflows/ci.yml`, `.golangci.yml` | lint, test, build on push/PR |
+| IAM task execution role | ✅ Done | `internal/providers/aws.go`, `internal/state/types.go` | ECS tasks can now pull from ECR and write to CloudWatch |
 
 ---
 
@@ -75,8 +76,8 @@
 | Auto-teardown | ✅ **Working** | TeardownCallback wired to AWS provider's teardown method |
 | CI/CD workflows | ✅ **Working** | `.github/workflows/ci.yml`, `.golangci.yml` |
 | golangci-lint config | ✅ **Working** | `.golangci.yml` with version 2 format |
-| IAM role provisioning | ❌ **MISSING** | `ExecutionRoleArn` is nil at `aws.go:808`; go.mod missing `iam` package |
-| go.mod dependencies | ⚠️ **Incomplete** | Missing `github.com/aws/aws-sdk-go-v2/service/iam` and `github.com/aws/aws-sdk-go-v2/service/pricing` |
+| IAM role provisioning | ✅ **Done** | `provisionExecutionRole()`, `deleteExecutionRole()`, `ResourceExecutionRole` constant |
+| go.mod dependencies | ⚠️ **Incomplete** | Missing `github.com/aws/aws-sdk-go-v2/service/pricing` |
 | Auto Scaling | ❌ **NOT IMPLEMENTED** | Service name added but not configured |
 | Private subnets | ❌ **NOT CREATED** | Spec requires public/private subnet architecture |
 | Plan approval | ❌ **BYPASSED** | Auto-approves plans, no user confirmation |
@@ -107,15 +108,16 @@
 - **Location:** `internal/main.go`, `internal/providers/aws.go`, `internal/providers/provider.go`
 - **Completed:** 2026-03-20
 
-### P0.3 IAM Task Execution Role Missing ❌ CRITICAL
+### P0.3 IAM Task Execution Role Missing ✅ COMPLETED
 
-- [ ] Add `github.com/aws/aws-sdk-go-v2/service/iam` to `go.mod`
-- [ ] Create/provision ECS task execution role with required permissions (ECR pull, CloudWatch logs)
-- [ ] Pass `ExecutionRoleArn` to `RegisterTaskDefinition` (currently nil at `aws.go:808`)
-- [ ] Add IAM role to teardown cleanup
-- **Impact:** ECS tasks may fail to pull images from ECR or write logs to CloudWatch; functionality broken
-- **Location:** `internal/providers/aws.go:808`, `go.mod`
-- **Audit (2026-03-20):** Verified `ExecutionRoleArn: nil` in code
+- [x] ✅ Added `github.com/aws/aws-sdk-go-v2/service/iam` to `go.mod`
+- [x] ✅ Created `provisionExecutionRole()` to create IAM role with ECS task assume-role policy
+- [x] ✅ Attaches `AmazonECSTaskExecutionRolePolicy` for ECR pull and CloudWatch logs permissions
+- [x] ✅ Pass `ExecutionRoleArn` to `RegisterTaskDefinition` (was nil, now properly set)
+- [x] ✅ Added `deleteExecutionRole()` for cleanup during teardown
+- [x] ✅ Added `ResourceExecutionRole` constant to state package
+- **Location:** `internal/providers/aws.go`, `internal/state/types.go`, `go.mod`
+- **Completed:** 2026-03-20
 
 ### P0.4 Graceful Shutdown Issues ❌
 
@@ -148,7 +150,7 @@
 - [ ] Wire up `CostTracker.GetDeploymentCosts()` or `GetTotalMonthlySpend()`
 - **Impact:** Budget checks use fake numbers; could allow overspend or wrongly block deployments
 - **Location:** `internal/providers/aws.go:220`
-- **Depends on:** P0.3 (requires working deployments to validate)
+- **Depends on:** None (P0.3 now completed)
 - **Audit (2026-03-20):** Verified Cost Explorer implemented but not wired to planInfra
 
 ### P1.3 Container Port Hardcoded to 80 (5 locations) ❌
@@ -572,7 +574,7 @@ go tool cover -html=coverage.out          # View coverage report
 
 | Priority | Count | Items |
 |----------|-------|-------|
-| **P0 Critical** | 2 | IAM role (P0.3), Graceful shutdown (P0.4) |
+| **P0 Critical** | 1 | Graceful shutdown (P0.4) |
 | **P1 Spec Gaps** | 18 | Cost estimation, logging, ports, env vars, HTTPS, VPC, subnets, approval, health wait, etc. |
 | **P2 Test Gaps** | 11 | awsclient (0%), errors (0%), config (0%), provider.go (0%), aws.go (8.3%), mocking, coverage |
 | **P3 Quality** | 8 | Pagination, ALB tags, version, region, errors, disclaimer, Makefile, unused AddTime |
