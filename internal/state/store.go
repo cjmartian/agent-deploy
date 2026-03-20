@@ -130,6 +130,42 @@ func (s *Store) getPlanLocked(id string) (*Plan, error) {
 	return &plan, nil
 }
 
+// DeletePlan removes a plan from the store.
+func (s *Store) DeletePlan(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	path := s.planPath(id)
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("delete plan: %w", err)
+	}
+	return nil
+}
+
+// DeleteExpiredPlans removes all plans that have expired.
+// Returns the number of plans deleted.
+func (s *Store) DeleteExpiredPlans() (int, error) {
+	plans, err := s.ListPlans()
+	if err != nil {
+		return 0, err
+	}
+
+	now := time.Now()
+	deleted := 0
+
+	for _, plan := range plans {
+		if now.After(plan.ExpiresAt) {
+			if err := s.DeletePlan(plan.ID); err != nil {
+				// Log but continue
+				continue
+			}
+			deleted++
+		}
+	}
+
+	return deleted, nil
+}
+
 // --- Infrastructure operations ---
 
 // CreateInfra persists a new infrastructure record.

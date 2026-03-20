@@ -41,6 +41,8 @@
 | Runtime cost monitoring (P3.2) | ✅ Done | `internal/spending/monitor.go` — CostMonitor, MonitorConfig, Start/Stop lifecycle, CheckNow, background cost checking, alert processing, auto-teardown |
 | Runtime cost monitoring tests (P3.2) | ✅ Done | `internal/spending/monitor_test.go` — comprehensive unit tests |
 | MCP server integration test (P4.6) | ✅ Done | `internal/main_test.go` — 11 tests: server creation, provider registration, tool/resource/prompt listing, server init, resource read, prompt retrieval, capabilities, ping |
+| Expired plan cleanup (P5.2) | ✅ Done | `internal/state/cleanup.go` — DeletePlan, DeleteExpiredPlans, CleanupService (background goroutine), CleanupConfig, CleanupNow, CleanupStats, OnCleanup callback |
+| Expired plan cleanup tests (P5.2) | ✅ Done | `internal/state/cleanup_test.go` — TestDeletePlan, TestDeletePlan_NotFound, TestDeleteExpiredPlans, TestDeleteExpiredPlans_NoExpired, TestCleanupService_StartStop, TestCleanupService_Stats, TestCleanupService_CleanupNow, TestCleanupService_OnCleanupCallback, TestCleanupService_DoubleStart/Stop |
 
 ---
 
@@ -88,12 +90,6 @@
   - Alert on orphaned resources
   - Clean up stale local entries
 - **Depends on:** P1.3, P0.2
-
-### P5.2 Expired plan cleanup
-
-- [ ] Background goroutine to delete plans older than 24 hours
-- **Spec:** `ralph/specs/deployment-state.md:146-150`
-- **Depends on:** P1.3
 
 ### P5.3 CloudFormation-based provisioning
 
@@ -152,6 +148,7 @@ go test -tags=integration ./...  # Integration tests
 | `internal/spending/check.go` | Pre-provisioning budget check |
 | `internal/spending/costs.go` | AWS Cost Explorer integration |
 | `internal/spending/monitor.go` | Runtime cost monitoring with alerts and auto-teardown |
+| `internal/state/cleanup.go` | Expired plan cleanup service |
 | `internal/errors/errors.go` | Domain error types |
 | `internal/main_test.go` | MCP server integration tests (InMemoryTransport) |
 | `ralph/specs/aws-provider.md` | Tool/resource/prompt specifications |
@@ -163,5 +160,5 @@ go test -tags=integration ./...  # Integration tests
 | Priority | Item | Purpose |
 |----------|------|---------|
 | P4.5 | Integration tests | LocalStack/AWS sandbox testing |
-| P5.1-5.4 | Stretch goals | Reconciliation, cleanup, CloudFormation, multi-cloud |
+| P5.1, P5.3-5.4 | Stretch goals | Reconciliation, CloudFormation, multi-cloud |
 | TD.2 | Structured logging | Replace log.Fatal with slog |
