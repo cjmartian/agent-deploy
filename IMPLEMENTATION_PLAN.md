@@ -152,5 +152,5 @@ go test -tags=integration ./...  # Integration tests (requires LocalStack or AWS
 
 | Priority | Item | Purpose |
 |----------|------|---------|
-| P4.5 | Integration tests | LocalStack/AWS sandbox testing |
-| P5.3, P5.4 | Stretch goals | CloudFormation, multi-cloud |
+| P5.3 | CloudFormation provisioning | Atomic create/teardown with stacks |
+| P5.4 | Multi-cloud providers | GCP and Azure support |
