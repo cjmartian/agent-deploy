@@ -107,6 +107,10 @@ func main() {
 		}
 	}
 
+	// Create AWS provider for auto-teardown functionality.
+	// This needs to be created before the cost monitor so we can wire up the teardown callback.
+	awsProvider := providers.GetAWSProvider(store)
+
 	// Start cost monitor if enabled and AWS credentials are available.
 	var costMonitor *spending.CostMonitor
 	if *enableCostMonitor {
@@ -133,14 +137,18 @@ func main() {
 			}
 
 			// Set up teardown callback if auto-teardown is enabled.
-			if *enableAutoTeardown {
+			// This wires the cost monitor to the AWS provider's actual teardown functionality.
+			if *enableAutoTeardown && awsProvider != nil {
 				monitorConfig.TeardownCallback = func(ctx context.Context, deploymentID string) error {
-					log.Warn("auto-teardown triggered",
+					log.Warn("auto-teardown triggered for over-budget deployment",
 						logging.DeploymentID(deploymentID))
-					// Note: The actual teardown would be performed via the AWS provider.
-					// This requires access to the provider, which we'll add in a future iteration.
-					// For now, we log the intent. Users can manually teardown using aws_teardown tool.
-					log.Info("deployment marked for teardown - use aws_teardown tool to complete",
+					if err := awsProvider.Teardown(ctx, deploymentID); err != nil {
+						log.Error("auto-teardown failed",
+							logging.DeploymentID(deploymentID),
+							logging.Err(err))
+						return err
+					}
+					log.Info("auto-teardown completed successfully",
 						logging.DeploymentID(deploymentID))
 					return nil
 				}

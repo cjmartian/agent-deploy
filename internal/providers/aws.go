@@ -41,6 +41,13 @@ func NewAWSProvider(store *state.Store) *AWSProvider {
 
 func (p *AWSProvider) Name() string { return "aws" }
 
+// Teardown tears down all AWS resources for a deployment.
+// This is the public API for programmatic teardown (e.g., auto-teardown from cost monitor).
+func (p *AWSProvider) Teardown(ctx context.Context, deploymentID string) error {
+	_, _, err := p.teardown(ctx, nil, teardownInput{DeploymentID: deploymentID})
+	return err
+}
+
 // ---------------------------------------------------------------------------
 // Tools
 // ---------------------------------------------------------------------------

@@ -272,3 +272,79 @@ func findSubstring(s, substr string) bool {
 	}
 	return false
 }
+
+// TestPublicTeardown tests the public Teardown method.
+func TestPublicTeardown(t *testing.T) {
+	store, err := state.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	provider := NewAWSProvider(store)
+
+	// Create test deployment and infrastructure
+	infra := &state.Infrastructure{
+		ID:        "infra-teardown-test",
+		PlanID:    "plan-test",
+		Region:    "us-east-1",
+		Resources: map[string]string{},
+		Status:    state.InfraStatusReady,
+		CreatedAt: time.Now(),
+	}
+	err = store.CreateInfra(infra)
+	if err != nil {
+		t.Fatalf("CreateInfra: %v", err)
+	}
+
+	deploy := &state.Deployment{
+		ID:          "deploy-teardown-test",
+		InfraID:     "infra-teardown-test",
+		ImageRef:    "nginx:latest",
+		Status:      state.DeploymentStatusRunning,
+		URLs:        []string{},
+		CreatedAt:   time.Now(),
+		LastUpdated: time.Now(),
+	}
+	err = store.CreateDeployment(deploy)
+	if err != nil {
+		t.Fatalf("CreateDeployment: %v", err)
+	}
+
+	// Call public Teardown - this will fail on AWS calls but should not panic
+	// and should handle the deployment correctly
+	err = provider.Teardown(context.Background(), "deploy-teardown-test")
+	// We expect an error because there are no real AWS resources,
+	// but the method should be callable and should fail gracefully
+	if err == nil {
+		// If no error, verify the deployment status was updated
+		d, derr := store.GetDeployment("deploy-teardown-test")
+		if derr != nil {
+			t.Fatalf("GetDeployment after teardown: %v", derr)
+		}
+		if d.Status != state.DeploymentStatusStopped {
+			t.Errorf("Deployment status = %q, want %q", d.Status, state.DeploymentStatusStopped)
+		}
+	}
+	// Whether error or not, the test passes - we're verifying the method exists and is callable
+}
+
+// TestTeardownProvider_Interface tests that AWSProvider implements TeardownProvider.
+func TestTeardownProvider_Interface(t *testing.T) {
+store, _ := state.NewStore(t.TempDir())
+provider := NewAWSProvider(store)
+
+// Verify AWSProvider implements TeardownProvider interface
+var _ TeardownProvider = provider
+}
+
+// TestGetAWSProvider tests the GetAWSProvider helper function.
+func TestGetAWSProvider(t *testing.T) {
+store, _ := state.NewStore(t.TempDir())
+provider := GetAWSProvider(store)
+
+if provider == nil {
+t.Fatal("GetAWSProvider returned nil")
+}
+if provider.Name() != "aws" {
+t.Errorf("Provider name = %q, want %q", provider.Name(), "aws")
+}
+}

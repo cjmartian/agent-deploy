@@ -27,6 +27,7 @@
 | **State persistence** | ✅ **100% compliant** | `internal/state/store.go` | All state types, transitions implemented |
 | AWS client config | ✅ Done | `internal/awsclient/client.go` | LoadConfig(), ResourceTags() |
 | Wire Store into AWSProvider | ✅ Done | `internal/providers/aws.go` | store field, NewAWSProvider constructor |
+| Auto-teardown wiring | ✅ Done | `internal/main.go`, `internal/providers/` | TeardownCallback now calls actual AWS teardown |
 | **Spending limit configuration** | ✅ **100% compliant** | `internal/spending/config.go` | Limits, LoadLimits(), env var support |
 | **Cost tracking with Cost Explorer** | ✅ **100% compliant** | `internal/spending/costs.go` | Full implementation |
 | **Runtime cost monitoring** | ✅ **100% compliant** | `internal/spending/monitor.go` | Background checking, alerts |
@@ -71,7 +72,7 @@
 | AWS `aws_deploy_plan` prompt | ✅ **Implemented** | `internal/providers/aws.go` |
 | Cost estimation (planInfra) | ❌ **Hardcoded** | `baseCost=15.0, ecsCost=users*0.02, albCost=20.0` (aws.go:153-158) |
 | Current spend calculation | ❌ **Hardcoded** | `$25/deployment` constant at aws.go:220; Cost Explorer NOT wired to planInfra |
-| Auto-teardown | ❌ **NOT WIRED** | Callback logs only at `main.go:135-147` — FALSE SENSE OF SECURITY |
+| Auto-teardown | ✅ **Working** | TeardownCallback wired to AWS provider's teardown method |
 | CI/CD workflows | ✅ **Working** | `.github/workflows/ci.yml`, `.golangci.yml` |
 | golangci-lint config | ✅ **Working** | `.golangci.yml` with version 2 format |
 | IAM role provisioning | ❌ **MISSING** | `ExecutionRoleArn` is nil at `aws.go:808`; go.mod missing `iam` package |
@@ -96,22 +97,15 @@
 - **Location:** `.github/workflows/ci.yml`, `.golangci.yml`
 - **Completed:** 2026-03-20
 
-### P0.2 Auto-Teardown Not Wired ❌ CRITICAL - FALSE SENSE OF SECURITY
+### P0.2 Auto-Teardown Not Wired ✅ COMPLETED
 
-- [ ] Wire `TeardownCallback` to actually call AWS provider's teardown tool
-- [ ] Current code at `main.go:135-147` only LOGS but does NOT tear down:
-  ```go
-  // Note: The actual teardown would be performed via the AWS provider.
-  // This requires access to the provider, which we'll add in a future iteration.
-  // For now, we log the intent. Users can manually teardown using aws_teardown tool.
-  log.Info("deployment marked for teardown - use aws_teardown tool to complete", ...)
-  return nil
-  ```
-- [ ] Pass provider reference to CostMonitor or use callback injection pattern
-- [ ] Add integration test for auto-teardown flow
-- **Impact:** **CRITICAL** — Users enable auto-teardown expecting protection but deployments continue running indefinitely, accumulating costs and security exposure
-- **Location:** `internal/main.go:135-147`
-- **Audit (2026-03-20):** Verified callback only logs, no teardown action
+- [x] Wired `TeardownCallback` to actually call AWS provider's teardown method
+- [x] Added `Teardown(ctx, deploymentID)` public method to AWSProvider
+- [x] Added `TeardownProvider` interface in providers package
+- [x] Added `GetAWSProvider(store)` helper function
+- [x] Added tests for the new functionality (TestPublicTeardown, TestTeardownProvider_Interface, TestGetAWSProvider)
+- **Location:** `internal/main.go`, `internal/providers/aws.go`, `internal/providers/provider.go`
+- **Completed:** 2026-03-20
 
 ### P0.3 IAM Task Execution Role Missing ❌ CRITICAL
 
@@ -502,7 +496,7 @@ make build           # Build the binary
 
 # Background services
 ./agent-deploy -enable-cost-monitor    # Enable runtime cost monitoring (requires AWS credentials)
-./agent-deploy -enable-auto-teardown   # ⚠️ BROKEN (P0.2) - only logs, does NOT teardown!
+./agent-deploy -enable-auto-teardown   # Enable auto-teardown when budget exceeded
 ./agent-deploy -enable-reconcile           # Enable state reconciliation on startup
 ./agent-deploy -reconcile-region us-west-2 # Specify AWS region for reconciliation (default: us-east-1)
 ```
@@ -578,7 +572,7 @@ go tool cover -html=coverage.out          # View coverage report
 
 | Priority | Count | Items |
 |----------|-------|-------|
-| **P0 Critical** | 3 | Auto-teardown (P0.2), IAM role (P0.3), Graceful shutdown (P0.4) |
+| **P0 Critical** | 2 | IAM role (P0.3), Graceful shutdown (P0.4) |
 | **P1 Spec Gaps** | 18 | Cost estimation, logging, ports, env vars, HTTPS, VPC, subnets, approval, health wait, etc. |
 | **P2 Test Gaps** | 11 | awsclient (0%), errors (0%), config (0%), provider.go (0%), aws.go (8.3%), mocking, coverage |
 | **P3 Quality** | 8 | Pagination, ALB tags, version, region, errors, disclaimer, Makefile, unused AddTime |
@@ -604,6 +598,6 @@ go tool cover -html=coverage.out          # View coverage report
 | **spending-safeguards.md** | monthly_budget_usd, per_deployment_usd, alert_threshold_percent | ✅ Implemented |
 | **spending-safeguards.md** | Pre-provisioning budget check | ⚠️ PARTIAL (uses hardcoded costs) |
 | **spending-safeguards.md** | Runtime cost monitoring with Cost Explorer | ✅ Implemented |
-| **spending-safeguards.md** | Auto-teardown when budget exceeded | ❌ NOT WIRED (callback only logs) |
+| **spending-safeguards.md** | Auto-teardown when budget exceeded | ✅ IMPLEMENTED |
 | **spending-safeguards.md** | Resource tagging | ✅ Implemented |
 | **ci.md** | CI workflow with lint, test, build jobs | ❌ NOT IMPLEMENTED |

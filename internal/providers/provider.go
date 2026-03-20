@@ -2,6 +2,7 @@
 package providers
 
 import (
+	"context"
 	"log"
 
 	"github.com/cjmartian/agent-deploy/internal/state"
@@ -15,6 +16,12 @@ type Provider interface {
 	RegisterTools(server *mcp.Server)
 	RegisterResources(server *mcp.Server)
 	RegisterPrompts(server *mcp.Server)
+}
+
+// TeardownProvider is an interface for providers that support programmatic teardown.
+// This enables the cost monitor to trigger automatic teardowns when budgets are exceeded.
+type TeardownProvider interface {
+	Teardown(ctx context.Context, deploymentID string) error
 }
 
 // All returns every available provider with initialized state stores.
@@ -44,4 +51,10 @@ func AllWithStore(store *state.Store) []Provider {
 	return []Provider{
 		NewAWSProvider(store),
 	}
+}
+
+// GetAWSProvider returns the AWS provider with the given store.
+// This is used when direct access to provider methods (like Teardown) is needed.
+func GetAWSProvider(store *state.Store) *AWSProvider {
+	return NewAWSProvider(store)
 }
