@@ -1,0 +1,25 @@
+Implementation details for f3fda73:
+
+## Architecture Decisions
+- Used file-backed state storage (Option A from spec) for simplicity
+- Auto-approve plans in createInfra for convenience (can approve manually too)
+- Simplified cost estimation formula: base + users*0.02 + ALB
+- ECS Fargate with ALB for all deployments (not Lambda/EC2)
+
+## Key Implementation Notes
+- Store mutex-protected for concurrent safety
+- Plans expire after 24h if not approved
+- VPC uses 10.0.0.0/16 CIDR with 2 public subnets for ALB
+- Security group allows inbound 80/443 from anywhere
+- ECS task: 256 CPU, 512 MB memory, Fargate launch type
+
+## Testing Strategy
+- Unit tests use t.TempDir() for isolated state stores
+- Budget tests use t.Setenv() for env var overrides
+- AWS tests don't mock SDK (require real creds for integration)
+
+## Remaining Work (see IMPLEMENTATION_PLAN.md)
+- P3.1: Cost Explorer integration for real spend tracking
+- P3.2: Runtime monitoring with auto-teardown
+- P4.5: LocalStack integration tests
+- P5.x: Stretch goals (reconciliation, GCP/Azure providers)
