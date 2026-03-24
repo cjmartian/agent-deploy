@@ -67,6 +67,9 @@ func (s *Store) GetPlan(id string) (*Plan, error) {
 }
 
 // ApprovePlan marks a plan as approved.
+// Returns ErrPlanExpired if the plan has expired.
+// Returns ErrInvalidState if the plan is already approved, rejected, or in an invalid state.
+// Idempotent: returns nil if the plan is already approved.
 func (s *Store) ApprovePlan(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -76,14 +79,66 @@ func (s *Store) ApprovePlan(id string) error {
 		return err
 	}
 
+	// Check for expiration first.
 	if time.Now().After(plan.ExpiresAt) {
 		plan.Status = PlanStatusExpired
 		_ = s.writeJSON(s.planPath(id), plan)
 		return apperrors.ErrPlanExpired
 	}
 
-	plan.Status = PlanStatusApproved
-	return s.writeJSON(s.planPath(id), plan)
+	// Handle based on current status.
+	switch plan.Status {
+	case PlanStatusApproved:
+		// Idempotent: already approved.
+		return nil
+	case PlanStatusRejected:
+		return fmt.Errorf("%w: plan was rejected and cannot be approved", apperrors.ErrInvalidState)
+	case PlanStatusExpired:
+		return apperrors.ErrPlanExpired
+	case PlanStatusCreated:
+		// Valid transition: created -> approved.
+		plan.Status = PlanStatusApproved
+		return s.writeJSON(s.planPath(id), plan)
+	default:
+		return fmt.Errorf("%w: unknown plan status '%s'", apperrors.ErrInvalidState, plan.Status)
+	}
+}
+
+// RejectPlan marks a plan as rejected.
+// Returns ErrPlanExpired if the plan has expired.
+// Returns ErrInvalidState if the plan is already approved, rejected, or in an invalid state.
+func (s *Store) RejectPlan(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	plan, err := s.getPlanLocked(id)
+	if err != nil {
+		return err
+	}
+
+	// Check for expiration first.
+	if time.Now().After(plan.ExpiresAt) {
+		plan.Status = PlanStatusExpired
+		_ = s.writeJSON(s.planPath(id), plan)
+		return apperrors.ErrPlanExpired
+	}
+
+	// Handle based on current status.
+	switch plan.Status {
+	case PlanStatusRejected:
+		// Idempotent: already rejected.
+		return nil
+	case PlanStatusApproved:
+		return fmt.Errorf("%w: plan was already approved and cannot be rejected", apperrors.ErrInvalidState)
+	case PlanStatusExpired:
+		return apperrors.ErrPlanExpired
+	case PlanStatusCreated:
+		// Valid transition: created -> rejected.
+		plan.Status = PlanStatusRejected
+		return s.writeJSON(s.planPath(id), plan)
+	default:
+		return fmt.Errorf("%w: unknown plan status '%s'", apperrors.ErrInvalidState, plan.Status)
+	}
 }
 
 // ListPlans returns all plans.

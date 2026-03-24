@@ -95,6 +95,150 @@ func TestExpiredPlanCannotBeApproved(t *testing.T) {
 	}
 }
 
+func TestRejectPlan(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := NewStore(dir)
+
+	plan := &Plan{
+		ID:        "plan-to-reject",
+		Status:    PlanStatusCreated,
+		CreatedAt: time.Now(),
+		ExpiresAt: time.Now().Add(24 * time.Hour),
+	}
+	if err := store.CreatePlan(plan); err != nil {
+		t.Fatalf("CreatePlan: %v", err)
+	}
+
+	// Reject the plan.
+	if err := store.RejectPlan(plan.ID); err != nil {
+		t.Fatalf("RejectPlan: %v", err)
+	}
+
+	// Verify status changed.
+	got, _ := store.GetPlan(plan.ID)
+	if got.Status != PlanStatusRejected {
+		t.Errorf("Status = %q, want %q", got.Status, PlanStatusRejected)
+	}
+}
+
+func TestRejectedPlanCannotBeApproved(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := NewStore(dir)
+
+	plan := &Plan{
+		ID:        "plan-rejected",
+		Status:    PlanStatusCreated,
+		CreatedAt: time.Now(),
+		ExpiresAt: time.Now().Add(24 * time.Hour),
+	}
+	if err := store.CreatePlan(plan); err != nil {
+		t.Fatalf("CreatePlan: %v", err)
+	}
+
+	// First reject.
+	if err := store.RejectPlan(plan.ID); err != nil {
+		t.Fatalf("RejectPlan: %v", err)
+	}
+
+	// Then try to approve — should fail with ErrInvalidState.
+	err := store.ApprovePlan(plan.ID)
+	if !errors.Is(err, apperrors.ErrInvalidState) {
+		t.Errorf("ApprovePlan after reject error = %v, want %v", err, apperrors.ErrInvalidState)
+	}
+}
+
+func TestApprovedPlanCannotBeRejected(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := NewStore(dir)
+
+	plan := &Plan{
+		ID:        "plan-approved",
+		Status:    PlanStatusCreated,
+		CreatedAt: time.Now(),
+		ExpiresAt: time.Now().Add(24 * time.Hour),
+	}
+	if err := store.CreatePlan(plan); err != nil {
+		t.Fatalf("CreatePlan: %v", err)
+	}
+
+	// First approve.
+	if err := store.ApprovePlan(plan.ID); err != nil {
+		t.Fatalf("ApprovePlan: %v", err)
+	}
+
+	// Then try to reject — should fail with ErrInvalidState.
+	err := store.RejectPlan(plan.ID)
+	if !errors.Is(err, apperrors.ErrInvalidState) {
+		t.Errorf("RejectPlan after approve error = %v, want %v", err, apperrors.ErrInvalidState)
+	}
+}
+
+func TestApproveIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := NewStore(dir)
+
+	plan := &Plan{
+		ID:        "plan-idempotent-approve",
+		Status:    PlanStatusCreated,
+		CreatedAt: time.Now(),
+		ExpiresAt: time.Now().Add(24 * time.Hour),
+	}
+	if err := store.CreatePlan(plan); err != nil {
+		t.Fatalf("CreatePlan: %v", err)
+	}
+
+	// Approve twice — should succeed both times (idempotent).
+	if err := store.ApprovePlan(plan.ID); err != nil {
+		t.Fatalf("First ApprovePlan: %v", err)
+	}
+	if err := store.ApprovePlan(plan.ID); err != nil {
+		t.Errorf("Second ApprovePlan (idempotent) error = %v, want nil", err)
+	}
+}
+
+func TestRejectIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := NewStore(dir)
+
+	plan := &Plan{
+		ID:        "plan-idempotent-reject",
+		Status:    PlanStatusCreated,
+		CreatedAt: time.Now(),
+		ExpiresAt: time.Now().Add(24 * time.Hour),
+	}
+	if err := store.CreatePlan(plan); err != nil {
+		t.Fatalf("CreatePlan: %v", err)
+	}
+
+	// Reject twice — should succeed both times (idempotent).
+	if err := store.RejectPlan(plan.ID); err != nil {
+		t.Fatalf("First RejectPlan: %v", err)
+	}
+	if err := store.RejectPlan(plan.ID); err != nil {
+		t.Errorf("Second RejectPlan (idempotent) error = %v, want nil", err)
+	}
+}
+
+func TestExpiredPlanCannotBeRejected(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := NewStore(dir)
+
+	plan := &Plan{
+		ID:        "plan-expired-reject",
+		Status:    PlanStatusCreated,
+		CreatedAt: time.Now().Add(-48 * time.Hour),
+		ExpiresAt: time.Now().Add(-24 * time.Hour), // Already expired.
+	}
+	if err := store.CreatePlan(plan); err != nil {
+		t.Fatalf("CreatePlan: %v", err)
+	}
+
+	err := store.RejectPlan(plan.ID)
+	if !errors.Is(err, apperrors.ErrPlanExpired) {
+		t.Errorf("RejectPlan error = %v, want %v", err, apperrors.ErrPlanExpired)
+	}
+}
+
 func TestInfraCRUD(t *testing.T) {
 	dir := t.TempDir()
 	store, _ := NewStore(dir)

@@ -348,3 +348,193 @@ if provider.Name() != "aws" {
 t.Errorf("Provider name = %q, want %q", provider.Name(), "aws")
 }
 }
+
+// TestApprovePlan tests the aws_approve_plan tool.
+func TestApprovePlan(t *testing.T) {
+	t.Setenv("AGENT_DEPLOY_PER_DEPLOYMENT_BUDGET", "100")
+
+	store, _ := state.NewStore(t.TempDir())
+	provider := NewAWSProvider(store)
+
+	// First create a plan.
+	planInput := planInfraInput{
+		AppDescription: "Test app",
+		ExpectedUsers:  100,
+		LatencyMS:      200,
+		Region:         "us-east-1",
+	}
+	_, planOutput, err := provider.planInfra(context.Background(), nil, planInput)
+	if err != nil {
+		t.Fatalf("planInfra: %v", err)
+	}
+
+	// Verify plan is in created status.
+	plan, _ := store.GetPlan(planOutput.PlanID)
+	if plan.Status != state.PlanStatusCreated {
+		t.Fatalf("Plan status = %q, want %q", plan.Status, state.PlanStatusCreated)
+	}
+
+	// Approve the plan.
+	approveInput := approvePlanInput{
+		PlanID:    planOutput.PlanID,
+		Confirmed: true,
+	}
+	_, approveOutput, err := provider.approvePlan(context.Background(), nil, approveInput)
+	if err != nil {
+		t.Fatalf("approvePlan: %v", err)
+	}
+
+	// Verify output.
+	if approveOutput.PlanID != planOutput.PlanID {
+		t.Errorf("PlanID = %q, want %q", approveOutput.PlanID, planOutput.PlanID)
+	}
+	if approveOutput.Status != state.PlanStatusApproved {
+		t.Errorf("Status = %q, want %q", approveOutput.Status, state.PlanStatusApproved)
+	}
+	if approveOutput.Message == "" {
+		t.Error("Message should not be empty")
+	}
+
+	// Verify plan status was updated.
+	plan, _ = store.GetPlan(planOutput.PlanID)
+	if plan.Status != state.PlanStatusApproved {
+		t.Errorf("Plan status after approval = %q, want %q", plan.Status, state.PlanStatusApproved)
+	}
+}
+
+// TestApprovePlan_Reject tests rejecting a plan with confirmed: false.
+func TestApprovePlan_Reject(t *testing.T) {
+	t.Setenv("AGENT_DEPLOY_PER_DEPLOYMENT_BUDGET", "100")
+
+	store, _ := state.NewStore(t.TempDir())
+	provider := NewAWSProvider(store)
+
+	// Create a plan.
+	planInput := planInfraInput{
+		AppDescription: "Test app",
+		ExpectedUsers:  100,
+		LatencyMS:      200,
+		Region:         "us-east-1",
+	}
+	_, planOutput, err := provider.planInfra(context.Background(), nil, planInput)
+	if err != nil {
+		t.Fatalf("planInfra: %v", err)
+	}
+
+	// Reject the plan.
+	approveInput := approvePlanInput{
+		PlanID:    planOutput.PlanID,
+		Confirmed: false,
+	}
+	_, approveOutput, err := provider.approvePlan(context.Background(), nil, approveInput)
+	if err != nil {
+		t.Fatalf("approvePlan (reject): %v", err)
+	}
+
+	// Verify output.
+	if approveOutput.Status != state.PlanStatusRejected {
+		t.Errorf("Status = %q, want %q", approveOutput.Status, state.PlanStatusRejected)
+	}
+
+	// Verify plan status was updated.
+	plan, _ := store.GetPlan(planOutput.PlanID)
+	if plan.Status != state.PlanStatusRejected {
+		t.Errorf("Plan status after rejection = %q, want %q", plan.Status, state.PlanStatusRejected)
+	}
+}
+
+// TestApprovePlan_EmptyPlanID tests that empty plan_id is rejected.
+func TestApprovePlan_EmptyPlanID(t *testing.T) {
+	store, _ := state.NewStore(t.TempDir())
+	provider := NewAWSProvider(store)
+
+	_, _, err := provider.approvePlan(context.Background(), nil, approvePlanInput{
+		PlanID:    "",
+		Confirmed: true,
+	})
+	if err == nil {
+		t.Error("Expected error for empty plan_id")
+	}
+	if !containsSubstring(err.Error(), "plan_id") {
+		t.Errorf("Error %q should mention plan_id", err.Error())
+	}
+}
+
+// TestApprovePlan_NotFound tests approving a nonexistent plan.
+func TestApprovePlan_NotFound(t *testing.T) {
+	store, _ := state.NewStore(t.TempDir())
+	provider := NewAWSProvider(store)
+
+	_, _, err := provider.approvePlan(context.Background(), nil, approvePlanInput{
+		PlanID:    "plan-nonexistent",
+		Confirmed: true,
+	})
+	if err == nil {
+		t.Error("Expected error for nonexistent plan")
+	}
+}
+
+// TestCreateInfra_RequiresApproval tests that createInfra rejects unapproved plans.
+func TestCreateInfra_RequiresApproval(t *testing.T) {
+	t.Setenv("AGENT_DEPLOY_PER_DEPLOYMENT_BUDGET", "100")
+
+	store, _ := state.NewStore(t.TempDir())
+	provider := NewAWSProvider(store)
+
+	// Create a plan (not approved).
+	planInput := planInfraInput{
+		AppDescription: "Test app",
+		ExpectedUsers:  100,
+		LatencyMS:      200,
+		Region:         "us-east-1",
+	}
+	_, planOutput, err := provider.planInfra(context.Background(), nil, planInput)
+	if err != nil {
+		t.Fatalf("planInfra: %v", err)
+	}
+
+	// Try to create infra without approval — should fail.
+	_, _, err = provider.createInfra(context.Background(), nil, createInfraInput{
+		PlanID: planOutput.PlanID,
+	})
+	if err == nil {
+		t.Error("Expected error for unapproved plan")
+	}
+	if !containsSubstring(err.Error(), "not approved") {
+		t.Errorf("Error %q should mention 'not approved'", err.Error())
+	}
+}
+
+// TestCreateInfra_RejectedPlan tests that createInfra rejects rejected plans.
+func TestCreateInfra_RejectedPlan(t *testing.T) {
+	t.Setenv("AGENT_DEPLOY_PER_DEPLOYMENT_BUDGET", "100")
+
+	store, _ := state.NewStore(t.TempDir())
+	provider := NewAWSProvider(store)
+
+	// Create and reject a plan.
+	planInput := planInfraInput{
+		AppDescription: "Test app",
+		ExpectedUsers:  100,
+		LatencyMS:      200,
+		Region:         "us-east-1",
+	}
+	_, planOutput, _ := provider.planInfra(context.Background(), nil, planInput)
+
+	// Reject the plan.
+	_, _, _ = provider.approvePlan(context.Background(), nil, approvePlanInput{
+		PlanID:    planOutput.PlanID,
+		Confirmed: false,
+	})
+
+	// Try to create infra — should fail.
+	_, _, err := provider.createInfra(context.Background(), nil, createInfraInput{
+		PlanID: planOutput.PlanID,
+	})
+	if err == nil {
+		t.Error("Expected error for rejected plan")
+	}
+	if !containsSubstring(err.Error(), "not approved") {
+		t.Errorf("Error %q should mention 'not approved'", err.Error())
+	}
+}

@@ -2,7 +2,7 @@
 
 **Project Goal:** Natural language deployment of applications via MCP server → Cloud provider. Allow users to end-to-end create applications and make them publicly available while ensuring spend does not cross user-defined boundaries.
 
-**Last Updated:** 2026-03-20  
+**Last Updated:** 2026-03-24  
 **Last Audit:** 2026-03-20
 
 ---
@@ -38,7 +38,7 @@
 | deploy | ✅ Done | `internal/providers/aws.go` | ECR repo, task def, ECS service, ALB URLs |
 | status | ✅ Done | `internal/providers/aws.go` | ECS service status, ALB URLs |
 | teardown | ✅ Done | `internal/providers/aws.go` | Reverse order deletion, ECR cleanup |
-| Error handling patterns | ✅ Done | `internal/errors/errors.go` | Domain errors (3 unused types: ErrPlanNotApproved, ErrProvisioningFailed, ErrInvalidState) |
+| Error handling patterns | ✅ Done | `internal/errors/errors.go` | Domain errors (2 unused types: ErrProvisioningFailed, ErrInvalidState) |
 | ID generation tests | ✅ Done | `internal/id/id_test.go` | Verified |
 | State storage tests | ✅ Done | `internal/state/store_test.go` | 45.5% coverage |
 | Spending check tests | ✅ Done | `internal/spending/check_test.go` | Verified |
@@ -63,6 +63,8 @@
 | Environment variables support | ✅ Done | `internal/providers/aws.go` | Environment map parameter |
 | Structured logging migration | ✅ Done | `internal/providers/`, `internal/spending/costs.go` | All log.Printf migrated to slog |
 | Wait for healthy deployment | ✅ Done | `internal/providers/aws.go` | waitForHealthyDeployment polls ECS/ALB |
+| **P0.1 Plan Approval** | ✅ Done | `internal/providers/aws.go`, `internal/state/store.go` | `aws_approve_plan` tool, explicit approval workflow |
+| Plan approval tests | ✅ Done | `internal/state/store_test.go`, `internal/providers/aws_test.go` | Comprehensive approval workflow tests |
 
 ---
 
@@ -87,7 +89,7 @@
 | go.mod dependencies | ⚠️ **Incomplete** | Missing `github.com/aws/aws-sdk-go-v2/service/pricing` |
 | Auto Scaling | ❌ **NOT IMPLEMENTED** | Service name added but not configured |
 | Private subnets | ❌ **NOT CREATED** | Spec requires public/private subnet architecture |
-| Plan approval | ❌ **BYPASSED** | Auto-approves plans, no user confirmation |
+| Plan approval | ✅ **IMPLEMENTED** | `aws_approve_plan` tool with explicit approval workflow |
 | Wait for healthy deployment | ✅ **Done** | waitForHealthyDeployment polls ECS/ALB |
 | Test coverage | ⚠️ **Gaps** | `awsclient/`, `errors/`, `spending/config.go`, `providers/provider.go` have 0%; `aws.go` at 8.3% |
 | Structured logging | ✅ **Done** | All log.Printf migrated to slog (30 in aws.go, 1 in provider.go, ~4 in costs.go) |
@@ -133,6 +135,19 @@
 - [x] ✅ Replaced `os.Exit(1)` with `return` to allow cleanup on errors
 - **Location:** `internal/main.go`
 - **Completed:** 2026-03-20
+
+### P0.5 Plan Approval Bypassed ✅ COMPLETED
+
+- [x] ✅ Added `PlanStatusRejected` constant to `internal/state/types.go`
+- [x] ✅ Added `aws_approve_plan` tool to `internal/providers/aws.go` with proper input/output types
+- [x] ✅ Removed auto-approval from `createInfra` — now requires explicitly approved plans
+- [x] ✅ Wired `ErrPlanNotApproved` error from `internal/errors/errors.go`
+- [x] ✅ Added `RejectPlan()` method to `internal/state/store.go` with full state validation
+- [x] ✅ Updated `ApprovePlan()` to be idempotent and handle rejected plans properly
+- [x] ✅ Updated `planInfra` summary message to instruct users to call `aws_approve_plan`
+- [x] ✅ Added comprehensive tests for the approval workflow
+- **Location:** `internal/providers/aws.go`, `internal/state/store.go`, `internal/state/types.go`, `internal/errors/errors.go`
+- **Completed:** 2026-03-24
 
 ---
 
@@ -242,13 +257,14 @@
 - **Impact:** Cannot automatically scale based on load
 - **Location:** `internal/providers/aws.go`
 
-### P1.13 Plan Approval Bypassed ❌
+### P1.13 Plan Approval Bypassed ✅ COMPLETED
 
-- [ ] Plans auto-approve without user confirmation
-- [ ] Implement confirmation step before provisioning (spec `ralph/specs/aws-provider.md` requires approval)
-- **Impact:** Users cannot review cost estimates before resources are created
-- **Location:** `internal/providers/aws.go`
-- **Audit (2026-03-20):** Verified auto-approval without user confirmation
+- [x] ✅ Plans now require explicit approval via `aws_approve_plan` tool
+- [x] ✅ Added `RejectPlan()` method for explicit rejection
+- [x] ✅ `createInfra` now checks for approved status, returns `ErrPlanNotApproved` otherwise
+- **Impact:** Users can now review cost estimates before resources are created
+- **Location:** `internal/providers/aws.go`, `internal/state/store.go`
+- **Completed:** 2026-03-24
 
 ### P1.14 No Wait for Healthy Deployment ✅ COMPLETED
 
@@ -309,7 +325,7 @@
 
 - [ ] Create `internal/errors/errors_test.go`
 - [ ] Test error type identification and wrapping
-- [ ] Note: 3 error types are unused (ErrPlanNotApproved, ErrProvisioningFailed, ErrInvalidState)
+- [ ] Note: 2 error types are unused (ErrProvisioningFailed, ErrInvalidState); `ErrPlanNotApproved` now wired in P0.5
 - **Impact:** Domain error behavior untested
 - **Location:** `internal/errors/`
 - **Audit (2026-03-20):** Verified 0% coverage — only definitions exist, no tests

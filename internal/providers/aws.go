@@ -61,6 +61,11 @@ func (p *AWSProvider) RegisterTools(server *mcp.Server) {
 	}, p.planInfra)
 
 	mcp.AddTool(server, &mcp.Tool{
+		Name:        "aws_approve_plan",
+		Description: "Approve or reject an infrastructure plan after reviewing its cost estimate",
+	}, p.approvePlan)
+
+	mcp.AddTool(server, &mcp.Tool{
 		Name:        "aws_create_infra",
 		Description: "Provision AWS infrastructure according to an approved plan",
 	}, p.createInfra)
@@ -139,6 +144,17 @@ type teardownOutput struct {
 	Status       string `json:"status"`
 }
 
+type approvePlanInput struct {
+	PlanID    string `json:"plan_id"   jsonschema:"plan ID to approve or reject"`
+	Confirmed bool   `json:"confirmed" jsonschema:"must be true to approve the plan; false rejects it"`
+}
+
+type approvePlanOutput struct {
+	PlanID  string `json:"plan_id"`
+	Status  string `json:"status"`
+	Message string `json:"message"`
+}
+
 // --- tool handlers ---
 
 // planInfra analyzes requirements and creates an infrastructure plan with cost estimate.
@@ -208,9 +224,57 @@ func (p *AWSProvider) planInfra(ctx context.Context, _ *mcp.CallToolRequest, in 
 		Services:        services,
 		EstimatedCostMo: fmt.Sprintf("$%.2f", estimatedCost),
 		Summary: fmt.Sprintf(
-			"Proposed plan for %q: ECS Fargate in %s, targeting %d users at ≤%dms p99. Estimated cost: $%.2f/mo. Plan ID: %s (expires in 24h). Call aws_create_infra with this plan_id to provision infrastructure.",
+			"Proposed plan for %q: ECS Fargate in %s, targeting %d users at ≤%dms p99. Estimated cost: $%.2f/mo. Plan ID: %s (expires in 24h).\n\n⚠️ Review the cost estimate above. Call aws_approve_plan with plan_id and confirmed: true to approve, then aws_create_infra to provision infrastructure.",
 			in.AppDescription, in.Region, in.ExpectedUsers, in.LatencyMS, estimatedCost, plan.ID,
 		),
+	}, nil
+}
+
+// approvePlan allows the user to approve or reject an infrastructure plan after review.
+// Per spec ralph/specs/plan-approval.md: explicit approval is required before provisioning.
+func (p *AWSProvider) approvePlan(_ context.Context, _ *mcp.CallToolRequest, in approvePlanInput) (*mcp.CallToolResult, approvePlanOutput, error) {
+	// Validate input.
+	if strings.TrimSpace(in.PlanID) == "" {
+		return nil, approvePlanOutput{}, fmt.Errorf("plan_id is required and cannot be empty")
+	}
+
+	// Get plan to verify it exists and include cost info in response.
+	plan, err := p.store.GetPlan(in.PlanID)
+	if err != nil {
+		return nil, approvePlanOutput{}, err
+	}
+
+	if in.Confirmed {
+		// Approve the plan.
+		if err := p.store.ApprovePlan(in.PlanID); err != nil {
+			return nil, approvePlanOutput{}, err
+		}
+
+		slog.Info("approved plan",
+			slog.String("component", "aws_approve_plan"),
+			logging.PlanID(in.PlanID),
+			logging.Cost(plan.EstimatedCostMo))
+
+		return nil, approvePlanOutput{
+			PlanID:  in.PlanID,
+			Status:  state.PlanStatusApproved,
+			Message: fmt.Sprintf("Plan approved. Estimated monthly cost: $%.2f. You can now call aws_create_infra with plan_id %q to provision infrastructure.", plan.EstimatedCostMo, in.PlanID),
+		}, nil
+	}
+
+	// Reject the plan.
+	if err := p.store.RejectPlan(in.PlanID); err != nil {
+		return nil, approvePlanOutput{}, err
+	}
+
+	slog.Info("rejected plan",
+		slog.String("component", "aws_approve_plan"),
+		logging.PlanID(in.PlanID))
+
+	return nil, approvePlanOutput{
+		PlanID:  in.PlanID,
+		Status:  state.PlanStatusRejected,
+		Message: "Plan rejected. Create a new plan with aws_plan_infra if needed.",
 	}, nil
 }
 
@@ -222,11 +286,14 @@ func (p *AWSProvider) createInfra(ctx context.Context, _ *mcp.CallToolRequest, i
 		return nil, createInfraOutput{}, err
 	}
 
-	// Auto-approve if still in created status (for convenience).
-	if plan.Status == state.PlanStatusCreated {
-		if err = p.store.ApprovePlan(in.PlanID); err != nil {
-			return nil, createInfraOutput{}, err
-		}
+	// Require explicit plan approval — no auto-approval.
+	// Per spec ralph/specs/plan-approval.md: users must review cost estimates before provisioning.
+	if plan.Status != state.PlanStatusApproved {
+		return nil, createInfraOutput{}, fmt.Errorf(
+			"%w: plan %s is in '%s' status, must be 'approved'. "+
+				"Review the plan and call aws_approve_plan with confirmed: true to approve it",
+			apperrors.ErrPlanNotApproved, plan.ID, plan.Status,
+		)
 	}
 
 	// Check spending limits.

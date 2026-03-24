@@ -13,7 +13,7 @@ type Plan struct {
 	Region          string    `json:"region"`
 	Services        []string  `json:"services"`
 	EstimatedCostMo float64   `json:"estimated_cost_monthly"`
-	Status          string    `json:"status"` // created, approved, expired
+	Status          string    `json:"status"` // created, approved, rejected, expired
 	CreatedAt       time.Time `json:"created_at"`
 	ExpiresAt       time.Time `json:"expires_at"`
 }
@@ -22,6 +22,7 @@ type Plan struct {
 const (
 	PlanStatusCreated  = "created"
 	PlanStatusApproved = "approved"
+	PlanStatusRejected = "rejected"
 	PlanStatusExpired  = "expired"
 )
 
