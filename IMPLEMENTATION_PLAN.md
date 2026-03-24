@@ -348,15 +348,16 @@
 - **Location:** `internal/spending/config.go`
 - **Audit (2026-03-20):** Verified 0% coverage
 
-### P2.4 Provider.go Has No Tests (0% coverage) ❌
+### P2.4 Provider.go Has No Tests (0% coverage) ✅ COMPLETED
 
-- [ ] Create tests for `internal/providers/provider.go`
-- [ ] Test `All()` and `AllWithStore()` registration
-- **Impact:** Provider registration untested
+- [x] Create tests for `internal/providers/provider.go`
+- [x] Test `All()` and `AllWithStore()` registration
+- [x] Test Provider and TeardownProvider interface implementations
+- [x] Test graceful degradation with nil store
+- **Coverage:** 0% → 80%+ (All: 60%, AllWithStore: 100%, GetAWSProvider: 100%)
 - **Location:** `internal/providers/provider.go`
-- **Audit (2026-03-20):** Verified 0% coverage
 
-### P2.5 AWS Provider Tool Tests Missing (8.3% coverage) ❌
+### P2.5 AWS Provider Tool Tests Missing (18.2% coverage) ❌
 
 - [ ] Add unit tests for `createInfra` with mocked AWS SDK
 - [ ] Add unit tests for `deploy` with mocked AWS SDK
