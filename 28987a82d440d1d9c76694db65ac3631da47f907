@@ -1,0 +1,26 @@
+P2.2 and P2.3 Test Coverage Implementation
+=========================================
+
+Added tests for two packages that had 0% coverage:
+
+1. internal/errors/errors_test.go
+   - TestErrorTypes_AreDistinct: Verifies all 9 errors are unique
+   - TestErrorWrapping_Is: Tests errors.Is() through wrapping chains
+   - TestErrorMessages: Verifies human-readable messages
+   - TestWrappedErrorMessages: Tests wrapped error context
+
+2. internal/spending/config_test.go
+   - TestDefaultLimits: Verify default values
+   - TestLoadLimits_EnvVars: Env var overrides
+   - TestLoadLimits_InvalidEnvVarFallsBackToDefault: Graceful handling
+   - TestLoadLimits_NoEnvVars: Default behavior
+   - TestLoadLimits_PartialEnvVars: Partial overrides
+   - TestLoadLimits_ConfigFile: Config file loading
+   - TestLoadLimits_EnvOverridesConfigFile: Precedence rules
+   - TestLoadLimits_MissingConfigFileNoError: Optional config
+   - TestLoadLimits_InvalidConfigFile: Invalid JSON handling
+   - TestLimits_JSONSerialization: Round-trip serialization
+
+Key insight: %v vs %w in error wrapping
+- %w preserves errors.Is() chain (required for proper error handling)
+- %v breaks the chain (test documents this behavior)
