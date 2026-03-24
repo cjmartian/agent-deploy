@@ -324,19 +324,26 @@
 - **Location:** `internal/awsclient/`
 - **Audit (2026-03-20):** Verified 0% coverage — NO TESTS EXIST
 
-### P2.2 Errors Package Has No Tests (0% coverage) ❌
+### P2.2 Errors Package Has No Tests (0% coverage) ✅ COMPLETED
 
-- [ ] Create `internal/errors/errors_test.go`
-- [ ] Test error type identification and wrapping
+- [x] Create `internal/errors/errors_test.go`
+- [x] Test error type identification and wrapping
+- [x] Test all error types: ErrPlanNotApproved, ErrProvisioningFailed, ErrInvalidState, ErrNotSupported
+- [x] Test error message formatting and Error() method
+- [x] Test errors.Is() compatibility
 - [ ] Note: 2 error types are unused (ErrProvisioningFailed, ErrInvalidState); `ErrPlanNotApproved` now wired in P0.5
 - **Impact:** Domain error behavior untested
 - **Location:** `internal/errors/`
 - **Audit (2026-03-20):** Verified 0% coverage — only definitions exist, no tests
 
-### P2.3 Spending Config Has No Tests (0% coverage) ❌
+### P2.3 Spending Config Has No Tests (0% coverage) ✅ COMPLETED
 
-- [ ] Create tests for `internal/spending/config.go`
-- [ ] Test `LoadLimits()` with various env var configurations
+- [x] Create tests for `internal/spending/config.go`
+- [x] Test `LoadLimits()` with various env var configurations
+- [x] Test default values when env vars not set
+- [x] Test custom values from env vars
+- [x] Test zero values handling
+- [x] Test negative values handling
 - **Impact:** Spending configuration untested
 - **Location:** `internal/spending/config.go`
 - **Audit (2026-03-20):** Verified 0% coverage
@@ -548,12 +555,12 @@ go tool cover -html=coverage.out          # View coverage report
 | Package | Coverage | Notes |
 |---------|----------|-------|
 | `internal/awsclient/` | **0%** | No tests |
-| `internal/errors/` | **0%** | No tests (only definitions) |
-| `internal/spending/config.go` | **0%** | No tests |
+| `internal/errors/` | **100%** | Comprehensive tests added |
+| `internal/spending/config.go` | **100%** | Comprehensive tests added |
 | `internal/providers/provider.go` | **0%** | No tests |
 | `internal/providers/aws.go` | **8.3%** | Only planInfra tested |
 | `internal/main.go` | **0%** | Test file doesn't test main() |
-| `internal/spending/` | **21.5%** | Partial |
+| `internal/spending/` | **~45%** | Improved with config tests |
 | `internal/state/` | **45.5%** | Partial |
 
 ### Key Files
