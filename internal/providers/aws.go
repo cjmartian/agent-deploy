@@ -103,7 +103,8 @@ type planInfraOutput struct {
 }
 
 type createInfraInput struct {
-	PlanID string `json:"plan_id" jsonschema:"the plan ID returned by aws_plan_infra"`
+	PlanID           string `json:"plan_id"             jsonschema:"the plan ID returned by aws_plan_infra"`
+	LogRetentionDays int    `json:"log_retention_days,omitempty" jsonschema:"CloudWatch log retention in days (default: 7). Valid: 1,3,5,7,14,30,60,90,120,150,180,365,400,545,731,1096,1827,2192,2557,2922,3288,3653"`
 }
 
 type createInfraOutput struct {
@@ -113,11 +114,13 @@ type createInfraOutput struct {
 
 type deployInput struct {
 	InfraID         string            `json:"infra_id"             jsonschema:"infrastructure ID from aws_create_infra"`
-	ImageRef        string            `json:"image_ref"            jsonschema:"container image or artifact reference to deploy"`
+	ImageRef        string            `json:"image_ref"            jsonschema:"container image reference (required, no default)"`
 	ContainerPort   int               `json:"container_port,omitempty"   jsonschema:"container port (default: 80)"`
 	HealthCheckPath string            `json:"health_check_path,omitempty" jsonschema:"ALB health check path (default: /)"`
 	DesiredCount    int               `json:"desired_count,omitempty"    jsonschema:"number of tasks to run (default: 1)"`
 	Environment     map[string]string `json:"environment,omitempty"      jsonschema:"environment variables for the container"`
+	CPU             string            `json:"cpu,omitempty"              jsonschema:"ECS task CPU units (default: 256). Valid: 256,512,1024,2048,4096"`
+	Memory          string            `json:"memory,omitempty"           jsonschema:"ECS task memory in MB (default: 512). Must be compatible with CPU"`
 }
 
 type deployOutput struct {
@@ -365,7 +368,7 @@ func (p *AWSProvider) createInfra(ctx context.Context, _ *mcp.CallToolRequest, i
 	}
 
 	// Create CloudWatch log group for ECS task logs.
-	if err := p.provisionLogGroup(ctx, cfg, infra, tags); err != nil {
+	if err := p.provisionLogGroup(ctx, cfg, infra, tags, in.LogRetentionDays); err != nil {
 		if statusErr := p.store.SetInfraStatus(infraID, state.InfraStatusFailed); statusErr != nil {
 			slog.Error("failed to set infra status", "infraID", infraID, "error", statusErr)
 		}
@@ -445,7 +448,7 @@ func (p *AWSProvider) deploy(ctx context.Context, _ *mcp.CallToolRequest, in dep
 	}
 
 	// Create ECS task definition.
-	taskDefARN, err := p.createTaskDefinition(ctx, cfg, infra, in.ImageRef, deployID, containerPort, in.Environment)
+	taskDefARN, err := p.createTaskDefinition(ctx, cfg, infra, in.ImageRef, deployID, containerPort, in.Environment, in.CPU, in.Memory)
 	if err != nil {
 		if statusErr := p.store.UpdateDeploymentStatus(deployID, state.DeploymentStatusFailed, nil); statusErr != nil {
 			slog.Error("failed to update deployment status", "deployID", deployID, "error", statusErr)
@@ -924,7 +927,7 @@ func (p *AWSProvider) provisionALB(ctx context.Context, cfg aws.Config, infra *s
 }
 
 // provisionLogGroup creates a CloudWatch log group for ECS task logs.
-func (p *AWSProvider) provisionLogGroup(ctx context.Context, cfg aws.Config, infra *state.Infrastructure, tags map[string]string) error {
+func (p *AWSProvider) provisionLogGroup(ctx context.Context, cfg aws.Config, infra *state.Infrastructure, tags map[string]string, logRetentionDays int) error {
 	cwlClient := cloudwatchlogs.NewFromConfig(cfg)
 
 	logGroupName := "/ecs/agent-deploy-" + infra.ID
@@ -942,10 +945,15 @@ func (p *AWSProvider) provisionLogGroup(ctx context.Context, cfg aws.Config, inf
 			slog.String("component", "provisionLogGroup"))
 	}
 
-	// Set log retention to 7 days to manage costs.
+	// Default to 7 days if not specified. Per spec ralph/specs/deploy-configuration.md.
+	if logRetentionDays <= 0 {
+		logRetentionDays = 7
+	}
+
+	// Set log retention policy.
 	_, err = cwlClient.PutRetentionPolicy(ctx, &cloudwatchlogs.PutRetentionPolicyInput{
 		LogGroupName:    aws.String(logGroupName),
-		RetentionInDays: aws.Int32(7),
+		RetentionInDays: aws.Int32(int32(logRetentionDays)),
 	})
 	if err != nil {
 		return fmt.Errorf("failed to set retention policy: %w", err)
@@ -1058,15 +1066,15 @@ func (p *AWSProvider) ensureECRRepository(ctx context.Context, cfg aws.Config, i
 	return nil
 }
 
-func (p *AWSProvider) createTaskDefinition(ctx context.Context, cfg aws.Config, infra *state.Infrastructure, imageRef, deployID string, containerPort int, environment map[string]string) (string, error) {
+func (p *AWSProvider) createTaskDefinition(ctx context.Context, cfg aws.Config, infra *state.Infrastructure, imageRef, deployID string, containerPort int, environment map[string]string, cpu, memory string) (string, error) {
 	ecsClient := ecs.NewFromConfig(cfg)
 
-	// Use the provided image reference directly if it looks like a full URI,
-	// otherwise assume it's a Docker Hub image.
-	image := imageRef
-	if image == "" {
-		image = "nginx:latest"
+	// Image is required - no default.
+	// Per spec ralph/specs/deploy-configuration.md: require explicit image specification.
+	if strings.TrimSpace(imageRef) == "" {
+		return "", fmt.Errorf("image_ref is required and cannot be empty")
 	}
+	image := imageRef
 
 	// Get log group name from infrastructure.
 	logGroupName := infra.Resources[state.ResourceLogGroup]
@@ -1086,6 +1094,14 @@ func (p *AWSProvider) createTaskDefinition(ctx context.Context, cfg aws.Config, 
 		return "", fmt.Errorf("execution role not found in infrastructure resources")
 	}
 
+	// Default CPU/Memory if not specified.
+	if cpu == "" {
+		cpu = "256"
+	}
+	if memory == "" {
+		memory = "512"
+	}
+
 	// Build environment variables for the container.
 	envVars := make([]ecstypes.KeyValuePair, 0, len(environment))
 	for k, v := range environment {
@@ -1099,8 +1115,8 @@ func (p *AWSProvider) createTaskDefinition(ctx context.Context, cfg aws.Config, 
 		Family:                  aws.String("agent-deploy-" + deployID[:12]),
 		RequiresCompatibilities: []ecstypes.Compatibility{ecstypes.CompatibilityFargate},
 		NetworkMode:             ecstypes.NetworkModeAwsvpc,
-		Cpu:                     aws.String("256"),
-		Memory:                  aws.String("512"),
+		Cpu:                     aws.String(cpu),
+		Memory:                  aws.String(memory),
 		ExecutionRoleArn:        aws.String(executionRoleARN),
 		ContainerDefinitions: []ecstypes.ContainerDefinition{{
 			Name:        aws.String("app"),
