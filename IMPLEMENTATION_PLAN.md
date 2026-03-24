@@ -277,30 +277,33 @@
 - **Location:** `internal/providers/aws.go`
 - **Audit (2026-03-20):** Verified returns immediately without waiting
 
-### P1.15 Default Docker Image ❌
+### P1.15 Default Docker Image ✅ COMPLETED
 
-- [ ] Default image is `nginx:latest` at `aws.go:787`
-- [ ] Should require explicit image specification or document default clearly
+- [x] Default image is `nginx:latest` at `aws.go:787`
+- [x] Should require explicit image specification or document default clearly
+- [x] Now requires explicit `image_ref` parameter - no nginx:latest default
 - **Impact:** Accidental deployments with wrong image
 - **Location:** `internal/providers/aws.go:787`
-- **Audit (2026-03-20):** Verified nginx:latest default
+- **Resolution:** Removed nginx:latest default. The `image_ref` parameter is now required and must be explicitly specified by the user.
 
-### P1.16 Log Retention Hardcoded ❌
+### P1.16 Log Retention Hardcoded ✅ COMPLETED
 
-- [ ] CloudWatch log retention hardcoded to 7 days at `aws.go:749`
-- [ ] Make configurable per deployment
+- [x] CloudWatch log retention hardcoded to 7 days at `aws.go:749`
+- [x] Make configurable per deployment
+- [x] Now configurable via `log_retention_days` parameter
 - **Impact:** Cannot retain logs longer for compliance/debugging
 - **Location:** `internal/providers/aws.go:749`
-- **Audit (2026-03-20):** Verified 7-day hardcoded retention
+- **Resolution:** Added `log_retention_days` parameter to make CloudWatch log retention configurable per deployment.
 
-### P1.17 ECS Task Resources Hardcoded ❌
+### P1.17 ECS Task Resources Hardcoded ✅ COMPLETED
 
-- [ ] CPU hardcoded to "256" at `aws.go:806`
-- [ ] Memory hardcoded to "512" at `aws.go:807`
-- [ ] Make configurable via deploy tool parameters
+- [x] CPU hardcoded to "256" at `aws.go:806`
+- [x] Memory hardcoded to "512" at `aws.go:807`
+- [x] Make configurable via deploy tool parameters
+- [x] Now configurable via `cpu` and `memory` parameters
 - **Impact:** Apps may run out of resources; no way to allocate more
 - **Location:** `internal/providers/aws.go:806-807`
-- **Audit (2026-03-20):** Verified hardcoded CPU=256, Memory=512
+- **Resolution:** Added `cpu` and `memory` parameters to make ECS task resources configurable per deployment.
 
 ### P1.18 Error Wrapping Breaks errors.Is() ✅ COMPLETED
 
