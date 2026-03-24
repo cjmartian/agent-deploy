@@ -1,0 +1,23 @@
+CI Coverage Threshold Implementation Notes
+==========================================
+
+Added coverage threshold check to .github/workflows/ci.yml per spec ralph/specs/testing.md Section 5.
+
+Current State:
+- Total coverage: ~28.6%
+- Floor threshold: 25% (fails CI if below)
+- Target threshold: 50% (warns if below)
+
+Why 25% floor instead of 50%:
+- Multiple packages have 0% coverage (awsclient, errors)
+- P2 items in IMPLEMENTATION_PLAN.md track test coverage improvements
+- 25% floor prevents major regression while tests are being added
+
+Coverage breakdown at time of implementation:
+- internal/id: 100%
+- internal/logging: 86%
+- internal/state: 46.9%
+- internal/spending: 21.5%
+- internal/providers: 18.2%
+- internal/awsclient: 0%
+- internal/errors: 0%
