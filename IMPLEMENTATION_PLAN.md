@@ -302,12 +302,13 @@
 - **Location:** `internal/providers/aws.go:806-807`
 - **Audit (2026-03-20):** Verified hardcoded CPU=256, Memory=512
 
-### P1.18 Error Wrapping Breaks errors.Is() ❌
+### P1.18 Error Wrapping Breaks errors.Is() ✅ COMPLETED
 
-- [ ] Inconsistent error wrapping at `aws.go:226`
-- [ ] Should use `fmt.Errorf("...: %w", err)` for proper wrapping
+- [x] Inconsistent error wrapping at `aws.go:226`
+- [x] Should use `fmt.Errorf("...: %w", err)` for proper wrapping
 - **Impact:** Error type checking with `errors.Is()` fails
 - **Location:** `internal/providers/aws.go:226`
+- **Resolution:** Error wrapping was fixed as part of the P0.1 implementation when ErrPlanNotApproved was wired in. Verified that `%w` is used consistently for error wrapping throughout the codebase.
 
 ---
 
