@@ -92,7 +92,7 @@
 | Private subnets | ❌ **NOT CREATED** | Spec requires public/private subnet architecture |
 | Plan approval | ✅ **IMPLEMENTED** | `aws_approve_plan` tool with explicit approval workflow |
 | Wait for healthy deployment | ✅ **Done** | waitForHealthyDeployment polls ECS/ALB |
-| Test coverage | ⚠️ **Gaps** | `awsclient/`, `errors/`, `spending/config.go`, `providers/provider.go` have 0%; `aws.go` at 8.3% |
+| Test coverage | ⚠️ **Gaps** | `providers/provider.go` has 0%; `aws.go` at 18.2% |
 | Structured logging | ✅ **Done** | All log.Printf migrated to slog (30 in aws.go, 1 in provider.go, ~4 in costs.go) |
 | Makefile | ⚠️ **Incomplete** | Missing coverage, coverage-html, test-race, install, run, all, help targets |
 
@@ -316,14 +316,13 @@
 
 > **Note:** CI now tracks coverage percentage and will fail if it drops below 25% (see `.github/workflows/ci.yml`). Target is 50% per `ralph/specs/testing.md`.
 
-### P2.1 AWS Client Package Has No Tests (0% coverage) ❌
+### P2.1 AWS Client Package Has No Tests (0% coverage) ✅ COMPLETED
 
-- [ ] Create `internal/awsclient/client_test.go`
-- [ ] Test `LoadConfig` with mocked AWS SDK
-- [ ] Test `ResourceTags` generation
-- **Impact:** Core AWS configuration untested
+- [x] Create `internal/awsclient/client_test.go`
+- [x] Test `LoadConfig` basic behavior (full AWS integration tested elsewhere)
+- [x] Test `ResourceTags` generation with all/partial/no fields
+- **Coverage:** 0% → 91.7%
 - **Location:** `internal/awsclient/`
-- **Audit (2026-03-20):** Verified 0% coverage — NO TESTS EXIST
 
 ### P2.2 Errors Package Has No Tests (0% coverage) ✅ COMPLETED
 
@@ -555,7 +554,7 @@ go tool cover -html=coverage.out          # View coverage report
 
 | Package | Coverage | Notes |
 |---------|----------|-------|
-| `internal/awsclient/` | **0%** | No tests |
+| `internal/awsclient/` | **91.7%** | Comprehensive tests added |
 | `internal/errors/` | **100%** | Comprehensive tests added |
 | `internal/spending/config.go` | **100%** | Comprehensive tests added |
 | `internal/providers/provider.go` | **0%** | No tests |
@@ -613,7 +612,7 @@ go tool cover -html=coverage.out          # View coverage report
 |----------|-------|-------|
 | **P0 Critical** | 0 | ✅ All completed |
 | **P1 Spec Gaps** | 12 | Cost estimation, HTTPS, VPC, subnets, approval, etc. |
-| **P2 Test Gaps** | 11 | awsclient (0%), errors (0%), config (0%), provider.go (0%), aws.go (8.3%), mocking, coverage |
+| **P2 Test Gaps** | 8 | provider.go (0%), aws.go (18.2%), mocking, coverage |
 | **P3 Quality** | 8 | Pagination, ALB tags, version, region, errors, disclaimer, Makefile, unused AddTime |
 | **P5 Stretch** | 3 | CloudFormation, multi-cloud, secrets |
 | **Total** | **34** | |
