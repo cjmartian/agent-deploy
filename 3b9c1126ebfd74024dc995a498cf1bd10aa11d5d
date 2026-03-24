@@ -1,0 +1,20 @@
+P1.18 and P2.1 Implementation Notes
+====================================
+
+P1.18 Error Wrapping (already fixed):
+- Verified all fmt.Errorf calls in aws.go use %w for error wrapping
+- This was corrected during P0.1 implementation when ErrPlanNotApproved was wired
+- grep verified no instances of %v used for error wrapping
+
+P2.1 awsclient Package Tests:
+- TestResourceTags_AllFields: All 4 tags present
+- TestResourceTags_PartialFields: Only specified tags present
+- TestResourceTags_NoFields: Only created-by tag
+- TestResourceTags_PlanOnly/InfraOnly/DeploymentOnly: Individual field tests
+- TestLoadConfig_ValidRegion: Basic call verification
+- TestLoadConfig_EmptyRegion: Empty region handling
+
+Coverage breakdown:
+- ResourceTags: 100%
+- LoadConfig: 75% (error path not tested without AWS credentials)
+- Overall awsclient: 91.7%
