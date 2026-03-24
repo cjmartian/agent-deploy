@@ -1,0 +1,31 @@
+P0.1 Plan Approval Implementation Notes
+=====================================
+
+Files Modified:
+- internal/state/types.go: Added PlanStatusRejected constant
+- internal/state/store.go: Added RejectPlan(), enhanced ApprovePlan() with state validation
+- internal/providers/aws.go: Added aws_approve_plan tool, removed auto-approval from createInfra
+- internal/state/store_test.go: 7 new tests for plan state transitions
+- internal/providers/aws_test.go: 6 new tests for approval workflow
+
+Key Design Decisions:
+1. Idempotent operations: Approving an already-approved plan returns success
+2. Terminal states: approved/rejected/expired cannot transition further
+3. ErrInvalidState used for invalid transitions (rejected→approved, approved→rejected)
+4. ErrPlanNotApproved wired into createInfra for clear error messages
+
+Test Coverage Added:
+- TestRejectPlan: Basic rejection workflow
+- TestRejectedPlanCannotBeApproved: State transition validation
+- TestApprovedPlanCannotBeRejected: State transition validation
+- TestApproveIsIdempotent: Idempotent behavior
+- TestRejectIsIdempotent: Idempotent behavior
+- TestExpiredPlanCannotBeRejected: Expiration handling
+- TestApprovePlan: Tool approval flow
+- TestApprovePlan_Reject: Tool rejection flow
+- TestApprovePlan_EmptyPlanID: Input validation
+- TestApprovePlan_NotFound: Error handling
+- TestCreateInfra_RequiresApproval: Enforcement in createInfra
+- TestCreateInfra_RejectedPlan: Rejected plan handling
+
+Spec Compliance: ralph/specs/plan-approval.md fully implemented
