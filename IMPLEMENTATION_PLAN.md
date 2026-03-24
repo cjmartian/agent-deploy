@@ -56,6 +56,7 @@
 | Background services integration | ✅ Done | `internal/main.go` | CleanupService, CostMonitor, signal handling |
 | Integration tests | ✅ Done | `internal/providers/aws_integration_test.go` | Full workflow tests |
 | CI/CD workflows | ✅ Done | `.github/workflows/ci.yml`, `.golangci.yml` | lint, test, build on push/PR |
+| CI coverage threshold | ✅ Done | `.github/workflows/ci.yml` | Enforces 25% floor (target 50% per ralph/specs/testing.md); P2 tests in progress |
 | IAM task execution role | ✅ Done | `internal/providers/aws.go`, `internal/state/types.go` | ECS tasks can now pull from ECR and write to CloudWatch |
 | Configurable container port | ✅ Done | `internal/providers/aws.go` | ContainerPort parameter (default: 80) |
 | Configurable health check path | ✅ Done | `internal/providers/aws.go` | HealthCheckPath parameter (default: /) |
@@ -311,6 +312,8 @@
 ---
 
 ## P2 — Test Coverage Gaps
+
+> **Note:** CI now tracks coverage percentage and will fail if it drops below 25% (see `.github/workflows/ci.yml`). Target is 50% per `ralph/specs/testing.md`.
 
 ### P2.1 AWS Client Package Has No Tests (0% coverage) ❌
 

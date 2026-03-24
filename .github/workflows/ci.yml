@@ -54,6 +54,24 @@ jobs:
       - name: Run tests with coverage
         run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
 
+      - name: Check coverage threshold
+        run: |
+          # WHY: Per spec ralph/specs/testing.md Section 5 - track coverage to prevent regression.
+          # Target is 50%, but currently at ~29%. Using 25% as floor to prevent major regression
+          # while tests are being added (see P2 items in IMPLEMENTATION_PLAN.md).
+          COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
+          echo "Total coverage: $COVERAGE%"
+          echo "Target: 50% (current floor: 25%)"
+          if (( $(echo "$COVERAGE < 25" | bc -l) )); then
+            echo "❌ Coverage $COVERAGE% is below 25% floor threshold"
+            exit 1
+          fi
+          if (( $(echo "$COVERAGE < 50" | bc -l) )); then
+            echo "⚠️ Coverage $COVERAGE% is below 50% target (P2 tests in progress)"
+          else
+            echo "✅ Coverage $COVERAGE% meets 50% target"
+          fi
+
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
