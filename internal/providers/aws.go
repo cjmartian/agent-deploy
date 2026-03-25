@@ -462,7 +462,7 @@ func (p *AWSProvider) createInfra(ctx context.Context, _ *mcp.CallToolRequest, i
 		if statusErr := p.store.SetInfraStatus(infraID, state.InfraStatusFailed); statusErr != nil {
 			slog.Error("failed to set infra status", "infraID", infraID, "error", statusErr)
 		}
-		return nil, createInfraOutput{}, fmt.Errorf("%w: provision VPC: %v", apperrors.ErrProvisioningFailed, err)
+		return nil, createInfraOutput{}, fmt.Errorf("%w: provision VPC: %w", apperrors.ErrProvisioningFailed, err)
 	}
 
 	if err := p.provisionECSCluster(ctx, cfg, infra, tags); err != nil {
@@ -473,7 +473,7 @@ func (p *AWSProvider) createInfra(ctx context.Context, _ *mcp.CallToolRequest, i
 		if statusErr := p.store.SetInfraStatus(infraID, state.InfraStatusFailed); statusErr != nil {
 			slog.Error("failed to set infra status", "infraID", infraID, "error", statusErr)
 		}
-		return nil, createInfraOutput{}, fmt.Errorf("%w: provision ECS cluster: %v", apperrors.ErrProvisioningFailed, err)
+		return nil, createInfraOutput{}, fmt.Errorf("%w: provision ECS cluster: %w", apperrors.ErrProvisioningFailed, err)
 	}
 
 	// Validate certificate if provided (before creating ALB with HTTPS listener).
@@ -486,7 +486,7 @@ func (p *AWSProvider) createInfra(ctx context.Context, _ *mcp.CallToolRequest, i
 			if statusErr := p.store.SetInfraStatus(infraID, state.InfraStatusFailed); statusErr != nil {
 				slog.Error("failed to set infra status", "infraID", infraID, "error", statusErr)
 			}
-			return nil, createInfraOutput{}, fmt.Errorf("%w: validate certificate: %v", apperrors.ErrProvisioningFailed, err)
+			return nil, createInfraOutput{}, fmt.Errorf("%w: validate certificate: %w", apperrors.ErrProvisioningFailed, err)
 		}
 	}
 
@@ -498,7 +498,7 @@ func (p *AWSProvider) createInfra(ctx context.Context, _ *mcp.CallToolRequest, i
 		if statusErr := p.store.SetInfraStatus(infraID, state.InfraStatusFailed); statusErr != nil {
 			slog.Error("failed to set infra status", "infraID", infraID, "error", statusErr)
 		}
-		return nil, createInfraOutput{}, fmt.Errorf("%w: provision ALB: %v", apperrors.ErrProvisioningFailed, err)
+		return nil, createInfraOutput{}, fmt.Errorf("%w: provision ALB: %w", apperrors.ErrProvisioningFailed, err)
 	}
 
 	// Create IAM execution role for ECS tasks (needed before tasks can run).
@@ -510,7 +510,7 @@ func (p *AWSProvider) createInfra(ctx context.Context, _ *mcp.CallToolRequest, i
 		if statusErr := p.store.SetInfraStatus(infraID, state.InfraStatusFailed); statusErr != nil {
 			slog.Error("failed to set infra status", "infraID", infraID, "error", statusErr)
 		}
-		return nil, createInfraOutput{}, fmt.Errorf("%w: provision execution role: %v", apperrors.ErrProvisioningFailed, err)
+		return nil, createInfraOutput{}, fmt.Errorf("%w: provision execution role: %w", apperrors.ErrProvisioningFailed, err)
 	}
 
 	// Create CloudWatch log group for ECS task logs.
@@ -522,7 +522,7 @@ func (p *AWSProvider) createInfra(ctx context.Context, _ *mcp.CallToolRequest, i
 		if statusErr := p.store.SetInfraStatus(infraID, state.InfraStatusFailed); statusErr != nil {
 			slog.Error("failed to set infra status", "infraID", infraID, "error", statusErr)
 		}
-		return nil, createInfraOutput{}, fmt.Errorf("%w: provision log group: %v", apperrors.ErrProvisioningFailed, err)
+		return nil, createInfraOutput{}, fmt.Errorf("%w: provision log group: %w", apperrors.ErrProvisioningFailed, err)
 	}
 
 	// Mark infrastructure as ready.

@@ -1444,7 +1444,10 @@ _, planOutput, _ := provider.planInfra(context.Background(), nil, planInput)
 
 // Approve first time.
 approveInput := approvePlanInput{PlanID: planOutput.PlanID, Confirmed: true}
-provider.approvePlan(context.Background(), nil, approveInput)
+_, _, err := provider.approvePlan(context.Background(), nil, approveInput)
+if err != nil {
+	t.Fatalf("First approve failed: %v", err)
+}
 
 // Approve second time (should be idempotent).
 _, output2, err := provider.approvePlan(context.Background(), nil, approveInput)
