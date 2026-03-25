@@ -1,0 +1,20 @@
+Implementation Notes (6c0eedf):
+
+REFACTOR: Complete migration to injectable AWS clients
+
+All provisioning and deletion functions now use getClients() pattern:
+- ensureECRRepository, createTaskDefinition, createOrUpdateService
+- waitForHealthyDeployment, updateTargetGroupHealthCheck, getALBURLs
+- deleteECRRepository, deleteLogGroup, deleteExecutionRole, deleteVPCResources
+- configureAutoScaling, deleteAutoScaling, getScalingInfo, status
+
+BREAKING CHANGE (internal only):
+- deleteRouteTable now takes awsclient.EC2API instead of *ec2.Client
+
+TESTABILITY:
+All AWS API calls can now be mocked via NewAWSProviderWithClients(store, clients)
+No more direct NewFromConfig calls outside of getClients()
+
+NEXT STEPS:
+- Add tests for the newly-mockable functions
+- Target functions with 0% coverage: waitForHealthyDeployment, configureAutoScaling, etc.
