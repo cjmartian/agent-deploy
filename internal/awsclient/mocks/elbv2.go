@@ -53,7 +53,7 @@ func (m *ELBV2Mock) DescribeLoadBalancers(ctx context.Context, params *elbv2.Des
 	if m.DescribeLoadBalancersFunc != nil {
 		return m.DescribeLoadBalancersFunc(ctx, params, optFns...)
 	}
-	var loadBalancers []elbv2types.LoadBalancer
+	loadBalancers := make([]elbv2types.LoadBalancer, 0, len(params.LoadBalancerArns))
 	for _, arn := range params.LoadBalancerArns {
 		loadBalancers = append(loadBalancers, elbv2types.LoadBalancer{
 			LoadBalancerArn: aws.String(arn),

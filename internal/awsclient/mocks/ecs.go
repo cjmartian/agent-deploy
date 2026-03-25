@@ -78,7 +78,7 @@ func (m *ECSMock) DescribeServices(ctx context.Context, params *ecs.DescribeServ
 		return m.DescribeServicesFunc(ctx, params, optFns...)
 	}
 	// Return a healthy running service by default
-	var services []ecstypes.Service
+	services := make([]ecstypes.Service, 0, len(params.Services))
 	for _, svc := range params.Services {
 		services = append(services, ecstypes.Service{
 			ServiceArn:   aws.String("arn:aws:ecs:us-east-1:123456789012:service/" + svc),
@@ -105,11 +105,15 @@ func (m *ECSMock) UpdateService(ctx context.Context, params *ecs.UpdateServiceIn
 	if m.UpdateServiceFunc != nil {
 		return m.UpdateServiceFunc(ctx, params, optFns...)
 	}
+	desiredCount := int32(0)
+	if params.DesiredCount != nil {
+		desiredCount = *params.DesiredCount
+	}
 	return &ecs.UpdateServiceOutput{
 		Service: &ecstypes.Service{
-			ServiceArn:  params.Service,
-			Status:      aws.String("ACTIVE"),
-			DesiredCount: int32(*params.DesiredCount),
+			ServiceArn:   params.Service,
+			Status:       aws.String("ACTIVE"),
+			DesiredCount: desiredCount,
 		},
 	}, nil
 }
