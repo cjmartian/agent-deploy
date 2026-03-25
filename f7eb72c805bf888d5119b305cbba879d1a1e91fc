@@ -1,0 +1,20 @@
+CostMonitor lifecycle tests achieving 51% coverage
+
+KEY CHANGES:
+- Added 10 CostMonitor tests covering Start/Stop lifecycle, CheckNow, AlertCallback
+- Tests verify goroutine-based monitoring loop behavior
+- Used same mockCostExplorerClient pattern as CostTracker tests
+
+TESTING APPROACH:
+- Lifecycle tests use short intervals (50ms) for fast execution
+- Stats tests verify Running, LastRun, LastError, AlertsSent fields
+- AlertCallback test verifies callback invocation on budget threshold breach
+
+COVERAGE ACHIEVEMENT:
+- spending package: 50.6% → 67.4%
+- Overall: 48.0% → 51.0% (exceeds 50% target)
+
+WHY THESE TESTS MATTER:
+- Monitor runs as background goroutine - lifecycle correctness is critical
+- Alert callbacks are the user-facing notification mechanism
+- Double-start prevention avoids resource leaks
