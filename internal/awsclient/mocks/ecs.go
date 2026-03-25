@@ -11,23 +11,27 @@ import (
 // ECSMock is a mock implementation of awsclient.ECSAPI for testing.
 type ECSMock struct {
 	// Cluster operations
-	CreateClusterFunc func(ctx context.Context, params *ecs.CreateClusterInput, optFns ...func(*ecs.Options)) (*ecs.CreateClusterOutput, error)
-	DeleteClusterFunc func(ctx context.Context, params *ecs.DeleteClusterInput, optFns ...func(*ecs.Options)) (*ecs.DeleteClusterOutput, error)
+	CreateClusterFunc    func(ctx context.Context, params *ecs.CreateClusterInput, optFns ...func(*ecs.Options)) (*ecs.CreateClusterOutput, error)
+	DeleteClusterFunc    func(ctx context.Context, params *ecs.DeleteClusterInput, optFns ...func(*ecs.Options)) (*ecs.DeleteClusterOutput, error)
+	ListClustersFunc     func(ctx context.Context, params *ecs.ListClustersInput, optFns ...func(*ecs.Options)) (*ecs.ListClustersOutput, error)
+	DescribeClustersFunc func(ctx context.Context, params *ecs.DescribeClustersInput, optFns ...func(*ecs.Options)) (*ecs.DescribeClustersOutput, error)
 
 	// Service operations
-	CreateServiceFunc   func(ctx context.Context, params *ecs.CreateServiceInput, optFns ...func(*ecs.Options)) (*ecs.CreateServiceOutput, error)
+	CreateServiceFunc    func(ctx context.Context, params *ecs.CreateServiceInput, optFns ...func(*ecs.Options)) (*ecs.CreateServiceOutput, error)
 	DescribeServicesFunc func(ctx context.Context, params *ecs.DescribeServicesInput, optFns ...func(*ecs.Options)) (*ecs.DescribeServicesOutput, error)
-	UpdateServiceFunc   func(ctx context.Context, params *ecs.UpdateServiceInput, optFns ...func(*ecs.Options)) (*ecs.UpdateServiceOutput, error)
-	DeleteServiceFunc   func(ctx context.Context, params *ecs.DeleteServiceInput, optFns ...func(*ecs.Options)) (*ecs.DeleteServiceOutput, error)
+	UpdateServiceFunc    func(ctx context.Context, params *ecs.UpdateServiceInput, optFns ...func(*ecs.Options)) (*ecs.UpdateServiceOutput, error)
+	DeleteServiceFunc    func(ctx context.Context, params *ecs.DeleteServiceInput, optFns ...func(*ecs.Options)) (*ecs.DeleteServiceOutput, error)
 
 	// Task Definition operations
 	RegisterTaskDefinitionFunc func(ctx context.Context, params *ecs.RegisterTaskDefinitionInput, optFns ...func(*ecs.Options)) (*ecs.RegisterTaskDefinitionOutput, error)
 
 	// Tracking fields
-	CreateClusterCalls   int
-	DeleteClusterCalls   int
-	CreateServiceCalls   int
-	DeleteServiceCalls   int
+	CreateClusterCalls    int
+	DeleteClusterCalls    int
+	ListClustersCalls     int
+	DescribeClustersCalls int
+	CreateServiceCalls    int
+	DeleteServiceCalls    int
 	DescribeServicesCalls int
 }
 
@@ -55,6 +59,35 @@ func (m *ECSMock) DeleteCluster(ctx context.Context, params *ecs.DeleteClusterIn
 			ClusterArn: params.Cluster,
 			Status:     aws.String("INACTIVE"),
 		},
+	}, nil
+}
+
+func (m *ECSMock) ListClusters(ctx context.Context, params *ecs.ListClustersInput, optFns ...func(*ecs.Options)) (*ecs.ListClustersOutput, error) {
+	m.ListClustersCalls++
+	if m.ListClustersFunc != nil {
+		return m.ListClustersFunc(ctx, params, optFns...)
+	}
+	// Default: return empty list
+	return &ecs.ListClustersOutput{
+		ClusterArns: []string{},
+	}, nil
+}
+
+func (m *ECSMock) DescribeClusters(ctx context.Context, params *ecs.DescribeClustersInput, optFns ...func(*ecs.Options)) (*ecs.DescribeClustersOutput, error) {
+	m.DescribeClustersCalls++
+	if m.DescribeClustersFunc != nil {
+		return m.DescribeClustersFunc(ctx, params, optFns...)
+	}
+	// Default: return clusters matching requested ARNs
+	var clusters []ecstypes.Cluster
+	for _, clusterARN := range params.Clusters {
+		clusters = append(clusters, ecstypes.Cluster{
+			ClusterArn: aws.String(clusterARN),
+			Status:     aws.String("ACTIVE"),
+		})
+	}
+	return &ecs.DescribeClustersOutput{
+		Clusters: clusters,
 	}, nil
 }
 

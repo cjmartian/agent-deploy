@@ -14,9 +14,10 @@ import (
 // If a Func is nil, the method returns a default success response.
 type EC2Mock struct {
 	// VPC operations
-	CreateVpcFunc         func(ctx context.Context, params *ec2.CreateVpcInput, optFns ...func(*ec2.Options)) (*ec2.CreateVpcOutput, error)
+	CreateVpcFunc          func(ctx context.Context, params *ec2.CreateVpcInput, optFns ...func(*ec2.Options)) (*ec2.CreateVpcOutput, error)
+	DescribeVpcsFunc       func(ctx context.Context, params *ec2.DescribeVpcsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeVpcsOutput, error)
 	ModifyVpcAttributeFunc func(ctx context.Context, params *ec2.ModifyVpcAttributeInput, optFns ...func(*ec2.Options)) (*ec2.ModifyVpcAttributeOutput, error)
-	DeleteVpcFunc         func(ctx context.Context, params *ec2.DeleteVpcInput, optFns ...func(*ec2.Options)) (*ec2.DeleteVpcOutput, error)
+	DeleteVpcFunc          func(ctx context.Context, params *ec2.DeleteVpcInput, optFns ...func(*ec2.Options)) (*ec2.DeleteVpcOutput, error)
 
 	// Internet Gateway operations
 	CreateInternetGatewayFunc func(ctx context.Context, params *ec2.CreateInternetGatewayInput, optFns ...func(*ec2.Options)) (*ec2.CreateInternetGatewayOutput, error)
@@ -55,10 +56,11 @@ type EC2Mock struct {
 	DeleteSecurityGroupFunc          func(ctx context.Context, params *ec2.DeleteSecurityGroupInput, optFns ...func(*ec2.Options)) (*ec2.DeleteSecurityGroupOutput, error)
 
 	// Tracking fields for verification
-	CreateVpcCalls    int
-	DeleteVpcCalls    int
-	CreateSubnetCalls int
-	DeleteSubnetCalls int
+	CreateVpcCalls     int
+	DescribeVpcsCalls  int
+	DeleteVpcCalls     int
+	CreateSubnetCalls  int
+	DeleteSubnetCalls  int
 }
 
 // VPC operations
@@ -73,6 +75,24 @@ func (m *EC2Mock) CreateVpc(ctx context.Context, params *ec2.CreateVpcInput, opt
 			VpcId:     aws.String("vpc-mock-12345"),
 			CidrBlock: params.CidrBlock,
 		},
+	}, nil
+}
+
+func (m *EC2Mock) DescribeVpcs(ctx context.Context, params *ec2.DescribeVpcsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeVpcsOutput, error) {
+	m.DescribeVpcsCalls++
+	if m.DescribeVpcsFunc != nil {
+		return m.DescribeVpcsFunc(ctx, params, optFns...)
+	}
+	// Default: return VPCs matching requested IDs
+	var vpcs []ec2types.Vpc
+	for _, vpcID := range params.VpcIds {
+		vpcs = append(vpcs, ec2types.Vpc{
+			VpcId:     aws.String(vpcID),
+			CidrBlock: aws.String("10.0.0.0/16"),
+		})
+	}
+	return &ec2.DescribeVpcsOutput{
+		Vpcs: vpcs,
 	}, nil
 }
 

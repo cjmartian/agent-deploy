@@ -11,25 +11,30 @@ import (
 // ELBV2Mock is a mock implementation of awsclient.ELBV2API for testing.
 type ELBV2Mock struct {
 	// Load Balancer operations
-	CreateLoadBalancerFunc   func(ctx context.Context, params *elbv2.CreateLoadBalancerInput, optFns ...func(*elbv2.Options)) (*elbv2.CreateLoadBalancerOutput, error)
+	CreateLoadBalancerFunc    func(ctx context.Context, params *elbv2.CreateLoadBalancerInput, optFns ...func(*elbv2.Options)) (*elbv2.CreateLoadBalancerOutput, error)
 	DescribeLoadBalancersFunc func(ctx context.Context, params *elbv2.DescribeLoadBalancersInput, optFns ...func(*elbv2.Options)) (*elbv2.DescribeLoadBalancersOutput, error)
-	DeleteLoadBalancerFunc   func(ctx context.Context, params *elbv2.DeleteLoadBalancerInput, optFns ...func(*elbv2.Options)) (*elbv2.DeleteLoadBalancerOutput, error)
+	DeleteLoadBalancerFunc    func(ctx context.Context, params *elbv2.DeleteLoadBalancerInput, optFns ...func(*elbv2.Options)) (*elbv2.DeleteLoadBalancerOutput, error)
 
 	// Target Group operations
-	CreateTargetGroupFunc   func(ctx context.Context, params *elbv2.CreateTargetGroupInput, optFns ...func(*elbv2.Options)) (*elbv2.CreateTargetGroupOutput, error)
-	ModifyTargetGroupFunc   func(ctx context.Context, params *elbv2.ModifyTargetGroupInput, optFns ...func(*elbv2.Options)) (*elbv2.ModifyTargetGroupOutput, error)
+	CreateTargetGroupFunc    func(ctx context.Context, params *elbv2.CreateTargetGroupInput, optFns ...func(*elbv2.Options)) (*elbv2.CreateTargetGroupOutput, error)
+	ModifyTargetGroupFunc    func(ctx context.Context, params *elbv2.ModifyTargetGroupInput, optFns ...func(*elbv2.Options)) (*elbv2.ModifyTargetGroupOutput, error)
 	DescribeTargetHealthFunc func(ctx context.Context, params *elbv2.DescribeTargetHealthInput, optFns ...func(*elbv2.Options)) (*elbv2.DescribeTargetHealthOutput, error)
-	DeleteTargetGroupFunc   func(ctx context.Context, params *elbv2.DeleteTargetGroupInput, optFns ...func(*elbv2.Options)) (*elbv2.DeleteTargetGroupOutput, error)
+	DeleteTargetGroupFunc    func(ctx context.Context, params *elbv2.DeleteTargetGroupInput, optFns ...func(*elbv2.Options)) (*elbv2.DeleteTargetGroupOutput, error)
 
 	// Listener operations
 	CreateListenerFunc func(ctx context.Context, params *elbv2.CreateListenerInput, optFns ...func(*elbv2.Options)) (*elbv2.CreateListenerOutput, error)
 
+	// Tag operations
+	DescribeTagsFunc func(ctx context.Context, params *elbv2.DescribeTagsInput, optFns ...func(*elbv2.Options)) (*elbv2.DescribeTagsOutput, error)
+
 	// Tracking fields
-	CreateLoadBalancerCalls   int
-	DeleteLoadBalancerCalls   int
-	CreateTargetGroupCalls    int
-	DeleteTargetGroupCalls    int
-	DescribeTargetHealthCalls int
+	CreateLoadBalancerCalls    int
+	DeleteLoadBalancerCalls    int
+	DescribeLoadBalancersCalls int
+	CreateTargetGroupCalls     int
+	DeleteTargetGroupCalls     int
+	DescribeTargetHealthCalls  int
+	DescribeTagsCalls          int
 }
 
 func (m *ELBV2Mock) CreateLoadBalancer(ctx context.Context, params *elbv2.CreateLoadBalancerInput, optFns ...func(*elbv2.Options)) (*elbv2.CreateLoadBalancerOutput, error) {
@@ -50,6 +55,7 @@ func (m *ELBV2Mock) CreateLoadBalancer(ctx context.Context, params *elbv2.Create
 }
 
 func (m *ELBV2Mock) DescribeLoadBalancers(ctx context.Context, params *elbv2.DescribeLoadBalancersInput, optFns ...func(*elbv2.Options)) (*elbv2.DescribeLoadBalancersOutput, error) {
+	m.DescribeLoadBalancersCalls++
 	if m.DescribeLoadBalancersFunc != nil {
 		return m.DescribeLoadBalancersFunc(ctx, params, optFns...)
 	}
@@ -141,5 +147,23 @@ func (m *ELBV2Mock) CreateListener(ctx context.Context, params *elbv2.CreateList
 				Protocol:        params.Protocol,
 			},
 		},
+	}, nil
+}
+
+func (m *ELBV2Mock) DescribeTags(ctx context.Context, params *elbv2.DescribeTagsInput, optFns ...func(*elbv2.Options)) (*elbv2.DescribeTagsOutput, error) {
+	m.DescribeTagsCalls++
+	if m.DescribeTagsFunc != nil {
+		return m.DescribeTagsFunc(ctx, params, optFns...)
+	}
+	// Default: return empty tags for each resource
+	var tagDescriptions []elbv2types.TagDescription
+	for _, arn := range params.ResourceArns {
+		tagDescriptions = append(tagDescriptions, elbv2types.TagDescription{
+			ResourceArn: aws.String(arn),
+			Tags:        []elbv2types.Tag{},
+		})
+	}
+	return &elbv2.DescribeTagsOutput{
+		TagDescriptions: tagDescriptions,
 	}, nil
 }

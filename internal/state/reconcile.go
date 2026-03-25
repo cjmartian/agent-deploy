@@ -17,6 +17,24 @@ import (
 	"github.com/cjmartian/agent-deploy/internal/logging"
 )
 
+// ReconcileEC2API defines EC2 methods needed for reconciliation.
+type ReconcileEC2API interface {
+	DescribeVpcs(ctx context.Context, params *ec2.DescribeVpcsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeVpcsOutput, error)
+}
+
+// ReconcileECSAPI defines ECS methods needed for reconciliation.
+type ReconcileECSAPI interface {
+	ListClusters(ctx context.Context, params *ecs.ListClustersInput, optFns ...func(*ecs.Options)) (*ecs.ListClustersOutput, error)
+	DescribeClusters(ctx context.Context, params *ecs.DescribeClustersInput, optFns ...func(*ecs.Options)) (*ecs.DescribeClustersOutput, error)
+	DescribeServices(ctx context.Context, params *ecs.DescribeServicesInput, optFns ...func(*ecs.Options)) (*ecs.DescribeServicesOutput, error)
+}
+
+// ReconcileELBV2API defines ELBV2 methods needed for reconciliation.
+type ReconcileELBV2API interface {
+	DescribeLoadBalancers(ctx context.Context, params *elasticloadbalancingv2.DescribeLoadBalancersInput, optFns ...func(*elasticloadbalancingv2.Options)) (*elasticloadbalancingv2.DescribeLoadBalancersOutput, error)
+	DescribeTags(ctx context.Context, params *elasticloadbalancingv2.DescribeTagsInput, optFns ...func(*elasticloadbalancingv2.Options)) (*elasticloadbalancingv2.DescribeTagsOutput, error)
+}
+
 // ReconcileResult contains the results of a state reconciliation.
 type ReconcileResult struct {
 	// OrphanedResources are AWS resources not tracked in local state.
@@ -51,9 +69,9 @@ type StaleEntry struct {
 // Reconciler compares local state with AWS resources.
 type Reconciler struct {
 	store     *Store
-	ec2Client *ec2.Client
-	ecsClient *ecs.Client
-	albClient *elasticloadbalancingv2.Client
+	ec2Client ReconcileEC2API
+	ecsClient ReconcileECSAPI
+	albClient ReconcileELBV2API
 	region    string
 }
 
@@ -65,6 +83,18 @@ func NewReconciler(store *Store, cfg aws.Config) *Reconciler {
 		ecsClient: ecs.NewFromConfig(cfg),
 		albClient: elasticloadbalancingv2.NewFromConfig(cfg),
 		region:    cfg.Region,
+	}
+}
+
+// NewReconcilerWithClients creates a Reconciler with injected clients for testing.
+// This allows unit tests to use mock implementations without AWS credentials.
+func NewReconcilerWithClients(store *Store, region string, ec2Client ReconcileEC2API, ecsClient ReconcileECSAPI, albClient ReconcileELBV2API) *Reconciler {
+	return &Reconciler{
+		store:     store,
+		ec2Client: ec2Client,
+		ecsClient: ecsClient,
+		albClient: albClient,
+		region:    region,
 	}
 }
 
@@ -317,22 +347,29 @@ func (r *Reconciler) countSyncedResources(_ context.Context) int {
 // See spec ralph/specs/operational.md Section 1.
 func (r *Reconciler) findTaggedVPCs(ctx context.Context) ([]ec2types.Vpc, error) {
 	var allVPCs []ec2types.Vpc
+	var nextToken *string
 
-	paginator := ec2.NewDescribeVpcsPaginator(r.ec2Client, &ec2.DescribeVpcsInput{
-		Filters: []ec2types.Filter{
-			{
-				Name:   aws.String("tag-key"),
-				Values: []string{"agent-deploy:created-by"},
+	for {
+		input := &ec2.DescribeVpcsInput{
+			Filters: []ec2types.Filter{
+				{
+					Name:   aws.String("tag-key"),
+					Values: []string{"agent-deploy:created-by"},
+				},
 			},
-		},
-	})
+			NextToken: nextToken,
+		}
 
-	for paginator.HasMorePages() {
-		page, err := paginator.NextPage(ctx)
+		output, err := r.ec2Client.DescribeVpcs(ctx, input)
 		if err != nil {
 			return nil, fmt.Errorf("describe VPCs: %w", err)
 		}
-		allVPCs = append(allVPCs, page.Vpcs...)
+		allVPCs = append(allVPCs, output.Vpcs...)
+
+		if output.NextToken == nil {
+			break
+		}
+		nextToken = output.NextToken
 	}
 
 	return allVPCs, nil
@@ -348,17 +385,24 @@ type taggedCluster struct {
 // Without pagination, clusters beyond page 1 are invisible to reconciliation.
 // See spec ralph/specs/operational.md Section 1.
 func (r *Reconciler) findTaggedECSClusters(ctx context.Context) ([]taggedCluster, error) {
-	// Collect all cluster ARNs using paginator
+	// Collect all cluster ARNs using manual pagination
 	var allClusterARNs []string
+	var nextToken *string
 
-	paginator := ecs.NewListClustersPaginator(r.ecsClient, &ecs.ListClustersInput{})
-
-	for paginator.HasMorePages() {
-		page, err := paginator.NextPage(ctx)
+	for {
+		input := &ecs.ListClustersInput{
+			NextToken: nextToken,
+		}
+		output, err := r.ecsClient.ListClusters(ctx, input)
 		if err != nil {
 			return nil, fmt.Errorf("list ECS clusters: %w", err)
 		}
-		allClusterARNs = append(allClusterARNs, page.ClusterArns...)
+		allClusterARNs = append(allClusterARNs, output.ClusterArns...)
+
+		if output.NextToken == nil {
+			break
+		}
+		nextToken = output.NextToken
 	}
 
 	if len(allClusterARNs) == 0 {
@@ -418,22 +462,26 @@ type taggedALB struct {
 // WHY batch tags: DescribeTags accepts up to 20 ARNs per call, reducing API calls.
 // See spec ralph/specs/operational.md Section 1.
 func (r *Reconciler) findTaggedALBs(ctx context.Context) ([]taggedALB, error) {
-	// Collect all ALB ARNs using paginator
+	// Collect all ALB ARNs using manual pagination
 	var allALBARNs []string
+	var marker *string
 
-	paginator := elasticloadbalancingv2.NewDescribeLoadBalancersPaginator(
-		r.albClient,
-		&elasticloadbalancingv2.DescribeLoadBalancersInput{},
-	)
-
-	for paginator.HasMorePages() {
-		page, err := paginator.NextPage(ctx)
+	for {
+		input := &elasticloadbalancingv2.DescribeLoadBalancersInput{
+			Marker: marker,
+		}
+		output, err := r.albClient.DescribeLoadBalancers(ctx, input)
 		if err != nil {
 			return nil, fmt.Errorf("describe load balancers: %w", err)
 		}
-		for _, lb := range page.LoadBalancers {
+		for _, lb := range output.LoadBalancers {
 			allALBARNs = append(allALBARNs, aws.ToString(lb.LoadBalancerArn))
 		}
+
+		if output.NextMarker == nil {
+			break
+		}
+		marker = output.NextMarker
 	}
 
 	if len(allALBARNs) == 0 {
