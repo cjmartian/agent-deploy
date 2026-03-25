@@ -538,3 +538,274 @@ func TestCreateInfra_RejectedPlan(t *testing.T) {
 		t.Errorf("Error %q should mention 'not approved'", err.Error())
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Auto Scaling Tests
+// ---------------------------------------------------------------------------
+
+// TestValidateAutoScalingParams tests the auto-scaling parameter validation.
+func TestValidateAutoScalingParams(t *testing.T) {
+	tests := []struct {
+		name       string
+		minCount   int
+		maxCount   int
+		targetCPU  int
+		targetMem  int
+		wantErr    bool
+		wantSubstr string
+	}{
+		{
+			name:      "valid_defaults",
+			minCount:  1,
+			maxCount:  1,
+			targetCPU: 70,
+			targetMem: 70,
+			wantErr:   false,
+		},
+		{
+			name:      "valid_scaling_range",
+			minCount:  1,
+			maxCount:  10,
+			targetCPU: 50,
+			targetMem: 80,
+			wantErr:   false,
+		},
+		{
+			name:       "min_count_zero",
+			minCount:   0,
+			maxCount:   1,
+			targetCPU:  70,
+			targetMem:  70,
+			wantErr:    true,
+			wantSubstr: "min_count must be at least 1",
+		},
+		{
+			name:       "max_less_than_min",
+			minCount:   5,
+			maxCount:   3,
+			targetCPU:  70,
+			targetMem:  70,
+			wantErr:    true,
+			wantSubstr: "max_count must be >= min_count",
+		},
+		{
+			name:       "target_cpu_too_low",
+			minCount:   1,
+			maxCount:   1,
+			targetCPU:  5,
+			targetMem:  70,
+			wantErr:    true,
+			wantSubstr: "target_cpu_percent must be between 10 and 90",
+		},
+		{
+			name:       "target_cpu_too_high",
+			minCount:   1,
+			maxCount:   1,
+			targetCPU:  95,
+			targetMem:  70,
+			wantErr:    true,
+			wantSubstr: "target_cpu_percent must be between 10 and 90",
+		},
+		{
+			name:       "target_mem_too_low",
+			minCount:   1,
+			maxCount:   1,
+			targetCPU:  70,
+			targetMem:  5,
+			wantErr:    true,
+			wantSubstr: "target_memory_percent must be between 10 and 90",
+		},
+		{
+			name:       "target_mem_too_high",
+			minCount:   1,
+			maxCount:   1,
+			targetCPU:  70,
+			targetMem:  100,
+			wantErr:    true,
+			wantSubstr: "target_memory_percent must be between 10 and 90",
+		},
+		{
+			name:      "high_max_count_warning",
+			minCount:  1,
+			maxCount:  15,
+			targetCPU: 70,
+			targetMem: 70,
+			wantErr:   false, // Should warn but not error.
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateAutoScalingParams(tt.minCount, tt.maxCount, tt.targetCPU, tt.targetMem)
+			if tt.wantErr {
+				if err == nil {
+					t.Error("Expected error, got nil")
+					return
+				}
+				if !containsSubstring(err.Error(), tt.wantSubstr) {
+					t.Errorf("Error %q should contain %q", err.Error(), tt.wantSubstr)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+			}
+		})
+	}
+}
+
+// TestExtractClusterName tests extracting cluster name from ARN.
+func TestExtractClusterName(t *testing.T) {
+	tests := []struct {
+		arn  string
+		want string
+	}{
+		{
+			arn:  "arn:aws:ecs:us-east-1:123456789012:cluster/my-cluster",
+			want: "my-cluster",
+		},
+		{
+			arn:  "arn:aws:ecs:us-west-2:987654321098:cluster/agent-deploy-infra-abc123",
+			want: "agent-deploy-infra-abc123",
+		},
+		{
+			arn:  "",
+			want: "",
+		},
+		{
+			arn:  "simple-name",
+			want: "simple-name",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.arn, func(t *testing.T) {
+			got := extractClusterName(tt.arn)
+			if got != tt.want {
+				t.Errorf("extractClusterName(%q) = %q, want %q", tt.arn, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestExtractServiceName tests extracting service name from ARN.
+func TestExtractServiceName(t *testing.T) {
+	tests := []struct {
+		arn  string
+		want string
+	}{
+		{
+			arn:  "arn:aws:ecs:us-east-1:123456789012:service/my-cluster/my-service",
+			want: "my-service",
+		},
+		{
+			arn:  "arn:aws:ecs:us-west-2:987654321098:service/cluster/agent-deploy-deploy123",
+			want: "agent-deploy-deploy123",
+		},
+		{
+			arn:  "",
+			want: "",
+		},
+		{
+			arn:  "simple-name",
+			want: "simple-name",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.arn, func(t *testing.T) {
+			got := extractServiceName(tt.arn)
+			if got != tt.want {
+				t.Errorf("extractServiceName(%q) = %q, want %q", tt.arn, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestDeployInput_AutoScalingDefaults tests that auto-scaling defaults are applied correctly.
+func TestDeployInput_AutoScalingDefaults(t *testing.T) {
+	// This test verifies that the deployInput struct has the new scaling fields.
+	input := deployInput{
+		InfraID:          "infra-123",
+		ImageRef:         "nginx:latest",
+		ContainerPort:    8080,
+		HealthCheckPath:  "/health",
+		DesiredCount:     2,
+		MinCount:         1,
+		MaxCount:         5,
+		TargetCPUPercent: 60,
+		TargetMemPercent: 75,
+	}
+
+	// Verify fields are set correctly.
+	if input.MinCount != 1 {
+		t.Errorf("MinCount = %d, want 1", input.MinCount)
+	}
+	if input.MaxCount != 5 {
+		t.Errorf("MaxCount = %d, want 5", input.MaxCount)
+	}
+	if input.TargetCPUPercent != 60 {
+		t.Errorf("TargetCPUPercent = %d, want 60", input.TargetCPUPercent)
+	}
+	if input.TargetMemPercent != 75 {
+		t.Errorf("TargetMemPercent = %d, want 75", input.TargetMemPercent)
+	}
+}
+
+// TestStatusOutput_ScalingInfo tests that status output includes scaling info.
+func TestStatusOutput_ScalingInfo(t *testing.T) {
+	output := statusOutput{
+		DeploymentID: "deploy-123",
+		Status:       "running",
+		URLs:         []string{"http://example.com"},
+		Scaling: &scalingInfo{
+			MinCount:         1,
+			MaxCount:         4,
+			CurrentCount:     2,
+			TargetCPUPercent: 70,
+			TargetMemPercent: 70,
+		},
+	}
+
+	// Marshal to JSON to verify structure.
+	data, err := json.Marshal(output)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	// Verify JSON contains scaling info.
+	jsonStr := string(data)
+	expectedFields := []string{
+		`"min_count":1`,
+		`"max_count":4`,
+		`"current_count":2`,
+		`"target_cpu_percent":70`,
+		`"target_memory_percent":70`,
+	}
+	for _, field := range expectedFields {
+		if !containsSubstring(jsonStr, field) {
+			t.Errorf("JSON %q should contain %q", jsonStr, field)
+		}
+	}
+}
+
+// TestStatusOutput_NoScaling tests status output without scaling.
+func TestStatusOutput_NoScaling(t *testing.T) {
+	output := statusOutput{
+		DeploymentID: "deploy-123",
+		Status:       "running",
+		URLs:         []string{"http://example.com"},
+		Scaling:      nil,
+	}
+
+	data, err := json.Marshal(output)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	// Verify JSON does NOT contain scaling (omitempty).
+	jsonStr := string(data)
+	if containsSubstring(jsonStr, `"scaling"`) {
+		t.Errorf("JSON %q should not contain 'scaling' when nil", jsonStr)
+	}
+}

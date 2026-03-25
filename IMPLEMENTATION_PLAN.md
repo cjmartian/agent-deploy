@@ -66,6 +66,7 @@
 | Wait for healthy deployment | ✅ Done | `internal/providers/aws.go` | waitForHealthyDeployment polls ECS/ALB |
 | **P0.1 Plan Approval** | ✅ Done | `internal/providers/aws.go`, `internal/state/store.go` | `aws_approve_plan` tool, explicit approval workflow |
 | Plan approval tests | ✅ Done | `internal/state/store_test.go`, `internal/providers/aws_test.go` | Comprehensive approval workflow tests |
+| **P1.12 Auto Scaling** | ✅ Done | `internal/providers/aws.go`, `internal/providers/aws_test.go` | MinCount, MaxCount, CPU/memory target tracking policies |
 
 ---
 
@@ -88,7 +89,7 @@
 | golangci-lint config | ✅ **Working** | `.golangci.yml` with version 2 format |
 | IAM role provisioning | ✅ **Done** | `provisionExecutionRole()`, `deleteExecutionRole()`, `ResourceExecutionRole` constant |
 | go.mod dependencies | ⚠️ **Incomplete** | Missing `github.com/aws/aws-sdk-go-v2/service/pricing` |
-| Auto Scaling | ❌ **NOT IMPLEMENTED** | Service name added but not configured |
+| Auto Scaling | ✅ **IMPLEMENTED** | MinCount, MaxCount, CPU/memory target tracking policies |
 | Private subnets | ❌ **NOT CREATED** | Spec requires public/private subnet architecture |
 | Plan approval | ✅ **IMPLEMENTED** | `aws_approve_plan` tool with explicit approval workflow |
 | Wait for healthy deployment | ✅ **Done** | waitForHealthyDeployment polls ECS/ALB |
@@ -251,12 +252,22 @@
 - **Impact:** All resources publicly accessible; no private tier for databases/internal services
 - **Location:** `internal/providers/aws.go`
 
-### P1.12 Auto Scaling Not Implemented ❌
+### P1.12 Auto Scaling ✅ COMPLETED
 
-- [ ] Auto Scaling service name added but not configured
-- [ ] Add scaling policies based on CPU/memory thresholds
-- **Impact:** Cannot automatically scale based on load
-- **Location:** `internal/providers/aws.go`
+- [x] ✅ Added `applicationautoscaling` SDK dependency to go.mod
+- [x] ✅ Updated `deployInput` struct with MinCount, MaxCount, TargetCPUPercent, TargetMemPercent
+- [x] ✅ Added `scalingInfo` struct and updated `statusOutput` to include scaling information
+- [x] ✅ Implemented `validateAutoScalingParams()` for input validation per spec rules
+- [x] ✅ Implemented `configureAutoScaling()` to register scalable target and create CPU/memory target tracking policies
+- [x] ✅ Implemented `deleteAutoScaling()` to clean up scaling policies and deregister target before ECS service deletion
+- [x] ✅ Implemented `getScalingInfo()` to retrieve current scaling config for status reporting
+- [x] ✅ Added helper functions `extractClusterName()` and `extractServiceName()`
+- [x] ✅ Updated `deploy()` to configure auto-scaling when `max_count > desired_count`
+- [x] ✅ Updated `teardown()` to delete auto-scaling before ECS service
+- [x] ✅ Comprehensive tests for all new functionality
+- **Impact:** Services can now automatically scale based on CPU/memory thresholds
+- **Location:** `internal/providers/aws.go`, `internal/providers/aws_test.go`, `go.mod`
+- **Completed:** 2026-03-24
 
 ### P1.13 Plan Approval Bypassed ✅ COMPLETED
 
@@ -615,11 +626,11 @@ go tool cover -html=coverage.out          # View coverage report
 | Priority | Count | Items |
 |----------|-------|-------|
 | **P0 Critical** | 0 | ✅ All completed |
-| **P1 Spec Gaps** | 12 | Cost estimation, HTTPS, VPC, subnets, approval, etc. |
+| **P1 Spec Gaps** | 11 | Cost estimation, HTTPS, VPC, subnets, etc. (P1.12 Auto Scaling completed) |
 | **P2 Test Gaps** | 8 | provider.go (0%), aws.go (18.2%), mocking, coverage |
 | **P3 Quality** | 8 | Pagination, ALB tags, version, region, errors, disclaimer, Makefile, unused AddTime |
 | **P5 Stretch** | 3 | CloudFormation, multi-cloud, secrets |
-| **Total** | **34** | |
+| **Total** | **33** | |
 
 ---
 

@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/applicationautoscaling"
+	astypes "github.com/aws/aws-sdk-go-v2/service/applicationautoscaling/types"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
@@ -121,6 +123,11 @@ type deployInput struct {
 	Environment     map[string]string `json:"environment,omitempty"      jsonschema:"environment variables for the container"`
 	CPU             string            `json:"cpu,omitempty"              jsonschema:"ECS task CPU units (default: 256). Valid: 256,512,1024,2048,4096"`
 	Memory          string            `json:"memory,omitempty"           jsonschema:"ECS task memory in MB (default: 512). Must be compatible with CPU"`
+	// Auto Scaling parameters (per spec ralph/specs/auto-scaling.md).
+	MinCount          int `json:"min_count,omitempty"           jsonschema:"minimum task count for auto scaling (default: same as desired_count)"`
+	MaxCount          int `json:"max_count,omitempty"           jsonschema:"maximum task count for auto scaling (default: same as desired_count, no scaling)"`
+	TargetCPUPercent  int `json:"target_cpu_percent,omitempty"  jsonschema:"target CPU utilization percentage for scaling (default: 70)"`
+	TargetMemPercent  int `json:"target_memory_percent,omitempty" jsonschema:"target memory utilization percentage for scaling (default: 70)"`
 }
 
 type deployOutput struct {
@@ -132,10 +139,20 @@ type statusInput struct {
 	DeploymentID string `json:"deployment_id" jsonschema:"deployment ID from aws_deploy"`
 }
 
+// scalingInfo contains auto scaling configuration details.
+type scalingInfo struct {
+	MinCount          int `json:"min_count"`
+	MaxCount          int `json:"max_count"`
+	CurrentCount      int `json:"current_count"`
+	TargetCPUPercent  int `json:"target_cpu_percent"`
+	TargetMemPercent  int `json:"target_memory_percent"`
+}
+
 type statusOutput struct {
-	DeploymentID string   `json:"deployment_id"`
-	Status       string   `json:"status"`
-	URLs         []string `json:"urls"`
+	DeploymentID string       `json:"deployment_id"`
+	Status       string       `json:"status"`
+	URLs         []string     `json:"urls"`
+	Scaling      *scalingInfo `json:"scaling,omitempty"`
 }
 
 type teardownInput struct {
@@ -416,6 +433,29 @@ func (p *AWSProvider) deploy(ctx context.Context, _ *mcp.CallToolRequest, in dep
 		desiredCount = 1
 	}
 
+	// Auto-scaling defaults (per spec ralph/specs/auto-scaling.md).
+	minCount := in.MinCount
+	if minCount == 0 {
+		minCount = desiredCount
+	}
+	maxCount := in.MaxCount
+	if maxCount == 0 {
+		maxCount = desiredCount // No scaling by default.
+	}
+	targetCPU := in.TargetCPUPercent
+	if targetCPU == 0 {
+		targetCPU = 70
+	}
+	targetMem := in.TargetMemPercent
+	if targetMem == 0 {
+		targetMem = 70
+	}
+
+	// Validate auto-scaling parameters.
+	if err := validateAutoScalingParams(minCount, maxCount, targetCPU, targetMem); err != nil {
+		return nil, deployOutput{}, err
+	}
+
 	// Load AWS config.
 	cfg, err := awsclient.LoadConfig(ctx, infra.Region)
 	if err != nil {
@@ -473,6 +513,27 @@ func (p *AWSProvider) deploy(ctx context.Context, _ *mcp.CallToolRequest, in dep
 		return nil, deployOutput{}, fmt.Errorf("ECS service: %w", err)
 	}
 
+	// Configure auto-scaling if max_count > desired_count (per spec ralph/specs/auto-scaling.md).
+	if maxCount > desiredCount {
+		clusterName := extractClusterName(infra.Resources[state.ResourceECSCluster])
+		serviceName := extractServiceName(serviceARN)
+		if err = p.configureAutoScaling(ctx, cfg, clusterName, serviceName, deployID, minCount, maxCount, targetCPU, targetMem); err != nil {
+			// Log but don't fail deployment - auto-scaling is optional enhancement.
+			slog.Warn("failed to configure auto-scaling",
+				slog.String("component", "aws_deploy"),
+				logging.DeploymentID(deployID),
+				logging.Err(err))
+		} else {
+			slog.Info("auto-scaling configured",
+				slog.String("component", "aws_deploy"),
+				logging.DeploymentID(deployID),
+				slog.Int("min_count", minCount),
+				slog.Int("max_count", maxCount),
+				slog.Int("target_cpu_percent", targetCPU),
+				slog.Int("target_memory_percent", targetMem))
+		}
+	}
+
 	// Get ALB DNS name for URL.
 	urls, err := p.getALBURLs(ctx, cfg, infra)
 	if err != nil {
@@ -519,6 +580,8 @@ func (p *AWSProvider) status(ctx context.Context, _ *mcp.CallToolRequest, in sta
 		return nil, statusOutput{}, err
 	}
 
+	var scaling *scalingInfo
+
 	// Try to get live status from AWS.
 	cfg, err := awsclient.LoadConfig(ctx, infra.Region)
 	if err == nil {
@@ -537,6 +600,13 @@ func (p *AWSProvider) status(ctx context.Context, _ *mcp.CallToolRequest, in sta
 				} else if svc.DesiredCount > 0 {
 					deployment.Status = state.DeploymentStatusDeploying
 				}
+
+				// Get scaling info if configured.
+				clusterName := extractClusterName(clusterARN)
+				serviceName := extractServiceName(deployment.ServiceARN)
+				if info, err := p.getScalingInfo(ctx, cfg, clusterName, serviceName, int(svc.RunningCount)); err == nil && info != nil {
+					scaling = info
+				}
 			}
 		}
 
@@ -551,6 +621,7 @@ func (p *AWSProvider) status(ctx context.Context, _ *mcp.CallToolRequest, in sta
 		DeploymentID: deployment.ID,
 		Status:       deployment.Status,
 		URLs:         deployment.URLs,
+		Scaling:      scaling,
 	}, nil
 }
 
@@ -569,6 +640,18 @@ func (p *AWSProvider) teardown(ctx context.Context, _ *mcp.CallToolRequest, in t
 	cfg, err := awsclient.LoadConfig(ctx, infra.Region)
 	if err != nil {
 		return nil, teardownOutput{}, err
+	}
+
+	// Delete auto-scaling configuration BEFORE deleting ECS service.
+	// Per spec ralph/specs/auto-scaling.md: must deregister scalable target first.
+	clusterName := extractClusterName(infra.Resources[state.ResourceECSCluster])
+	serviceName := extractServiceName(deployment.ServiceARN)
+	if clusterName != "" && serviceName != "" {
+		if err := p.deleteAutoScaling(ctx, cfg, clusterName, serviceName, in.DeploymentID); err != nil {
+			slog.Warn("failed to delete auto-scaling",
+				slog.String("component", "aws_teardown"),
+				logging.Err(err))
+		}
 	}
 
 	// Delete ECS service.
@@ -1661,6 +1744,230 @@ func (p *AWSProvider) deploymentsResource(_ context.Context, req *mcp.ReadResour
 			{URI: req.Params.URI, MIMEType: "application/json", Text: string(data)},
 		},
 	}, nil
+}
+
+// ---------------------------------------------------------------------------
+// Auto Scaling
+// ---------------------------------------------------------------------------
+
+// validateAutoScalingParams validates auto-scaling input parameters per spec ralph/specs/auto-scaling.md.
+func validateAutoScalingParams(minCount, maxCount, targetCPU, targetMem int) error {
+	if minCount < 1 {
+		return fmt.Errorf("min_count must be at least 1, got %d", minCount)
+	}
+	if maxCount < minCount {
+		return fmt.Errorf("max_count must be >= min_count (min=%d, max=%d)", minCount, maxCount)
+	}
+	if targetCPU < 10 || targetCPU > 90 {
+		return fmt.Errorf("target_cpu_percent must be between 10 and 90, got %d", targetCPU)
+	}
+	if targetMem < 10 || targetMem > 90 {
+		return fmt.Errorf("target_memory_percent must be between 10 and 90, got %d", targetMem)
+	}
+	// Warn for high max_count (but don't fail).
+	if maxCount > 10 {
+		slog.Warn("high max_count may cause cost spikes",
+			slog.String("component", "validateAutoScalingParams"),
+			slog.Int("max_count", maxCount))
+	}
+	return nil
+}
+
+// configureAutoScaling registers an ECS service as a scalable target and creates
+// target tracking scaling policies for CPU and memory utilization.
+// Per spec ralph/specs/auto-scaling.md: cooldowns are 60s scale-out, 300s scale-in.
+func (p *AWSProvider) configureAutoScaling(ctx context.Context, cfg aws.Config, clusterName, serviceName, deployID string, minCount, maxCount, targetCPU, targetMem int) error {
+	asClient := applicationautoscaling.NewFromConfig(cfg)
+
+	resourceID := fmt.Sprintf("service/%s/%s", clusterName, serviceName)
+
+	// Register scalable target.
+	_, err := asClient.RegisterScalableTarget(ctx, &applicationautoscaling.RegisterScalableTargetInput{
+		ServiceNamespace:  astypes.ServiceNamespaceEcs,
+		ResourceId:        aws.String(resourceID),
+		ScalableDimension: astypes.ScalableDimensionECSServiceDesiredCount,
+		MinCapacity:       aws.Int32(int32(minCount)),
+		MaxCapacity:       aws.Int32(int32(maxCount)),
+	})
+	if err != nil {
+		return fmt.Errorf("register scalable target: %w", err)
+	}
+
+	// Create CPU-based scaling policy.
+	cpuPolicyName := "agent-deploy-cpu-" + deployID[:12]
+	_, err = asClient.PutScalingPolicy(ctx, &applicationautoscaling.PutScalingPolicyInput{
+		PolicyName:        aws.String(cpuPolicyName),
+		ServiceNamespace:  astypes.ServiceNamespaceEcs,
+		ResourceId:        aws.String(resourceID),
+		ScalableDimension: astypes.ScalableDimensionECSServiceDesiredCount,
+		PolicyType:        astypes.PolicyTypeTargetTrackingScaling,
+		TargetTrackingScalingPolicyConfiguration: &astypes.TargetTrackingScalingPolicyConfiguration{
+			PredefinedMetricSpecification: &astypes.PredefinedMetricSpecification{
+				PredefinedMetricType: astypes.MetricTypeECSServiceAverageCPUUtilization,
+			},
+			TargetValue:      aws.Float64(float64(targetCPU)),
+			ScaleInCooldown:  aws.Int32(300), // 5 minutes - avoid thrashing on brief load dips.
+			ScaleOutCooldown: aws.Int32(60),  // 1 minute - react quickly to load spikes.
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("create CPU scaling policy: %w", err)
+	}
+
+	// Create memory-based scaling policy.
+	memPolicyName := "agent-deploy-memory-" + deployID[:12]
+	_, err = asClient.PutScalingPolicy(ctx, &applicationautoscaling.PutScalingPolicyInput{
+		PolicyName:        aws.String(memPolicyName),
+		ServiceNamespace:  astypes.ServiceNamespaceEcs,
+		ResourceId:        aws.String(resourceID),
+		ScalableDimension: astypes.ScalableDimensionECSServiceDesiredCount,
+		PolicyType:        astypes.PolicyTypeTargetTrackingScaling,
+		TargetTrackingScalingPolicyConfiguration: &astypes.TargetTrackingScalingPolicyConfiguration{
+			PredefinedMetricSpecification: &astypes.PredefinedMetricSpecification{
+				PredefinedMetricType: astypes.MetricTypeECSServiceAverageMemoryUtilization,
+			},
+			TargetValue:      aws.Float64(float64(targetMem)),
+			ScaleInCooldown:  aws.Int32(300),
+			ScaleOutCooldown: aws.Int32(60),
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("create memory scaling policy: %w", err)
+	}
+
+	return nil
+}
+
+// deleteAutoScaling removes scaling policies and deregisters the scalable target.
+// Per spec ralph/specs/auto-scaling.md: must be called BEFORE deleting ECS service.
+func (p *AWSProvider) deleteAutoScaling(ctx context.Context, cfg aws.Config, clusterName, serviceName, deployID string) error {
+	asClient := applicationautoscaling.NewFromConfig(cfg)
+
+	resourceID := fmt.Sprintf("service/%s/%s", clusterName, serviceName)
+
+	// Delete CPU scaling policy.
+	cpuPolicyName := "agent-deploy-cpu-" + deployID[:12]
+	_, err := asClient.DeleteScalingPolicy(ctx, &applicationautoscaling.DeleteScalingPolicyInput{
+		PolicyName:        aws.String(cpuPolicyName),
+		ServiceNamespace:  astypes.ServiceNamespaceEcs,
+		ResourceId:        aws.String(resourceID),
+		ScalableDimension: astypes.ScalableDimensionECSServiceDesiredCount,
+	})
+	if err != nil {
+		// Log but continue - policy may not exist.
+		slog.Debug("could not delete CPU scaling policy",
+			slog.String("component", "deleteAutoScaling"),
+			logging.Err(err))
+	}
+
+	// Delete memory scaling policy.
+	memPolicyName := "agent-deploy-memory-" + deployID[:12]
+	_, err = asClient.DeleteScalingPolicy(ctx, &applicationautoscaling.DeleteScalingPolicyInput{
+		PolicyName:        aws.String(memPolicyName),
+		ServiceNamespace:  astypes.ServiceNamespaceEcs,
+		ResourceId:        aws.String(resourceID),
+		ScalableDimension: astypes.ScalableDimensionECSServiceDesiredCount,
+	})
+	if err != nil {
+		slog.Debug("could not delete memory scaling policy",
+			slog.String("component", "deleteAutoScaling"),
+			logging.Err(err))
+	}
+
+	// Deregister scalable target.
+	_, err = asClient.DeregisterScalableTarget(ctx, &applicationautoscaling.DeregisterScalableTargetInput{
+		ServiceNamespace:  astypes.ServiceNamespaceEcs,
+		ResourceId:        aws.String(resourceID),
+		ScalableDimension: astypes.ScalableDimensionECSServiceDesiredCount,
+	})
+	if err != nil {
+		// If target doesn't exist, that's fine.
+		slog.Debug("could not deregister scalable target",
+			slog.String("component", "deleteAutoScaling"),
+			logging.Err(err))
+	}
+
+	return nil
+}
+
+// getScalingInfo retrieves current auto-scaling configuration for status reporting.
+func (p *AWSProvider) getScalingInfo(ctx context.Context, cfg aws.Config, clusterName, serviceName string, currentCount int) (*scalingInfo, error) {
+	asClient := applicationautoscaling.NewFromConfig(cfg)
+
+	resourceID := fmt.Sprintf("service/%s/%s", clusterName, serviceName)
+
+	// Describe scalable targets to get min/max capacity.
+	resp, err := asClient.DescribeScalableTargets(ctx, &applicationautoscaling.DescribeScalableTargetsInput{
+		ServiceNamespace: astypes.ServiceNamespaceEcs,
+		ResourceIds:      []string{resourceID},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if len(resp.ScalableTargets) == 0 {
+		return nil, nil // No scaling configured.
+	}
+
+	target := resp.ScalableTargets[0]
+
+	// Get scaling policies to extract target percentages.
+	policiesResp, err := asClient.DescribeScalingPolicies(ctx, &applicationautoscaling.DescribeScalingPoliciesInput{
+		ServiceNamespace: astypes.ServiceNamespaceEcs,
+		ResourceId:       aws.String(resourceID),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	info := &scalingInfo{
+		MinCount:     int(*target.MinCapacity),
+		MaxCount:     int(*target.MaxCapacity),
+		CurrentCount: currentCount,
+	}
+
+	// Extract target percentages from policies.
+	for _, policy := range policiesResp.ScalingPolicies {
+		if policy.TargetTrackingScalingPolicyConfiguration != nil {
+			cfg := policy.TargetTrackingScalingPolicyConfiguration
+			if cfg.PredefinedMetricSpecification != nil {
+				switch cfg.PredefinedMetricSpecification.PredefinedMetricType {
+				case astypes.MetricTypeECSServiceAverageCPUUtilization:
+					info.TargetCPUPercent = int(*cfg.TargetValue)
+				case astypes.MetricTypeECSServiceAverageMemoryUtilization:
+					info.TargetMemPercent = int(*cfg.TargetValue)
+				}
+			}
+		}
+	}
+
+	return info, nil
+}
+
+// extractClusterName extracts the cluster name from an ECS cluster ARN.
+// ARN format: arn:aws:ecs:region:account:cluster/cluster-name
+func extractClusterName(clusterARN string) string {
+	if clusterARN == "" {
+		return ""
+	}
+	parts := strings.Split(clusterARN, "/")
+	if len(parts) >= 2 {
+		return parts[len(parts)-1]
+	}
+	return clusterARN
+}
+
+// extractServiceName extracts the service name from an ECS service ARN.
+// ARN format: arn:aws:ecs:region:account:service/cluster-name/service-name
+func extractServiceName(serviceARN string) string {
+	if serviceARN == "" {
+		return ""
+	}
+	parts := strings.Split(serviceARN, "/")
+	if len(parts) >= 3 {
+		return parts[len(parts)-1]
+	}
+	return serviceARN
 }
 
 // ---------------------------------------------------------------------------
