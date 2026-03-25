@@ -14,6 +14,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ecs v1.74.0
 	github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2 v1.54.9
 	github.com/aws/aws-sdk-go-v2/service/iam v1.53.6
+	github.com/aws/aws-sdk-go-v2/service/pricing v1.40.14
 	github.com/modelcontextprotocol/go-sdk v1.4.0
 	github.com/oklog/ulid/v2 v2.1.1
 )

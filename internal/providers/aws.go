@@ -202,15 +202,55 @@ func (p *AWSProvider) planInfra(ctx context.Context, _ *mcp.CallToolRequest, in 
 		services = append(services, "Auto Scaling")
 	}
 
-	// Estimate cost based on user count and latency requirements.
-	// This is a simplified estimation; real implementation would use AWS Pricing API.
-	baseCost := 15.0 // VPC, basic networking
-	ecsCost := float64(in.ExpectedUsers) * 0.02
-	if in.LatencyMS < 100 {
-		ecsCost *= 1.5 // Better instances for low latency
+	// Per spec ralph/specs/cost-estimation.md: Use PricingEstimator for accurate cost estimates.
+	// Falls back to hardcoded regional estimates if Pricing API is unavailable.
+	estimator, err := spending.NewPricingEstimator(ctx)
+	var costEstimate *spending.CostEstimate
+	if err != nil {
+		slog.Warn("could not create pricing estimator, using simplified estimate",
+			slog.String("component", "aws_plan_infra"),
+			logging.Err(err))
+		// Fallback to simplified calculation.
+		baseCost := 15.0
+		ecsCost := float64(in.ExpectedUsers) * 0.02
+		if in.LatencyMS < 100 {
+			ecsCost *= 1.5
+		}
+		albCost := 20.0
+		costEstimate = &spending.CostEstimate{
+			TotalMonthlyUSD: baseCost + ecsCost + albCost,
+			Region:          in.Region,
+			UsingFallback:   true,
+			Disclaimer:      "Using simplified cost estimate (pricing service unavailable).",
+		}
+	} else {
+		// Estimate costs with proper pricing.
+		costEstimate, err = estimator.EstimateCosts(ctx, spending.EstimateParams{
+			Region:            in.Region,
+			CPUUnits:          256,  // Default for planning
+			MemoryMB:          512,  // Default for planning
+			DesiredCount:      1,
+			ExpectedUsers:     in.ExpectedUsers,
+			IncludeNATGateway: true, // Private subnets are now standard
+			LogRetentionDays:  7,
+		})
+		if err != nil {
+			slog.Warn("cost estimation failed, using simplified estimate",
+				slog.String("component", "aws_plan_infra"),
+				logging.Err(err))
+			baseCost := 15.0
+			ecsCost := float64(in.ExpectedUsers) * 0.02
+			albCost := 20.0
+			costEstimate = &spending.CostEstimate{
+				TotalMonthlyUSD: baseCost + ecsCost + albCost,
+				Region:          in.Region,
+				UsingFallback:   true,
+				Disclaimer:      "Using simplified cost estimate.",
+			}
+		}
 	}
-	albCost := 20.0 // ALB base cost
-	estimatedCost := baseCost + ecsCost + albCost
+
+	estimatedCost := costEstimate.TotalMonthlyUSD
 
 	// Check spending limits before creating plan.
 	limits, _ := spending.LoadLimits()
@@ -240,16 +280,33 @@ func (p *AWSProvider) planInfra(ctx context.Context, _ *mcp.CallToolRequest, in 
 		slog.String("component", "aws_plan_infra"),
 		logging.PlanID(plan.ID),
 		slog.String("app_description", in.AppDescription),
-		logging.Cost(estimatedCost))
+		logging.Cost(estimatedCost),
+		slog.Bool("using_fallback_pricing", costEstimate.UsingFallback))
+
+	// Build detailed summary including cost breakdown.
+	summaryBuilder := fmt.Sprintf(
+		"Proposed plan for %q: ECS Fargate in %s, targeting %d users at ≤%dms p99. Estimated cost: $%.2f/mo. Plan ID: %s (expires in 24h).\n\n",
+		in.AppDescription, in.Region, in.ExpectedUsers, in.LatencyMS, estimatedCost, plan.ID,
+	)
+	if len(costEstimate.Services) > 0 {
+		summaryBuilder += "Cost breakdown:\n"
+		for _, svc := range costEstimate.Services {
+			if svc.MonthlyCost > 0 {
+				summaryBuilder += fmt.Sprintf("  - %s (%s): $%.2f/mo\n", svc.Service, svc.Description, svc.MonthlyCost)
+			}
+		}
+		summaryBuilder += "\n"
+	}
+	if costEstimate.Disclaimer != "" {
+		summaryBuilder += "Note: " + costEstimate.Disclaimer + "\n\n"
+	}
+	summaryBuilder += "⚠️ Review the cost estimate above. Call aws_approve_plan with plan_id and confirmed: true to approve, then aws_create_infra to provision infrastructure."
 
 	return nil, planInfraOutput{
 		PlanID:          plan.ID,
 		Services:        services,
 		EstimatedCostMo: fmt.Sprintf("$%.2f", estimatedCost),
-		Summary: fmt.Sprintf(
-			"Proposed plan for %q: ECS Fargate in %s, targeting %d users at ≤%dms p99. Estimated cost: $%.2f/mo. Plan ID: %s (expires in 24h).\n\n⚠️ Review the cost estimate above. Call aws_approve_plan with plan_id and confirmed: true to approve, then aws_create_infra to provision infrastructure.",
-			in.AppDescription, in.Region, in.ExpectedUsers, in.LatencyMS, estimatedCost, plan.ID,
-		),
+		Summary:         summaryBuilder,
 	}, nil
 }
 
@@ -320,25 +377,62 @@ func (p *AWSProvider) createInfra(ctx context.Context, _ *mcp.CallToolRequest, i
 	}
 
 	// Check spending limits.
+	// Per spec ralph/specs/cost-estimation.md: Use CostTracker for actual spend, with fallback.
 	limits, _ := spending.LoadLimits()
-	deployments, _ := p.store.ListDeployments()
+
+	// Try to get actual spend from Cost Explorer.
+	cfg, err := awsclient.LoadConfig(ctx, plan.Region)
+	if err != nil {
+		return nil, createInfraOutput{}, err
+	}
+
 	var currentSpend float64
-	for _, d := range deployments {
-		if d.Status == state.DeploymentStatusRunning {
-			// Get infra to find cost (simplified: count active deployments * avg cost)
-			currentSpend += 25.0
+	costTracker := spending.NewCostTracker(cfg)
+	actualSpend, costErr := costTracker.GetTotalMonthlySpend(ctx)
+	if costErr != nil {
+		// Fall back to estimate from local state if Cost Explorer unavailable.
+		// Per spec: Log warning but don't block provisioning.
+		slog.Warn("could not query Cost Explorer, using local estimate",
+			slog.String("component", "aws_create_infra"),
+			logging.Err(costErr))
+
+		// Sum estimated costs from running deployments.
+		deployments, _ := p.store.ListDeployments()
+		plans, _ := p.store.ListPlans()
+		planCosts := make(map[string]float64)
+		for _, pl := range plans {
+			planCosts[pl.ID] = pl.EstimatedCostMo
 		}
+
+		for _, d := range deployments {
+			if d.Status == state.DeploymentStatusRunning {
+				// Get infrastructure to find plan, then get estimated cost.
+				infra, infraErr := p.store.GetInfra(d.InfraID)
+				if infraErr == nil && infra != nil {
+					if cost, ok := planCosts[infra.PlanID]; ok {
+						currentSpend += cost
+					} else {
+						// Fallback if plan not found.
+						currentSpend += 25.0
+					}
+				} else {
+					currentSpend += 25.0
+				}
+			}
+		}
+	} else {
+		// Use projected monthly cost from Cost Explorer.
+		currentSpend = actualSpend.ProjectedMonthUSD
+		slog.Info("retrieved actual spend from Cost Explorer",
+			slog.String("component", "aws_create_infra"),
+			slog.Float64("current_spend_usd", currentSpend),
+			slog.Float64("total_cost_usd", actualSpend.TotalCostUSD),
+			slog.Float64("projected_month_usd", actualSpend.ProjectedMonthUSD))
 	}
 
 	check := spending.CheckBudget(plan.EstimatedCostMo, limits, currentSpend)
 	if !check.Allowed {
 		return nil, createInfraOutput{}, fmt.Errorf("%w: %s", apperrors.ErrBudgetExceeded, check.Reason)
-	}
-
-	// Load AWS config.
-	cfg, err := awsclient.LoadConfig(ctx, plan.Region)
-	if err != nil {
-		return nil, createInfraOutput{}, err
 	}
 
 	// Create infrastructure record.

@@ -82,13 +82,13 @@
 | AWS 5 tools | ⚠️ **9+ hardcoded values** | See P1 issues below |
 | AWS `aws:deployments` resource | ✅ **Implemented** | `internal/providers/aws.go` |
 | AWS `aws_deploy_plan` prompt | ✅ **Implemented** | `internal/providers/aws.go` |
-| Cost estimation (planInfra) | ❌ **Hardcoded** | `baseCost=15.0, ecsCost=users*0.02, albCost=20.0` (aws.go:153-158) |
-| Current spend calculation | ❌ **Hardcoded** | `$25/deployment` constant at aws.go:220; Cost Explorer NOT wired to planInfra |
+| Cost estimation (planInfra) | ✅ **IMPLEMENTED** | PricingEstimator with AWS Pricing API, regional lookup, 24h cache |
+| Current spend calculation | ✅ **IMPLEMENTED** | CostTracker.GetTotalMonthlySpend() from Cost Explorer with fallback |
 | Auto-teardown | ✅ **Working** | TeardownCallback wired to AWS provider's teardown method |
 | CI/CD workflows | ✅ **Working** | `.github/workflows/ci.yml`, `.golangci.yml` |
 | golangci-lint config | ✅ **Working** | `.golangci.yml` with version 2 format |
 | IAM role provisioning | ✅ **Done** | `provisionExecutionRole()`, `deleteExecutionRole()`, `ResourceExecutionRole` constant |
-| go.mod dependencies | ⚠️ **Incomplete** | Missing `github.com/aws/aws-sdk-go-v2/service/pricing` |
+| go.mod dependencies | ✅ **Complete** | All AWS SDK dependencies including `github.com/aws/aws-sdk-go-v2/service/pricing` |
 | Auto Scaling | ✅ **IMPLEMENTED** | MinCount, MaxCount, CPU/memory target tracking policies |
 | TLS/HTTPS | ✅ **IMPLEMENTED** | ACM certificate validation, HTTPS listener, HTTP-to-HTTPS redirect |
 | Private subnets | ✅ **IMPLEMENTED** | Public/private subnet architecture with NAT Gateway |
@@ -156,28 +156,27 @@
 
 ## P1 — Spec Compliance Gaps
 
-### P1.1 Cost Estimation Uses Hardcoded Values ❌
+### P1.1 Cost Estimation Uses Hardcoded Values ✅ COMPLETED
 
-- [ ] Add `github.com/aws/aws-sdk-go-v2/service/pricing` to `go.mod`
-- [ ] Integrate AWS Pricing API for accurate cost estimates
-- [ ] Replace hardcoded formula at `aws.go:153-158`:
-  - `baseCost := 15.0`
-  - `ecsCost := expectedUsers * 0.02`
-  - `albCost := 20.0`
-- [ ] Cache pricing data to avoid repeated API calls
-- **Impact:** Cost estimates are inaccurate; spec `ralph/specs/aws-provider.md` requires AWS Pricing API
-- **Location:** `internal/providers/aws.go:153-158`, `go.mod`
-- **Audit (2026-03-20):** Verified hardcoded values, missing go.mod dependency
+- [x] Added `github.com/aws/aws-sdk-go-v2/service/pricing` to `go.mod`
+- [x] Created `internal/spending/pricing.go` with PricingEstimator
+- [x] Integrated AWS Pricing API for accurate cost estimates with regional pricing lookup
+- [x] Updated planInfra to use PricingEstimator with detailed cost breakdown
+- [x] Implemented 24-hour cache for pricing data to avoid repeated API calls
+- [x] Fallback to hardcoded regional estimates when API unavailable
+- [x] Added comprehensive tests in `internal/spending/pricing_test.go`
+- **Location:** `internal/spending/pricing.go`, `internal/providers/aws.go`, `go.mod`
+- **Completed:** PricingEstimator with AWS Pricing API integration, regional pricing lookup, and caching
 
-### P1.2 Current Spend Calculation Hardcoded ❌
+### P1.2 Current Spend Calculation Hardcoded ✅ COMPLETED
 
-- [ ] Replace hardcoded `currentSpend += 25.0` at `aws.go:220` with actual Cost Explorer data
-- [ ] Cost Explorer IS implemented in `internal/spending/costs.go` but NOT called from `planInfra`
-- [ ] Wire up `CostTracker.GetDeploymentCosts()` or `GetTotalMonthlySpend()`
-- **Impact:** Budget checks use fake numbers; could allow overspend or wrongly block deployments
-- **Location:** `internal/providers/aws.go:220`
-- **Depends on:** None (P0.3 now completed)
-- **Audit (2026-03-20):** Verified Cost Explorer implemented but not wired to planInfra
+- [x] Updated createInfra to use `CostTracker.GetTotalMonthlySpend()` from Cost Explorer
+- [x] Removed hardcoded `currentSpend += 25.0` at `aws.go:220`
+- [x] Falls back to local state estimates when Cost Explorer unavailable
+- [x] Uses plan `EstimatedCostMo` for each running deployment as fallback
+- [x] Improved logging for spend calculation source (Cost Explorer vs fallback)
+- **Location:** `internal/providers/aws.go`
+- **Completed:** Real spend data from Cost Explorer with graceful fallback to state-based estimates
 
 ### P1.3 Container Port Hardcoded to 80 (5 locations) ✅ COMPLETED
 
