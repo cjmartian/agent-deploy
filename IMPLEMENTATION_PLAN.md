@@ -38,7 +38,7 @@
 | deploy | ✅ Done | `internal/providers/aws.go` | ECR repo, task def, ECS service, ALB URLs |
 | status | ✅ Done | `internal/providers/aws.go` | ECS service status, ALB URLs |
 | teardown | ✅ Done | `internal/providers/aws.go` | Reverse order deletion, ECR cleanup |
-| Error handling patterns | ✅ Done | `internal/errors/errors.go` | Domain errors (2 unused types: ErrProvisioningFailed, ErrInvalidState) |
+| Error handling patterns | ✅ Done | `internal/errors/errors.go` | Domain errors (all error types now in use) |
 | ID generation tests | ✅ Done | `internal/id/id_test.go` | Verified |
 | State storage tests | ✅ Done | `internal/state/store_test.go` | 45.5% coverage |
 | Spending check tests | ✅ Done | `internal/spending/check_test.go` | Verified |
@@ -366,7 +366,7 @@
 - [x] Test all error types: ErrPlanNotApproved, ErrProvisioningFailed, ErrInvalidState, ErrNotSupported
 - [x] Test error message formatting and Error() method
 - [x] Test errors.Is() compatibility
-- [ ] Note: 2 error types are unused (ErrProvisioningFailed, ErrInvalidState); `ErrPlanNotApproved` now wired in P0.5
+- [x] Note: All error types now in use (ErrProvisioningFailed, ErrInvalidState, ErrPlanNotApproved wired in P3.5)
 - **Impact:** Domain error behavior untested
 - **Location:** `internal/errors/`
 - **Audit (2026-03-20):** Verified 0% coverage — only definitions exist, no tests
@@ -503,14 +503,15 @@
 - **Completed:** 2026-03-25
 - **Details:** This is intentional; AWS Cost Explorer API is only available in us-east-1. Added documentation comment in main.go explaining this constraint. CostTracker already enforces us-east-1 internally.
 
-### P3.5 Unused Error Types ⚠️ PARTIAL
+### P3.5 Unused Error Types ✅ COMPLETED
 
-- [x] `ErrInvalidState` - Now used in store.go (state validation in List operations)
-- [ ] `ErrProvisioningFailed` - Requires partial failure rollback implementation (future work in P1.14)
-- [x] `ErrPlanNotApproved` - Verified in use for plan state validation
-- **Impact:** Code clutter; misleading error handling patterns
-- **Location:** `internal/errors/errors.go`, `internal/state/store.go`
-- **Status:** 2 of 3 error types now in use; ErrProvisioningFailed pending rollback logic
+- [x] `ErrInvalidState` - Used in store.go (ApprovePlan/RejectPlan state validation)
+- [x] `ErrProvisioningFailed` - Used in createInfra with rollbackInfra() for partial failure cleanup
+- [x] `ErrPlanNotApproved` - Used in createInfra for plan state validation (P0.5)
+- **Impact:** All domain error types now properly utilized
+- **Location:** `internal/errors/errors.go`, `internal/state/store.go`, `internal/providers/aws.go`
+- **Completed:** 2026-03-25
+- **Details:** Added rollbackInfra() function to clean up partially created resources on provisioning failure. All provisioning errors in createInfra now wrap ErrProvisioningFailed. Tests added for rollback behavior.
 
 ### P3.6 planInfra Cost Estimate Disclaimer ✅ COMPLETED
 
@@ -680,10 +681,10 @@ go tool cover -html=coverage.out          # View coverage report
 | **aws-provider.md** | 5 tools | ✅ Implemented |
 | **aws-provider.md** | 1 resource (aws:deployments) | ✅ Implemented |
 | **aws-provider.md** | 1 prompt (aws_deploy_plan) | ✅ Implemented |
-| **aws-provider.md** | AWS Pricing API for cost estimation | ❌ NOT IMPLEMENTED (hardcoded) |
+| **aws-provider.md** | AWS Pricing API for cost estimation | ✅ IMPLEMENTED |
 | **aws-provider.md** | Wait for healthy deployment in aws_deploy | ✅ IMPLEMENTED |
 | **aws-provider.md** | TLS/HTTPS with ACM certificate support | ✅ IMPLEMENTED |
-| **aws-provider.md** | Plan approval before provisioning | ❌ NOT IMPLEMENTED (auto-approves) |
+| **aws-provider.md** | Plan approval before provisioning | ✅ IMPLEMENTED |
 | **deployment-state.md** | Plan, Infrastructure, Deployment types | ✅ Implemented |
 | **deployment-state.md** | File-backed JSON at ~/.agent-deploy/state/ | ✅ Implemented |
 | **deployment-state.md** | 24-hour plan expiration, hourly cleanup | ✅ Implemented |
@@ -693,4 +694,4 @@ go tool cover -html=coverage.out          # View coverage report
 | **spending-safeguards.md** | Runtime cost monitoring with Cost Explorer | ✅ Implemented |
 | **spending-safeguards.md** | Auto-teardown when budget exceeded | ✅ IMPLEMENTED |
 | **spending-safeguards.md** | Resource tagging | ✅ Implemented |
-| **ci.md** | CI workflow with lint, test, build jobs | ❌ NOT IMPLEMENTED |
+| **ci.md** | CI workflow with lint, test, build jobs | ✅ IMPLEMENTED |

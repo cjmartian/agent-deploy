@@ -451,52 +451,78 @@ func (p *AWSProvider) createInfra(ctx context.Context, _ *mcp.CallToolRequest, i
 
 	tags := awsclient.ResourceTags(plan.ID, infraID, "")
 
-	// Provision resources in order.
+	// Provision resources in order. On failure, rollback already-created resources.
+	// WHY: Per spec ralph/specs/error-handling.md - partial failures must clean up
+	// to prevent orphaned AWS resources and unexpected costs.
 	if err := p.provisionVPC(ctx, cfg, infra, tags); err != nil {
+		rollbackErr := p.rollbackInfra(ctx, cfg, infra)
+		if rollbackErr != nil {
+			slog.Error("rollback failed after VPC error", logging.Err(rollbackErr), logging.InfraID(infraID))
+		}
 		if statusErr := p.store.SetInfraStatus(infraID, state.InfraStatusFailed); statusErr != nil {
 			slog.Error("failed to set infra status", "infraID", infraID, "error", statusErr)
 		}
-		return nil, createInfraOutput{}, fmt.Errorf("provision VPC: %w", err)
+		return nil, createInfraOutput{}, fmt.Errorf("%w: provision VPC: %v", apperrors.ErrProvisioningFailed, err)
 	}
 
 	if err := p.provisionECSCluster(ctx, cfg, infra, tags); err != nil {
+		rollbackErr := p.rollbackInfra(ctx, cfg, infra)
+		if rollbackErr != nil {
+			slog.Error("rollback failed after ECS cluster error", logging.Err(rollbackErr), logging.InfraID(infraID))
+		}
 		if statusErr := p.store.SetInfraStatus(infraID, state.InfraStatusFailed); statusErr != nil {
 			slog.Error("failed to set infra status", "infraID", infraID, "error", statusErr)
 		}
-		return nil, createInfraOutput{}, fmt.Errorf("provision ECS cluster: %w", err)
+		return nil, createInfraOutput{}, fmt.Errorf("%w: provision ECS cluster: %v", apperrors.ErrProvisioningFailed, err)
 	}
 
 	// Validate certificate if provided (before creating ALB with HTTPS listener).
 	if in.CertificateARN != "" {
 		if err := p.validateCertificate(ctx, cfg, in.CertificateARN); err != nil {
+			rollbackErr := p.rollbackInfra(ctx, cfg, infra)
+			if rollbackErr != nil {
+				slog.Error("rollback failed after certificate validation error", logging.Err(rollbackErr), logging.InfraID(infraID))
+			}
 			if statusErr := p.store.SetInfraStatus(infraID, state.InfraStatusFailed); statusErr != nil {
 				slog.Error("failed to set infra status", "infraID", infraID, "error", statusErr)
 			}
-			return nil, createInfraOutput{}, fmt.Errorf("validate certificate: %w", err)
+			return nil, createInfraOutput{}, fmt.Errorf("%w: validate certificate: %v", apperrors.ErrProvisioningFailed, err)
 		}
 	}
 
 	if err := p.provisionALB(ctx, cfg, infra, tags, in.CertificateARN); err != nil {
+		rollbackErr := p.rollbackInfra(ctx, cfg, infra)
+		if rollbackErr != nil {
+			slog.Error("rollback failed after ALB error", logging.Err(rollbackErr), logging.InfraID(infraID))
+		}
 		if statusErr := p.store.SetInfraStatus(infraID, state.InfraStatusFailed); statusErr != nil {
 			slog.Error("failed to set infra status", "infraID", infraID, "error", statusErr)
 		}
-		return nil, createInfraOutput{}, fmt.Errorf("provision ALB: %w", err)
+		return nil, createInfraOutput{}, fmt.Errorf("%w: provision ALB: %v", apperrors.ErrProvisioningFailed, err)
 	}
 
 	// Create IAM execution role for ECS tasks (needed before tasks can run).
 	if err := p.provisionExecutionRole(ctx, cfg, infra, tags); err != nil {
+		rollbackErr := p.rollbackInfra(ctx, cfg, infra)
+		if rollbackErr != nil {
+			slog.Error("rollback failed after execution role error", logging.Err(rollbackErr), logging.InfraID(infraID))
+		}
 		if statusErr := p.store.SetInfraStatus(infraID, state.InfraStatusFailed); statusErr != nil {
 			slog.Error("failed to set infra status", "infraID", infraID, "error", statusErr)
 		}
-		return nil, createInfraOutput{}, fmt.Errorf("provision execution role: %w", err)
+		return nil, createInfraOutput{}, fmt.Errorf("%w: provision execution role: %v", apperrors.ErrProvisioningFailed, err)
 	}
 
 	// Create CloudWatch log group for ECS task logs.
 	if err := p.provisionLogGroup(ctx, cfg, infra, tags, in.LogRetentionDays); err != nil {
+		rollbackErr := p.rollbackInfra(ctx, cfg, infra)
+		if rollbackErr != nil {
+			slog.Error("rollback failed after log group error", logging.Err(rollbackErr), logging.InfraID(infraID))
+		}
 		if statusErr := p.store.SetInfraStatus(infraID, state.InfraStatusFailed); statusErr != nil {
 			slog.Error("failed to set infra status", "infraID", infraID, "error", statusErr)
 		}
-		return nil, createInfraOutput{}, fmt.Errorf("provision log group: %w", err)
+		return nil, createInfraOutput{}, fmt.Errorf("%w: provision log group: %v", apperrors.ErrProvisioningFailed, err)
 	}
 
 	// Mark infrastructure as ready.
@@ -2181,6 +2207,83 @@ func (p *AWSProvider) deleteRouteTable(ctx context.Context, ec2Client *ec2.Clien
 	}); err != nil {
 		return fmt.Errorf("delete route table: %w", err)
 	}
+	return nil
+}
+
+// rollbackInfra tears down any resources recorded in the infrastructure record.
+// WHY: Per spec ralph/specs/error-handling.md - when createInfra fails partway
+// through, we must clean up already-created resources to prevent orphaned AWS
+// resources and unexpected costs.
+//
+// Errors during rollback are logged but don't prevent continued cleanup attempts.
+// The function cleans up resources in reverse order of creation.
+func (p *AWSProvider) rollbackInfra(ctx context.Context, cfg aws.Config, infra *state.Infrastructure) error {
+	log := logging.WithComponent("rollback")
+	log.Info("starting rollback", logging.InfraID(infra.ID))
+
+	var rollbackErrors []string
+
+	// Delete in reverse order of creation to respect dependencies.
+	// Order: log group -> execution role -> ALB -> ECS cluster -> VPC resources
+
+	if infra.Resources[state.ResourceLogGroup] != "" {
+		if err := p.deleteLogGroup(ctx, cfg, infra); err != nil {
+			log.Warn("rollback: failed to delete log group", logging.Err(err), logging.InfraID(infra.ID))
+			rollbackErrors = append(rollbackErrors, "log group: "+err.Error())
+		} else {
+			log.Info("rollback: deleted log group", logging.InfraID(infra.ID))
+		}
+	}
+
+	if infra.Resources[state.ResourceExecutionRole] != "" {
+		if err := p.deleteExecutionRole(ctx, cfg, infra); err != nil {
+			log.Warn("rollback: failed to delete execution role", logging.Err(err), logging.InfraID(infra.ID))
+			rollbackErrors = append(rollbackErrors, "execution role: "+err.Error())
+		} else {
+			log.Info("rollback: deleted execution role", logging.InfraID(infra.ID))
+		}
+	}
+
+	if infra.Resources[state.ResourceALB] != "" {
+		if err := p.deleteALB(ctx, cfg, infra); err != nil {
+			log.Warn("rollback: failed to delete ALB", logging.Err(err), logging.InfraID(infra.ID))
+			rollbackErrors = append(rollbackErrors, "ALB: "+err.Error())
+		} else {
+			log.Info("rollback: deleted ALB", logging.InfraID(infra.ID))
+		}
+	}
+
+	if infra.Resources[state.ResourceECSCluster] != "" {
+		if err := p.deleteECSCluster(ctx, cfg, infra); err != nil {
+			log.Warn("rollback: failed to delete ECS cluster", logging.Err(err), logging.InfraID(infra.ID))
+			rollbackErrors = append(rollbackErrors, "ECS cluster: "+err.Error())
+		} else {
+			log.Info("rollback: deleted ECS cluster", logging.InfraID(infra.ID))
+		}
+	}
+
+	if infra.Resources[state.ResourceVPC] != "" {
+		if err := p.deleteVPCResources(ctx, cfg, infra); err != nil {
+			log.Warn("rollback: failed to delete VPC resources", logging.Err(err), logging.InfraID(infra.ID))
+			rollbackErrors = append(rollbackErrors, "VPC: "+err.Error())
+		} else {
+			log.Info("rollback: deleted VPC resources", logging.InfraID(infra.ID))
+		}
+	}
+
+	// Mark infra as destroyed after rollback attempt.
+	if err := p.store.SetInfraStatus(infra.ID, state.InfraStatusDestroyed); err != nil {
+		log.Warn("rollback: failed to set infra status to destroyed", logging.Err(err), logging.InfraID(infra.ID))
+	}
+
+	if len(rollbackErrors) > 0 {
+		log.Warn("rollback completed with errors",
+			logging.InfraID(infra.ID),
+			logging.Count(len(rollbackErrors)))
+		return fmt.Errorf("partial rollback: %s", strings.Join(rollbackErrors, "; "))
+	}
+
+	log.Info("rollback completed successfully", logging.InfraID(infra.ID))
 	return nil
 }
 
