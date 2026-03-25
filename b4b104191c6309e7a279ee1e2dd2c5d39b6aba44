@@ -1,0 +1,33 @@
+Implementation Notes for TLS/HTTPS Support (P1.7):
+
+WHY:
+- Production deployments require HTTPS for security
+- ACM provides free, auto-renewing SSL certificates
+- Spec required optional TLS with HTTP redirect
+
+WHAT WAS IMPLEMENTED:
+1. certificate_arn parameter in createInfraInput
+2. validateCertificate() - validates ARN format, calls ACM DescribeCertificate
+3. provisionALB() - creates HTTPS listener (443) with TLS 1.2+ policy
+4. HTTP redirect (301) when HTTPS enabled
+5. URL scheme detection in getALBURLs()
+
+KEY DESIGN DECISIONS:
+- TLS policy: ELBSecurityPolicy-TLS13-1-2-2021-06 (modern, TLS 1.2+)
+- Store tls_enabled and certificate_arn in infra.Resources for persistence
+- Validate certificate before ALB creation to fail fast
+- HTTP listener becomes redirect (not forward) when HTTPS enabled
+
+TEST COVERAGE:
+- Certificate ARN format validation
+- Infrastructure TLS resource storage
+- URL scheme detection based on TLS enabled
+
+DEPENDENCIES ADDED:
+- github.com/aws/aws-sdk-go-v2/service/acm
+
+FILES MODIFIED:
+- internal/providers/aws.go (main implementation)
+- internal/state/types.go (ResourceTLSEnabled, ResourceCertificateARN)
+- internal/providers/aws_test.go (new tests)
+- go.mod, go.sum (ACM dependency)
