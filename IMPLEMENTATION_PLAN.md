@@ -509,12 +509,13 @@
 - **Location:** `internal/errors/errors.go`, `internal/state/store.go`
 - **Status:** 2 of 3 error types now in use; ErrProvisioningFailed pending rollback logic
 
-### P3.6 planInfra Cost Estimate Disclaimer ❌
+### P3.6 planInfra Cost Estimate Disclaimer ✅ COMPLETED
 
-- [ ] Update planInfra output to clearly indicate estimate is approximate
-- [ ] Add disclaimer when using hardcoded values (until P1.1 done)
-- **Impact:** Users may rely on inaccurate estimates
-- **Location:** `internal/providers/aws.go:152`
+- The disclaimer is already implemented in internal/spending/pricing.go
+- "Estimate based on AWS pricing. Actual costs may vary based on usage." is set on every cost estimate
+- When using fallback pricing, an additional assumption is added: "Using fallback pricing estimates (Pricing API unavailable)"
+- The summary in planInfra includes the disclaimer when present
+- **Completed:** 2026-03-25 (was already implemented, just marked as done)
 
 ### P3.7 Makefile Missing Targets ✅ COMPLETED
 
@@ -663,9 +664,9 @@ go tool cover -html=coverage.out          # View coverage report
 | **P0 Critical** | 0 | ✅ All completed |
 | **P1 Spec Gaps** | 11 | Cost estimation, HTTPS, VPC, subnets, etc. (P1.12 Auto Scaling completed) |
 | **P2 Test Gaps** | 6 | provider.go (0%), aws.go (18.2%), coverage, unit testing (P2.6, P2.8 completed) |
-| **P3 Quality** | 4 | Pagination, ALB tags, errors, disclaimer (P3.3, P3.4, P3.7, P3.8 completed) |
+| **P3 Quality** | 3 | Pagination, ALB tags, errors (P3.3, P3.4, P3.6, P3.7, P3.8 completed) |
 | **P5 Stretch** | 3 | CloudFormation, multi-cloud, secrets |
-| **Total** | **27** | |
+| **Total** | **26** | |
 
 ---
 
