@@ -1,0 +1,26 @@
+Implementation Notes (07dcb71):
+
+WHAT: Added dependency injection for AWS clients to enable mock-based testing
+
+KEY CHANGES:
+1. AWSProvider struct now has optional 'clients *awsclient.AWSClients' field
+2. NewAWSProviderWithClients(store, clients) constructor for test injection
+3. getClients(cfg) helper returns injected mocks or creates real AWS clients
+4. Updated 9 provisioning/deletion functions to use getClients()
+
+TEST COVERAGE GAINS:
+- providers/aws.go: 27.5% → 42.9% (+15.4%)
+- provisionVPC: 0% → 77%
+- provisionECSCluster: 0% → 90.9%
+- provisionALB: 0% → 61.4%
+
+PATTERN FOR ADDING MORE TESTS:
+1. Create mock clients: ec2Mock := &mocks.EC2Mock{}
+2. Inject via: provider := NewAWSProviderWithClients(store, &awsclient.AWSClients{EC2: ec2Mock})
+3. Call the function being tested
+4. Verify mock call counts: ec2Mock.CreateVpcCalls
+
+REMAINING WORK (P2.5):
+- More functions still need getClients() migration (see grep for NewFromConfig)
+- Integration tests with LocalStack (P2.7)
+- Error path testing for edge cases
