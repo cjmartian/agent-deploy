@@ -94,7 +94,7 @@
 | Private subnets | ✅ **IMPLEMENTED** | Public/private subnet architecture with NAT Gateway |
 | Plan approval | ✅ **IMPLEMENTED** | `aws_approve_plan` tool with explicit approval workflow |
 | Wait for healthy deployment | ✅ **Done** | waitForHealthyDeployment polls ECS/ALB |
-| Test coverage | ⚠️ **Improved** | Overall 48.0%; `spending/` at 50.6%; `providers/aws.go` at 42.8%; `providers/provider.go` at ~80% |
+| Test coverage | ✅ **TARGET MET** | Overall 51.0% (target 50%); `spending/` at 67.4%; `state/` at 82.0%; `awsclient/` at 91.7% |
 | Structured logging | ✅ **Done** | All log.Printf migrated to slog (30 in aws.go, 1 in provider.go, ~4 in costs.go) |
 | AWS SDK Mocking Infrastructure | ✅ **Complete** | Mock interfaces (EC2API, ECSAPI, ELBV2API, IAMAPI, ECRAPI, CloudWatchLogsAPI, AutoScalingAPI, ACMAPI), AWSClients struct, compile-time verification |
 | Makefile | ✅ **Complete** | all, test-race, coverage, coverage-html, run, install, help targets added |
@@ -349,7 +349,9 @@
 
 ## P2 — Test Coverage Gaps
 
-> **Note:** CI now tracks coverage percentage and will fail if it drops below 25% (see `.github/workflows/ci.yml`). Target is 50% per `ralph/specs/testing.md`.
+> **🎉 MAJOR MILESTONE: 51% overall test coverage achieved — exceeds the 50% target!**
+>
+> **Note:** CI now tracks coverage percentage and will fail if it drops below 25% (see `.github/workflows/ci.yml`). Target is 50% per `ralph/specs/testing.md` — **TARGET MET**.
 
 ### P2.1 AWS Client Package Has No Tests (0% coverage) ✅ COMPLETED
 
@@ -469,7 +471,7 @@
 - **Location:** `internal/state/`
 - **Audit (2026-03-25):** Coverage improved from 44.4% to 82.0% via reconciler mock tests
 
-### P2.11 Spending Package Coverage (50.6%) ✅ IMPROVED
+### P2.11 Spending Package Coverage (67.4%) ✅ COMPLETE
 
 - [x] Added CostExplorerAPI interface for dependency injection
 - [x] Added NewCostTrackerWithClient() constructor
@@ -481,11 +483,11 @@
   - CheckAlerts
   - GetDeploymentsOverBudget
   - GenerateMonitoringReport
-- [ ] CostMonitor lifecycle tests (Start/Stop) - requires goroutine testing
-- [ ] PricingEstimator tests - requires Pricing API mock
-**Coverage:** 23.0% → 50.6%
+- [x] CostMonitor lifecycle tests (Start/Stop)
+- [x] PricingEstimator tests
+**Coverage:** 23.0% → 67.4%
 **Location:** `internal/spending/costs.go`, `internal/spending/costs_test.go`
-**Completed:** 2026-03-25 (partial)
+**Completed:** 2026-03-25
 
 ---
 
@@ -640,9 +642,9 @@ go tool cover -html=coverage.out          # View coverage report
 | `internal/providers/provider.go` | **80%** | All(), AllWithStore(), GetAWSProvider() tested |
 | `internal/providers/aws.go` | **42.9%** | planInfra, deploy, teardown, status, approval workflows, provisionVPC, provisionECSCluster, provisionALB tested |
 | `internal/main.go` | **0%** | Test file doesn't test main() |
-| `internal/spending/` | **50.6%** | CostTracker tests added |
+| `internal/spending/` | **67.4%** | CostTracker, CostMonitor, PricingEstimator tests added |
 | `internal/state/` | **82.0%** | Reconciler tests added, comprehensive coverage |
-| **Overall** | **48.0%** | Approaching target 50% |
+| **Overall** | **51.0%** | ✅ **TARGET MET** (target: 50%) |
 
 ### Key Files
 
@@ -693,7 +695,7 @@ go tool cover -html=coverage.out          # View coverage report
 |----------|-------|-------|
 | **P0 Critical** | 0 | ✅ All completed |
 | **P1 Spec Gaps** | 0 | ✅ All completed (P1.1-P1.18) — Cost estimation, HTTPS, VPC, subnets, auto scaling, etc. |
-| **P2 Test Gaps** | 3 | P2.9, P2.10, P2.11 — main.go coverage, edge cases; P2.5 mostly done (only error scenario tests remain); P2.7 completed |
+| **P2 Test Gaps** | 2 | P2.9 (main.go), P2.5 (error scenarios) — **50% target achieved**; P2.10, P2.11 completed |
 | **P3 Quality** | 0 | ✅ All completed (P3.1-P3.8) |
 | **P5 Stretch** | 3 | CloudFormation, multi-cloud, secrets |
 | **Total** | **6** | |
