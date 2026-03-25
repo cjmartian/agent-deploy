@@ -1,0 +1,38 @@
+P1.12 Auto Scaling Implementation
+
+Changes made:
+- Added github.com/aws/aws-sdk-go-v2/service/applicationautoscaling dependency
+- Extended deployInput struct with 4 new fields: MinCount, MaxCount, TargetCPUPercent, TargetMemPercent
+- Created scalingInfo struct for status reporting
+- Added validateAutoScalingParams() with validation per spec:
+  * min_count >= 1
+  * max_count >= min_count
+  * target_cpu_percent between 10-90
+  * target_memory_percent between 10-90
+  * Warning (not error) for max_count > 10
+
+Implementation details:
+- configureAutoScaling() registers ECS service as scalable target
+- Creates 2 target tracking policies (CPU and Memory)
+- Cooldowns: 60s scale-out (react fast), 300s scale-in (avoid thrashing)
+- deleteAutoScaling() cleans up policies then deregisters target
+- getScalingInfo() retrieves config from AWS for status reporting
+
+Integration:
+- deploy() calls configureAutoScaling when max_count > desired_count
+- teardown() calls deleteAutoScaling BEFORE deleting ECS service
+- status() includes scaling info when configured
+
+Testing:
+- TestValidateAutoScalingParams: 9 test cases
+- TestExtractClusterName: 4 test cases
+- TestExtractServiceName: 4 test cases
+- TestDeployInput_AutoScalingDefaults: verifies struct fields
+- TestStatusOutput_ScalingInfo: verifies JSON serialization
+- TestStatusOutput_NoScaling: verifies omitempty
+
+Why auto-scaling matters:
+- Enables cost-efficient scaling based on actual load
+- Protects against traffic spikes by scaling out quickly
+- Avoids over-provisioning during low traffic periods
+- Required by ralph/specs/auto-scaling.md spec
