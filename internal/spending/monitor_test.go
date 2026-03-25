@@ -5,6 +5,10 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/costexplorer"
+	cetypes "github.com/aws/aws-sdk-go-v2/service/costexplorer/types"
 )
 
 func TestDefaultMonitorConfig(t *testing.T) {
@@ -375,4 +379,315 @@ func TestPercentUsedCalculation(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ============================================================================
+// CostMonitor lifecycle tests
+// ============================================================================
+
+func TestNewCostMonitorWithTracker(t *testing.T) {
+// Create a mock tracker
+mockClient := &mockCostExplorerClient{}
+tracker := NewCostTrackerWithClient(mockClient)
+
+limits := Limits{
+MonthlyBudgetUSD:      100.0,
+PerDeploymentUSD:      25.0,
+AlertThresholdPercent: 80,
+}
+
+config := MonitorConfig{
+CheckInterval: 5 * time.Minute,
+}
+
+monitor := NewCostMonitorWithTracker(tracker, limits, config)
+
+if monitor == nil {
+t.Fatal("Expected non-nil CostMonitor")
+}
+if monitor.tracker != tracker {
+t.Error("Expected tracker to be the injected tracker")
+}
+if monitor.config.CheckInterval != 5*time.Minute {
+t.Errorf("Expected CheckInterval 5m, got %v", monitor.config.CheckInterval)
+}
+}
+
+func TestNewCostMonitorWithTracker_DefaultInterval(t *testing.T) {
+mockClient := &mockCostExplorerClient{}
+tracker := NewCostTrackerWithClient(mockClient)
+
+limits := DefaultLimits()
+config := MonitorConfig{} // Zero interval
+
+monitor := NewCostMonitorWithTracker(tracker, limits, config)
+
+// Should default to 1 hour
+if monitor.config.CheckInterval != 1*time.Hour {
+t.Errorf("Expected default CheckInterval 1h, got %v", monitor.config.CheckInterval)
+}
+}
+
+func TestCostMonitor_IsRunning(t *testing.T) {
+mockClient := &mockCostExplorerClient{}
+tracker := NewCostTrackerWithClient(mockClient)
+limits := DefaultLimits()
+config := MonitorConfig{CheckInterval: 100 * time.Millisecond}
+
+monitor := NewCostMonitorWithTracker(tracker, limits, config)
+
+// Initially not running
+if monitor.IsRunning() {
+t.Error("Monitor should not be running initially")
+}
+}
+
+func TestCostMonitor_LastRunTime(t *testing.T) {
+mockClient := &mockCostExplorerClient{}
+tracker := NewCostTrackerWithClient(mockClient)
+limits := DefaultLimits()
+config := MonitorConfig{CheckInterval: 100 * time.Millisecond}
+
+monitor := NewCostMonitorWithTracker(tracker, limits, config)
+
+// Initially zero
+if !monitor.LastRunTime().IsZero() {
+t.Error("LastRunTime should be zero initially")
+}
+}
+
+func TestCostMonitor_LastError(t *testing.T) {
+mockClient := &mockCostExplorerClient{}
+tracker := NewCostTrackerWithClient(mockClient)
+limits := DefaultLimits()
+config := MonitorConfig{CheckInterval: 100 * time.Millisecond}
+
+monitor := NewCostMonitorWithTracker(tracker, limits, config)
+
+// Initially nil
+if monitor.LastError() != nil {
+t.Error("LastError should be nil initially")
+}
+}
+
+func TestCostMonitor_Stats(t *testing.T) {
+mockClient := &mockCostExplorerClient{}
+tracker := NewCostTrackerWithClient(mockClient)
+limits := DefaultLimits()
+config := MonitorConfig{CheckInterval: 100 * time.Millisecond}
+
+monitor := NewCostMonitorWithTracker(tracker, limits, config)
+
+stats := monitor.Stats()
+
+if stats.AlertsSent != 0 {
+t.Errorf("Expected AlertsSent 0, got %d", stats.AlertsSent)
+}
+if stats.TeardownsDone != 0 {
+t.Errorf("Expected TeardownsDone 0, got %d", stats.TeardownsDone)
+}
+if stats.Running {
+t.Error("Expected IsRunning false")
+}
+}
+
+func TestCostMonitor_StartStop(t *testing.T) {
+// Mock returns empty results quickly
+mockClient := &mockCostExplorerClient{
+GetCostAndUsageFunc: func(ctx context.Context, params *costexplorer.GetCostAndUsageInput, optFns ...func(*costexplorer.Options)) (*costexplorer.GetCostAndUsageOutput, error) {
+return &costexplorer.GetCostAndUsageOutput{
+ResultsByTime: []cetypes.ResultByTime{},
+}, nil
+},
+}
+tracker := NewCostTrackerWithClient(mockClient)
+limits := DefaultLimits()
+config := MonitorConfig{CheckInterval: 50 * time.Millisecond}
+
+monitor := NewCostMonitorWithTracker(tracker, limits, config)
+
+ctx := context.Background()
+
+// Start in a goroutine
+var wg sync.WaitGroup
+wg.Add(1)
+go func() {
+defer wg.Done()
+_ = monitor.Start(ctx)
+}()
+
+// Give it time to start
+time.Sleep(20 * time.Millisecond)
+
+if !monitor.IsRunning() {
+t.Error("Monitor should be running after Start")
+}
+
+// Stop
+monitor.Stop()
+
+// Wait for it to fully stop
+wg.Wait()
+
+if monitor.IsRunning() {
+t.Error("Monitor should not be running after Stop")
+}
+}
+
+func TestCostMonitor_StartTwice(t *testing.T) {
+mockClient := &mockCostExplorerClient{
+GetCostAndUsageFunc: func(ctx context.Context, params *costexplorer.GetCostAndUsageInput, optFns ...func(*costexplorer.Options)) (*costexplorer.GetCostAndUsageOutput, error) {
+return &costexplorer.GetCostAndUsageOutput{}, nil
+},
+}
+tracker := NewCostTrackerWithClient(mockClient)
+limits := DefaultLimits()
+config := MonitorConfig{CheckInterval: 100 * time.Millisecond}
+
+monitor := NewCostMonitorWithTracker(tracker, limits, config)
+ctx := context.Background()
+
+// Start first time
+var wg sync.WaitGroup
+wg.Add(1)
+go func() {
+defer wg.Done()
+_ = monitor.Start(ctx)
+}()
+
+time.Sleep(20 * time.Millisecond)
+
+// Try to start again - should error
+err := monitor.Start(ctx)
+if err == nil {
+t.Error("Expected error when starting already-running monitor")
+}
+
+monitor.Stop()
+wg.Wait()
+}
+
+func TestCostMonitor_CheckNow(t *testing.T) {
+callCount := 0
+mockClient := &mockCostExplorerClient{
+GetCostAndUsageFunc: func(ctx context.Context, params *costexplorer.GetCostAndUsageInput, optFns ...func(*costexplorer.Options)) (*costexplorer.GetCostAndUsageOutput, error) {
+callCount++
+return &costexplorer.GetCostAndUsageOutput{
+ResultsByTime: []cetypes.ResultByTime{
+{
+Total: map[string]cetypes.MetricValue{
+"UnblendedCost": {Amount: aws.String("50.00")},
+},
+},
+},
+}, nil
+},
+}
+tracker := NewCostTrackerWithClient(mockClient)
+limits := DefaultLimits()
+config := MonitorConfig{CheckInterval: 1 * time.Hour} // Long interval
+
+monitor := NewCostMonitorWithTracker(tracker, limits, config)
+ctx := context.Background()
+
+// Start monitor
+var wg sync.WaitGroup
+wg.Add(1)
+go func() {
+defer wg.Done()
+_ = monitor.Start(ctx)
+}()
+
+time.Sleep(20 * time.Millisecond)
+
+// CheckNow should trigger an immediate check
+monitor.CheckNow(ctx)
+
+// Give it time to process
+time.Sleep(50 * time.Millisecond)
+
+monitor.Stop()
+wg.Wait()
+
+// Should have made at least one check
+if callCount == 0 {
+t.Error("Expected at least one Cost Explorer call from CheckNow")
+}
+
+// LastRunTime should be set
+if monitor.LastRunTime().IsZero() {
+t.Error("LastRunTime should be set after check")
+}
+}
+
+func TestCostMonitor_AlertCallback(t *testing.T) {
+// Mock returns costs that trigger an alert
+mockClient := &mockCostExplorerClient{
+GetCostAndUsageFunc: func(ctx context.Context, params *costexplorer.GetCostAndUsageInput, optFns ...func(*costexplorer.Options)) (*costexplorer.GetCostAndUsageOutput, error) {
+// First call is for total spend, second is for by-deployment
+if params.GroupBy != nil && len(params.GroupBy) > 0 {
+return &costexplorer.GetCostAndUsageOutput{
+ResultsByTime: []cetypes.ResultByTime{
+{
+Groups: []cetypes.Group{
+{
+Keys:    []string{"deploy-alert"},
+Metrics: map[string]cetypes.MetricValue{"UnblendedCost": {Amount: aws.String("22.00")}},
+},
+},
+},
+},
+}, nil
+}
+return &costexplorer.GetCostAndUsageOutput{
+ResultsByTime: []cetypes.ResultByTime{
+{
+Total: map[string]cetypes.MetricValue{"UnblendedCost": {Amount: aws.String("22.00")}},
+},
+},
+}, nil
+},
+}
+tracker := NewCostTrackerWithClient(mockClient)
+
+alertReceived := false
+var alertMu sync.Mutex
+
+limits := Limits{
+MonthlyBudgetUSD:      100.0,
+PerDeploymentUSD:      25.0,
+AlertThresholdPercent: 80, // 80% of 25 = 20, so 22 should trigger
+}
+config := MonitorConfig{
+CheckInterval: 50 * time.Millisecond,
+AlertCallback: func(ctx context.Context, alert CostSummary) {
+alertMu.Lock()
+alertReceived = true
+alertMu.Unlock()
+},
+}
+
+monitor := NewCostMonitorWithTracker(tracker, limits, config)
+ctx := context.Background()
+
+var wg sync.WaitGroup
+wg.Add(1)
+go func() {
+defer wg.Done()
+_ = monitor.Start(ctx)
+}()
+
+// Wait for at least one check
+time.Sleep(150 * time.Millisecond)
+
+monitor.Stop()
+wg.Wait()
+
+alertMu.Lock()
+received := alertReceived
+alertMu.Unlock()
+
+if !received {
+t.Error("Expected alert callback to be called")
+}
 }
