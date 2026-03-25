@@ -33,7 +33,7 @@
 | **Runtime cost monitoring** | ✅ **100% compliant** | `internal/spending/monitor.go` | Background checking, alerts |
 | **Alert thresholds and notifications** | ✅ **100% compliant** | `internal/spending/monitor.go` | Verified |
 | **Resource tagging** | ✅ **100% compliant** | `internal/awsclient/client.go` | ResourceTags() |
-| Pre-provisioning budget check | ⚠️ 85% | `internal/spending/check.go` | CheckBudget(), CheckResult (uses hardcoded costs - see P1.1, P1.2) |
+| Pre-provisioning budget check | ✅ **100% compliant** | `internal/spending/check.go` | CheckBudget(), CheckResult — uses AWS Pricing API (P1.1) and Cost Explorer (P1.2) |
 | createInfra | ✅ Done | `internal/providers/aws.go` | VPC, subnets, IGW, route tables, SGs, ECS, ALB, CloudWatch |
 | deploy | ✅ Done | `internal/providers/aws.go` | ECR repo, task def, ECS service, ALB URLs |
 | status | ✅ Done | `internal/providers/aws.go` | ECS service status, ALB URLs |
@@ -79,7 +79,7 @@
 | **Cleanup service** | ✅ **Working** | `internal/state/cleanup.go` — 24-hour plan expiration with hourly cleanup |
 | **Cost monitoring** | ✅ **Working** | `internal/spending/monitor.go` |
 | **State reconciliation** | ✅ **Full pagination** | Handles large AWS accounts with batched tag fetching (P3.1, P3.2 completed) |
-| AWS 5 tools | ⚠️ **9+ hardcoded values** | See P1 issues below |
+| AWS 5 tools | ✅ **All configurable** | P1.1-P1.18 completed — cost estimation, container port, health check, desired count, env vars, HTTPS, log retention, CPU/memory all configurable |
 | AWS `aws:deployments` resource | ✅ **Implemented** | `internal/providers/aws.go` |
 | AWS `aws_deploy_plan` prompt | ✅ **Implemented** | `internal/providers/aws.go` |
 | Cost estimation (planInfra) | ✅ **IMPLEMENTED** | PricingEstimator with AWS Pricing API, regional lookup, 24h cache |
@@ -94,7 +94,7 @@
 | Private subnets | ✅ **IMPLEMENTED** | Public/private subnet architecture with NAT Gateway |
 | Plan approval | ✅ **IMPLEMENTED** | `aws_approve_plan` tool with explicit approval workflow |
 | Wait for healthy deployment | ✅ **Done** | waitForHealthyDeployment polls ECS/ALB |
-| Test coverage | ⚠️ **Gaps** | `providers/provider.go` has 0%; `aws.go` at 18.2% |
+| Test coverage | ⚠️ **Improved** | Overall 28.6%; `providers/aws.go` at 27.5%; `providers/provider.go` at ~80% |
 | Structured logging | ✅ **Done** | All log.Printf migrated to slog (30 in aws.go, 1 in provider.go, ~4 in costs.go) |
 | AWS SDK Mocking Infrastructure | ✅ **Complete** | Mock interfaces (EC2API, ECSAPI, ELBV2API, IAMAPI, ECRAPI, CloudWatchLogsAPI, AutoScalingAPI, ACMAPI), AWSClients struct, compile-time verification |
 | Makefile | ✅ **Complete** | all, test-race, coverage, coverage-html, run, install, help targets added |
@@ -392,12 +392,13 @@
 - **Coverage:** 0% → 80%+ (All: 60%, AllWithStore: 100%, GetAWSProvider: 100%)
 - **Location:** `internal/providers/provider.go`
 
-### P2.5 AWS Provider Tool Tests Missing (Coverage improved 18.2% → 24.2%) ⚠️
+### P2.5 AWS Provider Tool Tests Missing (Coverage improved 18.2% → 27.5%) ⚠️
 
 **Completed:**
 - [x] Added 12 new unit tests for validation and error handling
 - [x] Tests for deploy, teardown, status, createInfra error paths
 - [x] Tests for plan approval/rejection workflows
+- [x] Coverage improved from 18.2% to 27.5%
 
 **Remaining:**
 - [ ] Add unit tests with mocked AWS SDK (requires provider refactor)
@@ -405,9 +406,9 @@
 
 - **Impact:** Extended test coverage for core AWS provider tools
 - **Location:** `internal/providers/aws_test.go`
-- **Depends on:** P2.6 (AWS SDK mocking setup)
+- **Depends on:** P2.6 (AWS SDK mocking setup) ✅ COMPLETED
 - **Audit (2026-03-20):** Verified only planInfra tested, 8.3% coverage
-- **Progress:** 24.2% coverage achieved with new unit tests
+- **Progress:** 27.5% coverage achieved with new unit tests
 
 ### P2.6 AWS SDK Mocking Infrastructure ✅ COMPLETED
 
@@ -605,18 +606,19 @@ go test -coverprofile=coverage.out ./...  # With coverage
 go tool cover -html=coverage.out          # View coverage report
 ```
 
-### Test Coverage Summary (from audit)
+### Test Coverage Summary (current)
 
 | Package | Coverage | Notes |
 |---------|----------|-------|
 | `internal/awsclient/` | **91.7%** | Comprehensive tests added |
 | `internal/errors/` | **100%** | Comprehensive tests added |
 | `internal/spending/config.go` | **100%** | Comprehensive tests added |
-| `internal/providers/provider.go` | **0%** | No tests |
-| `internal/providers/aws.go` | **24.2%** | planInfra, deploy, teardown, status, approval workflows tested |
+| `internal/providers/provider.go` | **80%** | All(), AllWithStore(), GetAWSProvider() tested |
+| `internal/providers/aws.go` | **27.5%** | planInfra, deploy, teardown, status, approval workflows tested |
 | `internal/main.go` | **0%** | Test file doesn't test main() |
-| `internal/spending/` | **~45%** | Improved with config tests |
-| `internal/state/` | **45.5%** | Partial |
+| `internal/spending/` | **~23%** | Config tests, check tests, costs tests |
+| `internal/state/` | **44.4%** | Store, cleanup, reconcile |
+| **Overall** | **28.6%** | Above CI floor (25%), target 50% |
 
 ### Key Files
 
@@ -643,34 +645,34 @@ go tool cover -html=coverage.out          # View coverage report
 | `ralph/specs/spending-safeguards.md` | Budget enforcement spec |
 | `ralph/specs/ci.md` | CI/CD requirements spec |
 
-### Hardcoded Values Summary (9+ issues in aws.go)
+### Hardcoded Values Summary (All P1 issues resolved)
 
-| Value | Location | Impact |
+| Value | Location | Status |
 |-------|----------|--------|
 | VPC CIDR: `10.0.0.0/16` | `aws.go` | ⚠️ Partial - default works for most cases |
 | Subnet CIDRs | `aws.go` | ✅ IMPLEMENTED - 4 subnets (2 public, 2 private) |
-| ECS Task CPU: `"256"` | `aws.go:806` | Resource limits |
-| ECS Task Memory: `"512"` | `aws.go:807` | Resource limits |
-| ~~ECS Desired Count: `1`~~ | ~~`aws.go:853`~~ | ✅ Now configurable (P1.5) |
-| ~~Container Port: `80`~~ | ~~`aws.go:814, 865`~~ | ✅ Now configurable (P1.3) |
-| ~~Health Check Path: `"/"`~~ | ~~`aws.go:701`~~ | ✅ Now configurable (P1.4) |
-| Log Retention: `7` days | `aws.go:749` | Compliance |
-| Default Image: `nginx:latest` | `aws.go:787` | Accidental deployments |
-| Cost baseCost: `15.0` | `aws.go:153` | Inaccurate estimates |
-| Cost ecsCost: `users*0.02` | `aws.go:154` | Inaccurate estimates |
-| Cost albCost: `20.0` | `aws.go:155` | Inaccurate estimates |
-| Current spend: `$25/deployment` | `aws.go:216` | Budget bypass |
+| ~~ECS Task CPU: `"256"`~~ | ~~`aws.go`~~ | ✅ Now configurable via `cpu` parameter (P1.17) |
+| ~~ECS Task Memory: `"512"`~~ | ~~`aws.go`~~ | ✅ Now configurable via `memory` parameter (P1.17) |
+| ~~ECS Desired Count: `1`~~ | ~~`aws.go`~~ | ✅ Now configurable (P1.5) |
+| ~~Container Port: `80`~~ | ~~`aws.go`~~ | ✅ Now configurable (P1.3) |
+| ~~Health Check Path: `"/"`~~ | ~~`aws.go`~~ | ✅ Now configurable (P1.4) |
+| ~~Log Retention: `7` days~~ | ~~`aws.go`~~ | ✅ Now configurable via `log_retention_days` (P1.16) |
+| ~~Default Image: `nginx:latest`~~ | ~~`aws.go`~~ | ✅ Removed - `image_ref` now required (P1.15) |
+| ~~Cost baseCost: `15.0`~~ | ~~`aws.go`~~ | ✅ Uses AWS Pricing API (P1.1) |
+| ~~Cost ecsCost: `users*0.02`~~ | ~~`aws.go`~~ | ✅ Uses AWS Pricing API (P1.1) |
+| ~~Cost albCost: `20.0`~~ | ~~`aws.go`~~ | ✅ Uses AWS Pricing API (P1.1) |
+| ~~Current spend: `$25/deployment`~~ | ~~`aws.go`~~ | ✅ Uses Cost Explorer (P1.2) |
 
 ### Remaining Work by Priority
 
 | Priority | Count | Items |
 |----------|-------|-------|
 | **P0 Critical** | 0 | ✅ All completed |
-| **P1 Spec Gaps** | 11 | Cost estimation, HTTPS, VPC, subnets, etc. (P1.12 Auto Scaling completed) |
-| **P2 Test Gaps** | 6 | provider.go (0%), aws.go (18.2%), coverage, unit testing (P2.6, P2.8 completed) |
-| **P3 Quality** | 3 | Pagination, ALB tags, errors (P3.3, P3.4, P3.6, P3.7, P3.8 completed) |
+| **P1 Spec Gaps** | 0 | ✅ All completed (P1.1-P1.18) — Cost estimation, HTTPS, VPC, subnets, auto scaling, etc. |
+| **P2 Test Gaps** | 4 | P2.7, P2.9, P2.10, P2.11 — Integration tests, main.go coverage, edge cases |
+| **P3 Quality** | 0 | ✅ All completed (P3.1-P3.8) |
 | **P5 Stretch** | 3 | CloudFormation, multi-cloud, secrets |
-| **Total** | **26** | |
+| **Total** | **7** | |
 
 ---
 
@@ -690,7 +692,7 @@ go tool cover -html=coverage.out          # View coverage report
 | **deployment-state.md** | 24-hour plan expiration, hourly cleanup | ✅ Implemented |
 | **deployment-state.md** | AWS resource tag reconciliation | ✅ IMPLEMENTED (full pagination + batch tag fetching) |
 | **spending-safeguards.md** | monthly_budget_usd, per_deployment_usd, alert_threshold_percent | ✅ Implemented |
-| **spending-safeguards.md** | Pre-provisioning budget check | ⚠️ PARTIAL (uses hardcoded costs) |
+| **spending-safeguards.md** | Pre-provisioning budget check | ✅ IMPLEMENTED (AWS Pricing API + Cost Explorer) |
 | **spending-safeguards.md** | Runtime cost monitoring with Cost Explorer | ✅ Implemented |
 | **spending-safeguards.md** | Auto-teardown when budget exceeded | ✅ IMPLEMENTED |
 | **spending-safeguards.md** | Resource tagging | ✅ Implemented |
