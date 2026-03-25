@@ -14,10 +14,16 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/costexplorer/types"
 )
 
+// CostExplorerAPI defines the Cost Explorer methods used by CostTracker.
+// This interface enables mock testing without AWS credentials.
+type CostExplorerAPI interface {
+	GetCostAndUsage(ctx context.Context, params *costexplorer.GetCostAndUsageInput, optFns ...func(*costexplorer.Options)) (*costexplorer.GetCostAndUsageOutput, error)
+}
+
 // CostTracker queries AWS Cost Explorer to track actual spending
 // per deployment, filtered by agent-deploy resource tags.
 type CostTracker struct {
-	client *costexplorer.Client
+	client CostExplorerAPI
 }
 
 // NewCostTracker creates a CostTracker with the given AWS config.
@@ -28,6 +34,11 @@ func NewCostTracker(cfg aws.Config) *CostTracker {
 	ceConfig := cfg.Copy()
 	ceConfig.Region = "us-east-1"
 	client := costexplorer.NewFromConfig(ceConfig)
+	return &CostTracker{client: client}
+}
+
+// NewCostTrackerWithClient creates a CostTracker with an injected client for testing.
+func NewCostTrackerWithClient(client CostExplorerAPI) *CostTracker {
 	return &CostTracker{client: client}
 }
 

@@ -68,6 +68,20 @@ func NewCostMonitor(cfg aws.Config, limits Limits, config MonitorConfig) *CostMo
 	}
 }
 
+// NewCostMonitorWithTracker creates a CostMonitor with an injected tracker for testing.
+func NewCostMonitorWithTracker(tracker *CostTracker, limits Limits, config MonitorConfig) *CostMonitor {
+	if config.CheckInterval == 0 {
+		config.CheckInterval = 1 * time.Hour
+	}
+	return &CostMonitor{
+		tracker: tracker,
+		limits:  limits,
+		config:  config,
+		stopCh:  make(chan struct{}),
+		doneCh:  make(chan struct{}),
+	}
+}
+
 // Start begins the background monitoring loop.
 // It runs until Stop() is called.
 func (m *CostMonitor) Start(ctx context.Context) error {
