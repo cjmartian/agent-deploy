@@ -96,7 +96,8 @@
 | Wait for healthy deployment | ✅ **Done** | waitForHealthyDeployment polls ECS/ALB |
 | Test coverage | ⚠️ **Gaps** | `providers/provider.go` has 0%; `aws.go` at 18.2% |
 | Structured logging | ✅ **Done** | All log.Printf migrated to slog (30 in aws.go, 1 in provider.go, ~4 in costs.go) |
-| Makefile | ⚠️ **Incomplete** | Missing coverage, coverage-html, test-race, install, run, all, help targets |
+| AWS SDK Mocking Infrastructure | ✅ **Complete** | Mock interfaces (EC2API, ECSAPI, ELBV2API, IAMAPI, ECRAPI, CloudWatchLogsAPI, AutoScalingAPI, ACMAPI), AWSClients struct, compile-time verification |
+| Makefile | ✅ **Complete** | all, test-race, coverage, coverage-html, run, install, help targets added |
 
 ---
 
@@ -403,13 +404,15 @@
 - **Depends on:** P2.6 (AWS SDK mocking setup)
 - **Audit (2026-03-20):** Verified only planInfra tested, 8.3% coverage
 
-### P2.6 AWS SDK Mocking Infrastructure ❌
+### P2.6 AWS SDK Mocking Infrastructure ✅ COMPLETED
 
-- [ ] Create mock interfaces for EC2, ECS, ECR, ELB, CloudWatch clients
-- [ ] Set up test fixtures for common AWS responses
-- [ ] Enable unit testing without LocalStack
+- [x] Create mock interfaces for EC2, ECS, ECR, ELB, CloudWatch clients
+- [x] Set up test fixtures for common AWS responses
+- [x] Enable unit testing without LocalStack
 - **Impact:** Required for P2.5; enables fast, reliable unit tests
-- **Location:** `internal/awsclient/mocks/` (new)
+- **Location:** `internal/awsclient/interfaces.go`, `internal/awsclient/mocks/`
+- **Completed:** 2026-03-25
+- **Details:** Created EC2API, ECSAPI, ELBV2API, IAMAPI, ECRAPI, CloudWatchLogsAPI, AutoScalingAPI, ACMAPI interfaces; AWSClients struct; mock implementations; compile-time interface verification tests
 
 ### P2.7 Reconciliation AWS Integration Tests ❌
 
@@ -505,17 +508,19 @@
 - **Impact:** Users may rely on inaccurate estimates
 - **Location:** `internal/providers/aws.go:152`
 
-### P3.7 Makefile Missing Targets ❌
+### P3.7 Makefile Missing Targets ✅ COMPLETED
 
-- [ ] Add `coverage` target (with `-coverprofile`)
-- [ ] Add `coverage-html` target
-- [ ] Add `test-race` target
-- [ ] Add `install` target
-- [ ] Add `run` target
-- [ ] Add `all` target
-- [ ] Add `help` target
+- [x] Add `coverage` target (with `-coverprofile`)
+- [x] Add `coverage-html` target
+- [x] Add `test-race` target
+- [x] Add `install` target
+- [x] Add `run` target
+- [x] Add `all` target
+- [x] Add `help` target
 - **Impact:** Developer experience; missing common workflows
 - **Location:** `Makefile`
+- **Completed:** 2026-03-25
+- **Details:** Added all, test-race, coverage, coverage-html, run, install, help targets; improved clean target; updated test target
 
 ### P3.8 Logging Config AddTime Field Unused ❌
 
@@ -647,10 +652,10 @@ go tool cover -html=coverage.out          # View coverage report
 |----------|-------|-------|
 | **P0 Critical** | 0 | ✅ All completed |
 | **P1 Spec Gaps** | 11 | Cost estimation, HTTPS, VPC, subnets, etc. (P1.12 Auto Scaling completed) |
-| **P2 Test Gaps** | 8 | provider.go (0%), aws.go (18.2%), mocking, coverage |
-| **P3 Quality** | 8 | Pagination, ALB tags, version, region, errors, disclaimer, Makefile, unused AddTime |
+| **P2 Test Gaps** | 7 | provider.go (0%), aws.go (18.2%), coverage, unit testing (P2.6 AWS SDK Mocking completed) |
+| **P3 Quality** | 7 | Pagination, ALB tags, version, region, errors, disclaimer, unused AddTime (P3.7 Makefile completed) |
 | **P5 Stretch** | 3 | CloudFormation, multi-cloud, secrets |
-| **Total** | **33** | |
+| **Total** | **31** | |
 
 ---
 
