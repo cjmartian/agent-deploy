@@ -743,7 +743,8 @@ func (p *AWSProvider) status(ctx context.Context, _ *mcp.CallToolRequest, in sta
 	cfg, err := awsclient.LoadConfig(ctx, infra.Region)
 	if err == nil {
 		// Get ECS service status.
-		ecsClient := ecs.NewFromConfig(cfg)
+		clients := p.getClients(cfg)
+		ecsClient := clients.ECS
 		clusterARN := infra.Resources[state.ResourceECSCluster]
 		if clusterARN != "" {
 			resp, err := ecsClient.DescribeServices(ctx, &ecs.DescribeServicesInput{
@@ -1535,7 +1536,8 @@ func mapToIAMTags(tags map[string]string) []iamtypes.Tag {
 }
 
 func (p *AWSProvider) ensureECRRepository(ctx context.Context, cfg aws.Config, infra *state.Infrastructure, deployID string, tags map[string]string) error {
-	ecrClient := ecr.NewFromConfig(cfg)
+	clients := p.getClients(cfg)
+	ecrClient := clients.ECR
 
 	repoName := "agent-deploy-" + deployID[:12]
 
@@ -1559,7 +1561,8 @@ func (p *AWSProvider) ensureECRRepository(ctx context.Context, cfg aws.Config, i
 }
 
 func (p *AWSProvider) createTaskDefinition(ctx context.Context, cfg aws.Config, infra *state.Infrastructure, imageRef, deployID string, containerPort int, environment map[string]string, cpu, memory string) (string, error) {
-	ecsClient := ecs.NewFromConfig(cfg)
+	clients := p.getClients(cfg)
+	ecsClient := clients.ECS
 
 	// Image is required - no default.
 	// Per spec ralph/specs/deploy-configuration.md: require explicit image specification.
@@ -1642,7 +1645,8 @@ func (p *AWSProvider) createTaskDefinition(ctx context.Context, cfg aws.Config, 
 }
 
 func (p *AWSProvider) createOrUpdateService(ctx context.Context, cfg aws.Config, infra *state.Infrastructure, taskDefARN, deployID string, containerPort, desiredCount int) (string, error) {
-	ecsClient := ecs.NewFromConfig(cfg)
+	clients := p.getClients(cfg)
+	ecsClient := clients.ECS
 
 	// Per spec ralph/specs/networking.md: ECS tasks run in private subnets.
 	// Use private subnets if available, fall back to public for backward compatibility.
@@ -1704,8 +1708,9 @@ func (p *AWSProvider) createOrUpdateService(ctx context.Context, cfg aws.Config,
 // waitForHealthyDeployment waits for the ECS service to be running and healthy.
 // It polls the service status and ALB target health until healthy or timeout.
 func (p *AWSProvider) waitForHealthyDeployment(ctx context.Context, cfg aws.Config, infra *state.Infrastructure, deployment *state.Deployment, timeout time.Duration) error {
-	ecsClient := ecs.NewFromConfig(cfg)
-	elbClient := elbv2.NewFromConfig(cfg)
+	clients := p.getClients(cfg)
+	ecsClient := clients.ECS
+	elbClient := clients.ELBV2
 
 	clusterARN := infra.Resources[state.ResourceECSCluster]
 	targetGroupARN := infra.Resources[state.ResourceTargetGroup]
@@ -1819,7 +1824,8 @@ func (p *AWSProvider) waitForHealthyDeployment(ctx context.Context, cfg aws.Conf
 
 // updateTargetGroupHealthCheck updates the target group's health check settings.
 func (p *AWSProvider) updateTargetGroupHealthCheck(ctx context.Context, cfg aws.Config, infra *state.Infrastructure, healthCheckPath string, containerPort int) error {
-	elbClient := elbv2.NewFromConfig(cfg)
+	clients := p.getClients(cfg)
+	elbClient := clients.ELBV2
 
 	targetGroupARN := infra.Resources[state.ResourceTargetGroup]
 	if targetGroupARN == "" {
@@ -1843,7 +1849,8 @@ func (p *AWSProvider) updateTargetGroupHealthCheck(ctx context.Context, cfg aws.
 }
 
 func (p *AWSProvider) getALBURLs(ctx context.Context, cfg aws.Config, infra *state.Infrastructure) ([]string, error) {
-	elbClient := elbv2.NewFromConfig(cfg)
+	clients := p.getClients(cfg)
+	elbClient := clients.ELBV2
 
 	albARN := infra.Resources[state.ResourceALB]
 	if albARN == "" {
@@ -1950,7 +1957,8 @@ func (p *AWSProvider) deleteALB(ctx context.Context, cfg aws.Config, infra *stat
 }
 
 func (p *AWSProvider) deleteECRRepository(ctx context.Context, cfg aws.Config, infra *state.Infrastructure) error {
-	ecrClient := ecr.NewFromConfig(cfg)
+	clients := p.getClients(cfg)
+	ecrClient := clients.ECR
 
 	repoName := infra.Resources[state.ResourceECRRepository]
 	if repoName == "" {
@@ -1971,7 +1979,8 @@ func (p *AWSProvider) deleteECRRepository(ctx context.Context, cfg aws.Config, i
 }
 
 func (p *AWSProvider) deleteLogGroup(ctx context.Context, cfg aws.Config, infra *state.Infrastructure) error {
-	cwlClient := cloudwatchlogs.NewFromConfig(cfg)
+	clients := p.getClients(cfg)
+	cwlClient := clients.CloudWatchLogs
 
 	logGroupName := infra.Resources[state.ResourceLogGroup]
 	if logGroupName == "" {
@@ -1992,7 +2001,8 @@ func (p *AWSProvider) deleteLogGroup(ctx context.Context, cfg aws.Config, infra 
 
 // deleteExecutionRole deletes the IAM execution role for ECS tasks.
 func (p *AWSProvider) deleteExecutionRole(ctx context.Context, cfg aws.Config, infra *state.Infrastructure) error {
-	iamClient := iam.NewFromConfig(cfg)
+	clients := p.getClients(cfg)
+	iamClient := clients.IAM
 
 	// Get role name from role ARN.
 	roleARN := infra.Resources[state.ResourceExecutionRole]
@@ -2037,7 +2047,8 @@ func (p *AWSProvider) deleteExecutionRole(ctx context.Context, cfg aws.Config, i
 }
 
 func (p *AWSProvider) deleteVPCResources(ctx context.Context, cfg aws.Config, infra *state.Infrastructure) error {
-	ec2Client := ec2.NewFromConfig(cfg)
+	clients := p.getClients(cfg)
+	ec2Client := clients.EC2
 
 	// Per spec ralph/specs/networking.md: Delete in reverse dependency order.
 	// 1. Delete NAT Gateway first (and wait for deletion).
@@ -2215,7 +2226,7 @@ func (p *AWSProvider) deleteVPCResources(ctx context.Context, cfg aws.Config, in
 }
 
 // deleteRouteTable disassociates and deletes a route table.
-func (p *AWSProvider) deleteRouteTable(ctx context.Context, ec2Client *ec2.Client, rtID string) error {
+func (p *AWSProvider) deleteRouteTable(ctx context.Context, ec2Client awsclient.EC2API, rtID string) error {
 	// Get associations.
 	rtResp, err := ec2Client.DescribeRouteTables(ctx, &ec2.DescribeRouteTablesInput{
 		RouteTableIds: []string{rtID},
@@ -2411,7 +2422,8 @@ func validateAutoScalingParams(minCount, maxCount, targetCPU, targetMem int) err
 // target tracking scaling policies for CPU and memory utilization.
 // Per spec ralph/specs/auto-scaling.md: cooldowns are 60s scale-out, 300s scale-in.
 func (p *AWSProvider) configureAutoScaling(ctx context.Context, cfg aws.Config, clusterName, serviceName, deployID string, minCount, maxCount, targetCPU, targetMem int) error {
-	asClient := applicationautoscaling.NewFromConfig(cfg)
+	clients := p.getClients(cfg)
+	asClient := clients.AutoScaling
 
 	resourceID := fmt.Sprintf("service/%s/%s", clusterName, serviceName)
 
@@ -2475,7 +2487,8 @@ func (p *AWSProvider) configureAutoScaling(ctx context.Context, cfg aws.Config, 
 // deleteAutoScaling removes scaling policies and deregisters the scalable target.
 // Per spec ralph/specs/auto-scaling.md: must be called BEFORE deleting ECS service.
 func (p *AWSProvider) deleteAutoScaling(ctx context.Context, cfg aws.Config, clusterName, serviceName, deployID string) error {
-	asClient := applicationautoscaling.NewFromConfig(cfg)
+	clients := p.getClients(cfg)
+	asClient := clients.AutoScaling
 
 	resourceID := fmt.Sprintf("service/%s/%s", clusterName, serviceName)
 
@@ -2526,7 +2539,8 @@ func (p *AWSProvider) deleteAutoScaling(ctx context.Context, cfg aws.Config, clu
 
 // getScalingInfo retrieves current auto-scaling configuration for status reporting.
 func (p *AWSProvider) getScalingInfo(ctx context.Context, cfg aws.Config, clusterName, serviceName string, currentCount int) (*scalingInfo, error) {
-	asClient := applicationautoscaling.NewFromConfig(cfg)
+	clients := p.getClients(cfg)
+	asClient := clients.AutoScaling
 
 	resourceID := fmt.Sprintf("service/%s/%s", clusterName, serviceName)
 
