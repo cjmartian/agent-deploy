@@ -46,20 +46,25 @@ const (
 
 // Resource type constants for Infrastructure.Resources map keys.
 const (
-	ResourceVPC             = "vpc"
-	ResourceSubnetPublic    = "subnet_public"
-	ResourceSubnetPrivate   = "subnet_private"
-	ResourceSecurityGroup   = "security_group"
-	ResourceECSCluster      = "ecs_cluster"
-	ResourceALB             = "alb"
-	ResourceTargetGroup     = "target_group"
-	ResourceECRRepository   = "ecr_repository"
-	ResourceLogGroup        = "log_group"
-	ResourceInternetGateway = "internet_gateway"
-	ResourceRouteTable      = "route_table"
-	ResourceExecutionRole   = "execution_role"
-	ResourceTLSEnabled      = "tls_enabled"      // "true" or "false" - whether HTTPS is configured
-	ResourceCertificateARN  = "certificate_arn"  // ACM certificate ARN when TLS is enabled
+	ResourceVPC               = "vpc"
+	ResourceSubnetPublic      = "subnet_public"
+	ResourceSubnetPrivate     = "subnet_private"
+	ResourceSecurityGroup     = "security_group"
+	ResourceSecurityGroupALB  = "security_group_alb"  // ALB security group (public HTTP/HTTPS)
+	ResourceSecurityGroupTask = "security_group_task" // ECS task security group (internal only)
+	ResourceECSCluster        = "ecs_cluster"
+	ResourceALB               = "alb"
+	ResourceTargetGroup       = "target_group"
+	ResourceECRRepository     = "ecr_repository"
+	ResourceLogGroup          = "log_group"
+	ResourceInternetGateway   = "internet_gateway"
+	ResourceRouteTable        = "route_table"
+	ResourceRouteTablePrivate = "route_table_private" // Private subnet route table (via NAT GW)
+	ResourceNATGateway        = "nat_gateway"         // NAT Gateway for private subnet egress
+	ResourceElasticIP         = "elastic_ip"          // Elastic IP for NAT Gateway
+	ResourceExecutionRole     = "execution_role"
+	ResourceTLSEnabled        = "tls_enabled"      // "true" or "false" - whether HTTPS is configured
+	ResourceCertificateARN    = "certificate_arn"  // ACM certificate ARN when TLS is enabled
 )
 
 // Deployment represents an application deployed onto infrastructure.

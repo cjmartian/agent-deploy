@@ -742,6 +742,7 @@ func (p *AWSProvider) provisionVPC(ctx context.Context, cfg aws.Config, infra *s
 	ec2Client := ec2.NewFromConfig(cfg)
 
 	// Create VPC.
+	// Per spec ralph/specs/networking.md: Default CIDR 10.0.0.0/16
 	vpcResp, err := ec2Client.CreateVpc(ctx, &ec2.CreateVpcInput{
 		CidrBlock: aws.String("10.0.0.0/16"),
 		TagSpecifications: []ec2types.TagSpecification{{
@@ -801,61 +802,95 @@ func (p *AWSProvider) provisionVPC(ctx context.Context, cfg aws.Config, infra *s
 		return fmt.Errorf("need at least 2 AZs, found %d", len(azResp.AvailabilityZones))
 	}
 
+	// Per spec ralph/specs/networking.md: Create 4 subnets (2 public, 2 private) across 2 AZs.
+	// Subnet Layout (for default 10.0.0.0/16):
+	//   Public A:  10.0.1.0/24 (AZ-1) - ALB, NAT Gateway
+	//   Public B:  10.0.2.0/24 (AZ-2) - ALB
+	//   Private A: 10.0.10.0/24 (AZ-1) - ECS tasks
+	//   Private B: 10.0.11.0/24 (AZ-2) - ECS tasks
+
 	// Create public subnets in 2 AZs (required for ALB).
-	var subnetIDs []string
-	var subnetResp *ec2.CreateSubnetOutput
+	var publicSubnetIDs []string
 	for i := 0; i < 2; i++ {
 		az := *azResp.AvailabilityZones[i].ZoneName
 		cidr := fmt.Sprintf("10.0.%d.0/24", i+1)
 
-		subnetResp, err = ec2Client.CreateSubnet(ctx, &ec2.CreateSubnetInput{
+		subnetResp, err := ec2Client.CreateSubnet(ctx, &ec2.CreateSubnetInput{
 			VpcId:            aws.String(vpcID),
 			CidrBlock:        aws.String(cidr),
 			AvailabilityZone: aws.String(az),
 			TagSpecifications: []ec2types.TagSpecification{{
 				ResourceType: ec2types.ResourceTypeSubnet,
-				Tags:         mapToEC2Tags(tags),
+				Tags:         mapToEC2Tags(mergeTags(tags, map[string]string{"Name": fmt.Sprintf("agent-deploy-public-%d", i+1)})),
 			}},
 		})
 		if err != nil {
-			return fmt.Errorf("create subnet %d: %w", i, err)
+			return fmt.Errorf("create public subnet %d: %w", i, err)
 		}
-		subnetIDs = append(subnetIDs, *subnetResp.Subnet.SubnetId)
+		publicSubnetIDs = append(publicSubnetIDs, *subnetResp.Subnet.SubnetId)
 
-		// Enable auto-assign public IP.
+		// Enable auto-assign public IP for public subnets.
 		_, err = ec2Client.ModifySubnetAttribute(ctx, &ec2.ModifySubnetAttributeInput{
 			SubnetId:            subnetResp.Subnet.SubnetId,
 			MapPublicIpOnLaunch: &ec2types.AttributeBooleanValue{Value: aws.Bool(true)},
 		})
 		if err != nil {
-			return fmt.Errorf("enable public IP for subnet %d: %w", i, err)
+			return fmt.Errorf("enable public IP for public subnet %d: %w", i, err)
 		}
 	}
-	if storeErr := p.store.UpdateInfraResource(infra.ID, state.ResourceSubnetPublic, subnetIDs[0]+","+subnetIDs[1]); storeErr != nil {
+	publicSubnetsStr := publicSubnetIDs[0] + "," + publicSubnetIDs[1]
+	if storeErr := p.store.UpdateInfraResource(infra.ID, state.ResourceSubnetPublic, publicSubnetsStr); storeErr != nil {
 		slog.Error("failed to update infra resource", "infraID", infra.ID, "resource", state.ResourceSubnetPublic, "error", storeErr)
 	}
-	infra.Resources[state.ResourceSubnetPublic] = subnetIDs[0] + "," + subnetIDs[1]
+	infra.Resources[state.ResourceSubnetPublic] = publicSubnetsStr
 
-	// Create route table with internet route.
-	rtResp, err := ec2Client.CreateRouteTable(ctx, &ec2.CreateRouteTableInput{
+	// Create private subnets in 2 AZs (for ECS tasks).
+	var privateSubnetIDs []string
+	for i := 0; i < 2; i++ {
+		az := *azResp.AvailabilityZones[i].ZoneName
+		cidr := fmt.Sprintf("10.0.%d.0/24", i+10) // 10.0.10.0/24 and 10.0.11.0/24
+
+		subnetResp, err := ec2Client.CreateSubnet(ctx, &ec2.CreateSubnetInput{
+			VpcId:            aws.String(vpcID),
+			CidrBlock:        aws.String(cidr),
+			AvailabilityZone: aws.String(az),
+			TagSpecifications: []ec2types.TagSpecification{{
+				ResourceType: ec2types.ResourceTypeSubnet,
+				Tags:         mapToEC2Tags(mergeTags(tags, map[string]string{"Name": fmt.Sprintf("agent-deploy-private-%d", i+1)})),
+			}},
+		})
+		if err != nil {
+			return fmt.Errorf("create private subnet %d: %w", i, err)
+		}
+		privateSubnetIDs = append(privateSubnetIDs, *subnetResp.Subnet.SubnetId)
+		// Private subnets do NOT get auto-assign public IP.
+	}
+	privateSubnetsStr := privateSubnetIDs[0] + "," + privateSubnetIDs[1]
+	if storeErr := p.store.UpdateInfraResource(infra.ID, state.ResourceSubnetPrivate, privateSubnetsStr); storeErr != nil {
+		slog.Error("failed to update infra resource", "infraID", infra.ID, "resource", state.ResourceSubnetPrivate, "error", storeErr)
+	}
+	infra.Resources[state.ResourceSubnetPrivate] = privateSubnetsStr
+
+	// Create public route table with internet route (for public subnets).
+	publicRTResp, err := ec2Client.CreateRouteTable(ctx, &ec2.CreateRouteTableInput{
 		VpcId: aws.String(vpcID),
 		TagSpecifications: []ec2types.TagSpecification{{
 			ResourceType: ec2types.ResourceTypeRouteTable,
-			Tags:         mapToEC2Tags(tags),
+			Tags:         mapToEC2Tags(mergeTags(tags, map[string]string{"Name": "agent-deploy-public"})),
 		}},
 	})
 	if err != nil {
-		return fmt.Errorf("create route table: %w", err)
+		return fmt.Errorf("create public route table: %w", err)
 	}
-	rtID := *rtResp.RouteTable.RouteTableId
-	if storeErr := p.store.UpdateInfraResource(infra.ID, state.ResourceRouteTable, rtID); storeErr != nil {
+	publicRTID := *publicRTResp.RouteTable.RouteTableId
+	if storeErr := p.store.UpdateInfraResource(infra.ID, state.ResourceRouteTable, publicRTID); storeErr != nil {
 		slog.Error("failed to update infra resource", "infraID", infra.ID, "resource", state.ResourceRouteTable, "error", storeErr)
 	}
-	infra.Resources[state.ResourceRouteTable] = rtID
+	infra.Resources[state.ResourceRouteTable] = publicRTID
 
-	// Add route to internet gateway.
+	// Add route to internet gateway (for public subnets).
 	_, err = ec2Client.CreateRoute(ctx, &ec2.CreateRouteInput{
-		RouteTableId:         aws.String(rtID),
+		RouteTableId:         aws.String(publicRTID),
 		DestinationCidrBlock: aws.String("0.0.0.0/0"),
 		GatewayId:            aws.String(igwID),
 	})
@@ -863,39 +898,127 @@ func (p *AWSProvider) provisionVPC(ctx context.Context, cfg aws.Config, infra *s
 		return fmt.Errorf("create route to IGW: %w", err)
 	}
 
-	// Associate subnets with route table.
-	for _, subnetID := range subnetIDs {
+	// Associate public subnets with public route table.
+	for _, subnetID := range publicSubnetIDs {
 		_, err = ec2Client.AssociateRouteTable(ctx, &ec2.AssociateRouteTableInput{
-			RouteTableId: aws.String(rtID),
+			RouteTableId: aws.String(publicRTID),
 			SubnetId:     aws.String(subnetID),
 		})
 		if err != nil {
-			return fmt.Errorf("associate subnet %s: %w", subnetID, err)
+			return fmt.Errorf("associate public subnet %s: %w", subnetID, err)
 		}
 	}
 
-	// Create security group.
-	sgResp, err := ec2Client.CreateSecurityGroup(ctx, &ec2.CreateSecurityGroupInput{
-		GroupName:   aws.String("agent-deploy-" + infra.ID),
-		Description: aws.String("Security group for agent-deploy infrastructure"),
-		VpcId:       aws.String(vpcID),
+	// Per spec ralph/specs/networking.md: Create NAT Gateway for private subnet egress.
+	// Allocate Elastic IP for NAT Gateway.
+	eipResp, err := ec2Client.AllocateAddress(ctx, &ec2.AllocateAddressInput{
+		Domain: ec2types.DomainTypeVpc,
 		TagSpecifications: []ec2types.TagSpecification{{
-			ResourceType: ec2types.ResourceTypeSecurityGroup,
+			ResourceType: ec2types.ResourceTypeElasticIp,
 			Tags:         mapToEC2Tags(tags),
 		}},
 	})
 	if err != nil {
-		return fmt.Errorf("create security group: %w", err)
+		return fmt.Errorf("allocate elastic IP: %w", err)
 	}
-	sgID := *sgResp.GroupId
-	if storeErr := p.store.UpdateInfraResource(infra.ID, state.ResourceSecurityGroup, sgID); storeErr != nil {
-		slog.Error("failed to update infra resource", "infraID", infra.ID, "resource", state.ResourceSecurityGroup, "error", storeErr)
+	eipAllocationID := *eipResp.AllocationId
+	if storeErr := p.store.UpdateInfraResource(infra.ID, state.ResourceElasticIP, eipAllocationID); storeErr != nil {
+		slog.Error("failed to update infra resource", "infraID", infra.ID, "resource", state.ResourceElasticIP, "error", storeErr)
 	}
-	infra.Resources[state.ResourceSecurityGroup] = sgID
+	infra.Resources[state.ResourceElasticIP] = eipAllocationID
 
-	// Allow inbound HTTP (80) and HTTPS (443).
+	// Create NAT Gateway in first public subnet.
+	natResp, err := ec2Client.CreateNatGateway(ctx, &ec2.CreateNatGatewayInput{
+		SubnetId:     aws.String(publicSubnetIDs[0]),
+		AllocationId: aws.String(eipAllocationID),
+		TagSpecifications: []ec2types.TagSpecification{{
+			ResourceType: ec2types.ResourceTypeNatgateway,
+			Tags:         mapToEC2Tags(tags),
+		}},
+	})
+	if err != nil {
+		return fmt.Errorf("create NAT gateway: %w", err)
+	}
+	natGWID := *natResp.NatGateway.NatGatewayId
+	if storeErr := p.store.UpdateInfraResource(infra.ID, state.ResourceNATGateway, natGWID); storeErr != nil {
+		slog.Error("failed to update infra resource", "infraID", infra.ID, "resource", state.ResourceNATGateway, "error", storeErr)
+	}
+	infra.Resources[state.ResourceNATGateway] = natGWID
+
+	// Wait for NAT Gateway to become available (can take 1-2 minutes).
+	slog.Info("waiting for NAT gateway to become available",
+		slog.String("component", "provisionVPC"),
+		slog.String("nat_gateway_id", natGWID))
+
+	waiter := ec2.NewNatGatewayAvailableWaiter(ec2Client)
+	err = waiter.Wait(ctx, &ec2.DescribeNatGatewaysInput{
+		NatGatewayIds: []string{natGWID},
+	}, 5*time.Minute)
+	if err != nil {
+		return fmt.Errorf("wait for NAT gateway: %w", err)
+	}
+
+	// Create private route table with NAT Gateway route.
+	privateRTResp, err := ec2Client.CreateRouteTable(ctx, &ec2.CreateRouteTableInput{
+		VpcId: aws.String(vpcID),
+		TagSpecifications: []ec2types.TagSpecification{{
+			ResourceType: ec2types.ResourceTypeRouteTable,
+			Tags:         mapToEC2Tags(mergeTags(tags, map[string]string{"Name": "agent-deploy-private"})),
+		}},
+	})
+	if err != nil {
+		return fmt.Errorf("create private route table: %w", err)
+	}
+	privateRTID := *privateRTResp.RouteTable.RouteTableId
+	if storeErr := p.store.UpdateInfraResource(infra.ID, state.ResourceRouteTablePrivate, privateRTID); storeErr != nil {
+		slog.Error("failed to update infra resource", "infraID", infra.ID, "resource", state.ResourceRouteTablePrivate, "error", storeErr)
+	}
+	infra.Resources[state.ResourceRouteTablePrivate] = privateRTID
+
+	// Add route to NAT Gateway (for private subnets).
+	_, err = ec2Client.CreateRoute(ctx, &ec2.CreateRouteInput{
+		RouteTableId:         aws.String(privateRTID),
+		DestinationCidrBlock: aws.String("0.0.0.0/0"),
+		NatGatewayId:         aws.String(natGWID),
+	})
+	if err != nil {
+		return fmt.Errorf("create route to NAT gateway: %w", err)
+	}
+
+	// Associate private subnets with private route table.
+	for _, subnetID := range privateSubnetIDs {
+		_, err = ec2Client.AssociateRouteTable(ctx, &ec2.AssociateRouteTableInput{
+			RouteTableId: aws.String(privateRTID),
+			SubnetId:     aws.String(subnetID),
+		})
+		if err != nil {
+			return fmt.Errorf("associate private subnet %s: %w", subnetID, err)
+		}
+	}
+
+	// Per spec ralph/specs/networking.md: Create separate security groups.
+	// ALB security group - allows public HTTP/HTTPS inbound.
+	albSGResp, err := ec2Client.CreateSecurityGroup(ctx, &ec2.CreateSecurityGroupInput{
+		GroupName:   aws.String("agent-deploy-alb-" + infra.ID),
+		Description: aws.String("ALB security group - allows HTTP/HTTPS from internet"),
+		VpcId:       aws.String(vpcID),
+		TagSpecifications: []ec2types.TagSpecification{{
+			ResourceType: ec2types.ResourceTypeSecurityGroup,
+			Tags:         mapToEC2Tags(mergeTags(tags, map[string]string{"Name": "agent-deploy-alb"})),
+		}},
+	})
+	if err != nil {
+		return fmt.Errorf("create ALB security group: %w", err)
+	}
+	albSGID := *albSGResp.GroupId
+	if storeErr := p.store.UpdateInfraResource(infra.ID, state.ResourceSecurityGroupALB, albSGID); storeErr != nil {
+		slog.Error("failed to update infra resource", "infraID", infra.ID, "resource", state.ResourceSecurityGroupALB, "error", storeErr)
+	}
+	infra.Resources[state.ResourceSecurityGroupALB] = albSGID
+
+	// Allow inbound HTTP (80) and HTTPS (443) to ALB.
 	_, err = ec2Client.AuthorizeSecurityGroupIngress(ctx, &ec2.AuthorizeSecurityGroupIngressInput{
-		GroupId: aws.String(sgID),
+		GroupId: aws.String(albSGID),
 		IpPermissions: []ec2types.IpPermission{
 			{
 				IpProtocol: aws.String("tcp"),
@@ -912,15 +1035,72 @@ func (p *AWSProvider) provisionVPC(ctx context.Context, cfg aws.Config, infra *s
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("authorize ingress: %w", err)
+		return fmt.Errorf("authorize ALB ingress: %w", err)
 	}
 
-	slog.Info("VPC created",
+	// Task security group - allows inbound only from ALB security group.
+	taskSGResp, err := ec2Client.CreateSecurityGroup(ctx, &ec2.CreateSecurityGroupInput{
+		GroupName:   aws.String("agent-deploy-task-" + infra.ID),
+		Description: aws.String("ECS task security group - allows inbound only from ALB"),
+		VpcId:       aws.String(vpcID),
+		TagSpecifications: []ec2types.TagSpecification{{
+			ResourceType: ec2types.ResourceTypeSecurityGroup,
+			Tags:         mapToEC2Tags(mergeTags(tags, map[string]string{"Name": "agent-deploy-task"})),
+		}},
+	})
+	if err != nil {
+		return fmt.Errorf("create task security group: %w", err)
+	}
+	taskSGID := *taskSGResp.GroupId
+	if storeErr := p.store.UpdateInfraResource(infra.ID, state.ResourceSecurityGroupTask, taskSGID); storeErr != nil {
+		slog.Error("failed to update infra resource", "infraID", infra.ID, "resource", state.ResourceSecurityGroupTask, "error", storeErr)
+	}
+	infra.Resources[state.ResourceSecurityGroupTask] = taskSGID
+
+	// Allow inbound from ALB security group on all container ports (1-65535).
+	// We use a wide range because container port is configurable.
+	_, err = ec2Client.AuthorizeSecurityGroupIngress(ctx, &ec2.AuthorizeSecurityGroupIngressInput{
+		GroupId: aws.String(taskSGID),
+		IpPermissions: []ec2types.IpPermission{{
+			IpProtocol: aws.String("tcp"),
+			FromPort:   aws.Int32(1),
+			ToPort:     aws.Int32(65535),
+			UserIdGroupPairs: []ec2types.UserIdGroupPair{{
+				GroupId: aws.String(albSGID),
+			}},
+		}},
+	})
+	if err != nil {
+		return fmt.Errorf("authorize task ingress from ALB: %w", err)
+	}
+
+	// Store legacy ResourceSecurityGroup as the task SG for backward compatibility.
+	if storeErr := p.store.UpdateInfraResource(infra.ID, state.ResourceSecurityGroup, taskSGID); storeErr != nil {
+		slog.Error("failed to update infra resource", "infraID", infra.ID, "resource", state.ResourceSecurityGroup, "error", storeErr)
+	}
+	infra.Resources[state.ResourceSecurityGroup] = taskSGID
+
+	slog.Info("VPC with public/private subnets created",
 		slog.String("component", "provisionVPC"),
 		slog.String("vpc_id", vpcID),
-		slog.Any("subnet_ids", subnetIDs),
-		slog.String("security_group_id", sgID))
+		slog.Any("public_subnets", publicSubnetIDs),
+		slog.Any("private_subnets", privateSubnetIDs),
+		slog.String("nat_gateway_id", natGWID),
+		slog.String("alb_security_group", albSGID),
+		slog.String("task_security_group", taskSGID))
 	return nil
+}
+
+// mergeTags merges two tag maps, with the second map's values overriding the first.
+func mergeTags(base, override map[string]string) map[string]string {
+	result := make(map[string]string, len(base)+len(override))
+	for k, v := range base {
+		result[k] = v
+	}
+	for k, v := range override {
+		result[k] = v
+	}
+	return result
 }
 
 func (p *AWSProvider) provisionECSCluster(ctx context.Context, cfg aws.Config, infra *state.Infrastructure, tags map[string]string) error {
@@ -961,11 +1141,17 @@ func (p *AWSProvider) provisionALB(ctx context.Context, cfg aws.Config, infra *s
 		}
 	}
 
-	// Create ALB.
+	// Create ALB with ALB security group (allows public HTTP/HTTPS).
+	// Per spec ralph/specs/networking.md: ALB uses dedicated ALB security group.
+	albSGID := infra.Resources[state.ResourceSecurityGroupALB]
+	if albSGID == "" {
+		// Fallback to legacy single security group for backward compatibility.
+		albSGID = infra.Resources[state.ResourceSecurityGroup]
+	}
 	albResp, err := elbClient.CreateLoadBalancer(ctx, &elbv2.CreateLoadBalancerInput{
 		Name:           aws.String("agent-deploy-" + infra.ID[:8]),
 		Subnets:        subnetIDs,
-		SecurityGroups: []string{infra.Resources[state.ResourceSecurityGroup]},
+		SecurityGroups: []string{albSGID},
 		Scheme:         elbv2types.LoadBalancerSchemeEnumInternetFacing,
 		Type:           elbv2types.LoadBalancerTypeEnumApplication,
 		Tags:           mapToELBTags(tags),
@@ -1309,12 +1495,27 @@ func (p *AWSProvider) createTaskDefinition(ctx context.Context, cfg aws.Config, 
 func (p *AWSProvider) createOrUpdateService(ctx context.Context, cfg aws.Config, infra *state.Infrastructure, taskDefARN, deployID string, containerPort, desiredCount int) (string, error) {
 	ecsClient := ecs.NewFromConfig(cfg)
 
-	subnetStr := infra.Resources[state.ResourceSubnetPublic]
+	// Per spec ralph/specs/networking.md: ECS tasks run in private subnets.
+	// Use private subnets if available, fall back to public for backward compatibility.
+	subnetStr := infra.Resources[state.ResourceSubnetPrivate]
+	assignPublicIP := ecstypes.AssignPublicIpDisabled
+	if subnetStr == "" {
+		// Fallback to public subnets (legacy infrastructure).
+		subnetStr = infra.Resources[state.ResourceSubnetPublic]
+		assignPublicIP = ecstypes.AssignPublicIpEnabled
+	}
+
 	var subnetIDs []string
 	for _, s := range splitComma(subnetStr) {
 		if s != "" {
 			subnetIDs = append(subnetIDs, s)
 		}
+	}
+
+	// Use task security group if available, fall back to legacy security group.
+	taskSGID := infra.Resources[state.ResourceSecurityGroupTask]
+	if taskSGID == "" {
+		taskSGID = infra.Resources[state.ResourceSecurityGroup]
 	}
 
 	serviceName := "agent-deploy-" + deployID[:12]
@@ -1328,8 +1529,8 @@ func (p *AWSProvider) createOrUpdateService(ctx context.Context, cfg aws.Config,
 		NetworkConfiguration: &ecstypes.NetworkConfiguration{
 			AwsvpcConfiguration: &ecstypes.AwsVpcConfiguration{
 				Subnets:        subnetIDs,
-				SecurityGroups: []string{infra.Resources[state.ResourceSecurityGroup]},
-				AssignPublicIp: ecstypes.AssignPublicIpEnabled,
+				SecurityGroups: []string{taskSGID},
+				AssignPublicIp: assignPublicIP,
 			},
 		},
 		LoadBalancers: []ecstypes.LoadBalancer{{
@@ -1345,7 +1546,9 @@ func (p *AWSProvider) createOrUpdateService(ctx context.Context, cfg aws.Config,
 	serviceARN := *resp.Service.ServiceArn
 	slog.Info("ECS service created",
 		slog.String("component", "createOrUpdateService"),
-		slog.String("service_arn", serviceARN))
+		slog.String("service_arn", serviceARN),
+		slog.Any("subnets", subnetIDs),
+		slog.String("assign_public_ip", string(assignPublicIP)))
 	return serviceARN, nil
 }
 
@@ -1684,46 +1887,130 @@ func (p *AWSProvider) deleteExecutionRole(ctx context.Context, cfg aws.Config, i
 func (p *AWSProvider) deleteVPCResources(ctx context.Context, cfg aws.Config, infra *state.Infrastructure) error {
 	ec2Client := ec2.NewFromConfig(cfg)
 
-	// Delete security group.
+	// Per spec ralph/specs/networking.md: Delete in reverse dependency order.
+	// 1. Delete NAT Gateway first (and wait for deletion).
+	natGWID := infra.Resources[state.ResourceNATGateway]
+	if natGWID != "" {
+		_, err := ec2Client.DeleteNatGateway(ctx, &ec2.DeleteNatGatewayInput{
+			NatGatewayId: aws.String(natGWID),
+		})
+		if err != nil {
+			slog.Warn("failed to delete NAT gateway",
+				slog.String("component", "deleteVPCResources"),
+				slog.String("nat_gateway_id", natGWID),
+				logging.Err(err))
+		} else {
+			// Wait for NAT Gateway to be deleted before releasing Elastic IP.
+			slog.Info("waiting for NAT gateway deletion",
+				slog.String("component", "deleteVPCResources"),
+				slog.String("nat_gateway_id", natGWID))
+			waiter := ec2.NewNatGatewayDeletedWaiter(ec2Client)
+			if err := waiter.Wait(ctx, &ec2.DescribeNatGatewaysInput{
+				NatGatewayIds: []string{natGWID},
+			}, 5*time.Minute); err != nil {
+				slog.Warn("timeout waiting for NAT gateway deletion",
+					slog.String("component", "deleteVPCResources"),
+					slog.String("nat_gateway_id", natGWID),
+					logging.Err(err))
+			}
+		}
+	}
+
+	// 2. Release Elastic IP.
+	eipAllocationID := infra.Resources[state.ResourceElasticIP]
+	if eipAllocationID != "" {
+		_, err := ec2Client.ReleaseAddress(ctx, &ec2.ReleaseAddressInput{
+			AllocationId: aws.String(eipAllocationID),
+		})
+		if err != nil {
+			slog.Warn("failed to release Elastic IP",
+				slog.String("component", "deleteVPCResources"),
+				slog.String("allocation_id", eipAllocationID),
+				logging.Err(err))
+		}
+	}
+
+	// 3. Delete task security group.
+	taskSGID := infra.Resources[state.ResourceSecurityGroupTask]
+	if taskSGID != "" {
+		_, err := ec2Client.DeleteSecurityGroup(ctx, &ec2.DeleteSecurityGroupInput{
+			GroupId: aws.String(taskSGID),
+		})
+		if err != nil {
+			slog.Warn("failed to delete task security group",
+				slog.String("component", "deleteVPCResources"),
+				slog.String("security_group_id", taskSGID),
+				logging.Err(err))
+		}
+	}
+
+	// 4. Delete ALB security group.
+	albSGID := infra.Resources[state.ResourceSecurityGroupALB]
+	if albSGID != "" {
+		_, err := ec2Client.DeleteSecurityGroup(ctx, &ec2.DeleteSecurityGroupInput{
+			GroupId: aws.String(albSGID),
+		})
+		if err != nil {
+			slog.Warn("failed to delete ALB security group",
+				slog.String("component", "deleteVPCResources"),
+				slog.String("security_group_id", albSGID),
+				logging.Err(err))
+		}
+	}
+
+	// 5. Delete legacy security group (for backward compatibility).
 	sgID := infra.Resources[state.ResourceSecurityGroup]
-	if sgID != "" {
+	if sgID != "" && sgID != taskSGID {
 		_, err := ec2Client.DeleteSecurityGroup(ctx, &ec2.DeleteSecurityGroupInput{
 			GroupId: aws.String(sgID),
 		})
 		if err != nil {
-			return fmt.Errorf("failed to delete security group: %w", err)
+			slog.Warn("failed to delete security group",
+				slog.String("component", "deleteVPCResources"),
+				slog.String("security_group_id", sgID),
+				logging.Err(err))
 		}
 	}
 
-	// Delete route table associations and route table.
+	// 6. Delete private route table.
+	privateRTID := infra.Resources[state.ResourceRouteTablePrivate]
+	if privateRTID != "" {
+		if err := p.deleteRouteTable(ctx, ec2Client, privateRTID); err != nil {
+			slog.Warn("failed to delete private route table",
+				slog.String("component", "deleteVPCResources"),
+				slog.String("route_table_id", privateRTID),
+				logging.Err(err))
+		}
+	}
+
+	// 7. Delete public route table.
 	rtID := infra.Resources[state.ResourceRouteTable]
 	if rtID != "" {
-		// Get associations.
-		rtResp, err := ec2Client.DescribeRouteTables(ctx, &ec2.DescribeRouteTablesInput{
-			RouteTableIds: []string{rtID},
-		})
-		if err != nil {
-			return fmt.Errorf("failed to describe route tables: %w", err)
-		}
-		if len(rtResp.RouteTables) > 0 {
-			for _, assoc := range rtResp.RouteTables[0].Associations {
-				if assoc.RouteTableAssociationId != nil && !*assoc.Main {
-					if _, err := ec2Client.DisassociateRouteTable(ctx, &ec2.DisassociateRouteTableInput{
-						AssociationId: assoc.RouteTableAssociationId,
-					}); err != nil {
-						return fmt.Errorf("failed to disassociate route table: %w", err)
-					}
-				}
-			}
-		}
-		if _, err := ec2Client.DeleteRouteTable(ctx, &ec2.DeleteRouteTableInput{
-			RouteTableId: aws.String(rtID),
-		}); err != nil {
-			return fmt.Errorf("failed to delete route table: %w", err)
+		if err := p.deleteRouteTable(ctx, ec2Client, rtID); err != nil {
+			slog.Warn("failed to delete public route table",
+				slog.String("component", "deleteVPCResources"),
+				slog.String("route_table_id", rtID),
+				logging.Err(err))
 		}
 	}
 
-	// Delete subnets.
+	// 8. Delete private subnets.
+	privateSubnetStr := infra.Resources[state.ResourceSubnetPrivate]
+	for _, subnetID := range splitComma(privateSubnetStr) {
+		if subnetID != "" {
+			_, err := ec2Client.DeleteSubnet(ctx, &ec2.DeleteSubnetInput{
+				SubnetId: aws.String(subnetID),
+			})
+			if err != nil {
+				slog.Warn("failed to delete private subnet",
+					slog.String("component", "deleteVPCResources"),
+					slog.String("subnet_id", subnetID),
+					logging.Err(err))
+			}
+		}
+	}
+
+	// 9. Delete public subnets.
 	subnetStr := infra.Resources[state.ResourceSubnetPublic]
 	for _, subnetID := range splitComma(subnetStr) {
 		if subnetID != "" {
@@ -1731,12 +2018,15 @@ func (p *AWSProvider) deleteVPCResources(ctx context.Context, cfg aws.Config, in
 				SubnetId: aws.String(subnetID),
 			})
 			if err != nil {
-				return fmt.Errorf("failed to delete subnet %s: %w", subnetID, err)
+				slog.Warn("failed to delete public subnet",
+					slog.String("component", "deleteVPCResources"),
+					slog.String("subnet_id", subnetID),
+					logging.Err(err))
 			}
 		}
 	}
 
-	// Detach and delete internet gateway.
+	// 10. Detach and delete internet gateway.
 	igwID := infra.Resources[state.ResourceInternetGateway]
 	vpcID := infra.Resources[state.ResourceVPC]
 	if igwID != "" && vpcID != "" {
@@ -1744,16 +2034,22 @@ func (p *AWSProvider) deleteVPCResources(ctx context.Context, cfg aws.Config, in
 			InternetGatewayId: aws.String(igwID),
 			VpcId:             aws.String(vpcID),
 		}); err != nil {
-			return fmt.Errorf("failed to detach internet gateway: %w", err)
+			slog.Warn("failed to detach internet gateway",
+				slog.String("component", "deleteVPCResources"),
+				slog.String("igw_id", igwID),
+				logging.Err(err))
 		}
 		if _, err := ec2Client.DeleteInternetGateway(ctx, &ec2.DeleteInternetGatewayInput{
 			InternetGatewayId: aws.String(igwID),
 		}); err != nil {
-			return fmt.Errorf("failed to delete internet gateway: %w", err)
+			slog.Warn("failed to delete internet gateway",
+				slog.String("component", "deleteVPCResources"),
+				slog.String("igw_id", igwID),
+				logging.Err(err))
 		}
 	}
 
-	// Delete VPC.
+	// 11. Delete VPC.
 	if vpcID != "" {
 		_, err := ec2Client.DeleteVpc(ctx, &ec2.DeleteVpcInput{
 			VpcId: aws.String(vpcID),
@@ -1763,6 +2059,34 @@ func (p *AWSProvider) deleteVPCResources(ctx context.Context, cfg aws.Config, in
 		}
 	}
 
+	return nil
+}
+
+// deleteRouteTable disassociates and deletes a route table.
+func (p *AWSProvider) deleteRouteTable(ctx context.Context, ec2Client *ec2.Client, rtID string) error {
+	// Get associations.
+	rtResp, err := ec2Client.DescribeRouteTables(ctx, &ec2.DescribeRouteTablesInput{
+		RouteTableIds: []string{rtID},
+	})
+	if err != nil {
+		return fmt.Errorf("describe route table: %w", err)
+	}
+	if len(rtResp.RouteTables) > 0 {
+		for _, assoc := range rtResp.RouteTables[0].Associations {
+			if assoc.RouteTableAssociationId != nil && !*assoc.Main {
+				if _, err := ec2Client.DisassociateRouteTable(ctx, &ec2.DisassociateRouteTableInput{
+					AssociationId: assoc.RouteTableAssociationId,
+				}); err != nil {
+					return fmt.Errorf("disassociate route table: %w", err)
+				}
+			}
+		}
+	}
+	if _, err := ec2Client.DeleteRouteTable(ctx, &ec2.DeleteRouteTableInput{
+		RouteTableId: aws.String(rtID),
+	}); err != nil {
+		return fmt.Errorf("delete route table: %w", err)
+	}
 	return nil
 }
 

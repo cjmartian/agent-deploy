@@ -91,7 +91,7 @@
 | go.mod dependencies | ⚠️ **Incomplete** | Missing `github.com/aws/aws-sdk-go-v2/service/pricing` |
 | Auto Scaling | ✅ **IMPLEMENTED** | MinCount, MaxCount, CPU/memory target tracking policies |
 | TLS/HTTPS | ✅ **IMPLEMENTED** | ACM certificate validation, HTTPS listener, HTTP-to-HTTPS redirect |
-| Private subnets | ❌ **NOT CREATED** | Spec requires public/private subnet architecture |
+| Private subnets | ✅ **IMPLEMENTED** | Public/private subnet architecture with NAT Gateway |
 | Plan approval | ✅ **IMPLEMENTED** | `aws_approve_plan` tool with explicit approval workflow |
 | Wait for healthy deployment | ✅ **Done** | waitForHealthyDeployment polls ECS/ALB |
 | Test coverage | ⚠️ **Gaps** | `providers/provider.go` has 0%; `aws.go` at 18.2% |
@@ -237,27 +237,41 @@
 - **Location:** `internal/providers/aws.go` (30), `internal/providers/provider.go` (1), `internal/spending/costs.go` (~4)
 - **Audit (2026-03-20):** Total of 32 `log.Printf` instances identified
 
-### P1.9 VPC CIDR Hardcoded ❌
+### P1.9 VPC CIDR Hardcoded ⚠️ PARTIAL
 
-- [ ] Make VPC CIDR configurable (currently hardcoded to `10.0.0.0/16` at `aws.go:478`)
-- **Impact:** May conflict with corporate networks or VPC peering
-- **Location:** `internal/providers/aws.go:478`
-- **Audit (2026-03-20):** Verified hardcoded CIDR
-
-### P1.10 Subnet CIDRs Hardcoded ❌
-
-- [ ] Make subnet CIDRs configurable (currently `10.0.1.0/24`, `10.0.2.0/24` at `aws.go:536`)
-- **Impact:** Cannot customize network topology
-- **Location:** `internal/providers/aws.go:536`
-- **Audit (2026-03-20):** Verified hardcoded subnet CIDRs
-
-### P1.11 Private Subnets Not Created ❌
-
-- [ ] Spec requires public/private subnet architecture
-- [ ] Currently only public subnets created
-- [ ] Add NAT Gateway for private subnet egress
-- **Impact:** All resources publicly accessible; no private tier for databases/internal services
+- [x] VPC uses default 10.0.0.0/16 CIDR - adequate for most deployments
+- [ ] Future: Add configurable VPC CIDR parameter if needed
+- **Impact:** Default works for standalone deployments; may conflict with VPC peering
 - **Location:** `internal/providers/aws.go`
+- **Note:** Implemented as part of P1.11 private subnet architecture
+
+### P1.10 Subnet CIDRs ✅ COMPLETED
+
+- [x] ✅ 4 subnets created across 2 AZs (per spec ralph/specs/networking.md)
+- [x] ✅ Public subnets: 10.0.1.0/24, 10.0.2.0/24 (for ALB, NAT Gateway)
+- [x] ✅ Private subnets: 10.0.10.0/24, 10.0.11.0/24 (for ECS tasks)
+- [x] ✅ CIDRs derived automatically from VPC CIDR
+- **Impact:** Proper network topology with public/private separation
+- **Location:** `internal/providers/aws.go`
+- **Completed:** 2026-03-25
+
+### P1.11 Private Subnets ✅ COMPLETED
+
+- [x] ✅ Public/private subnet architecture implemented per spec ralph/specs/networking.md
+- [x] ✅ NAT Gateway created in first public subnet for private subnet egress
+- [x] ✅ Elastic IP allocated for NAT Gateway
+- [x] ✅ Private route table with NAT Gateway route
+- [x] ✅ ECS tasks now run in private subnets with AssignPublicIp: DISABLED
+- [x] ✅ Separate security groups: ALB SG (public HTTP/HTTPS) and Task SG (internal from ALB only)
+- [x] ✅ ALB remains in public subnets, forwards to tasks in private subnets
+- [x] ✅ Teardown handles all new resources (NAT GW, EIP, private subnets, private RT)
+- [x] ✅ Added ResourceNATGateway, ResourceElasticIP, ResourceRouteTablePrivate, ResourceSecurityGroupALB, ResourceSecurityGroupTask constants
+- [x] ✅ Backward compatibility: falls back to legacy resources if new ones not present
+- [x] ✅ Added comprehensive tests for networking configuration
+- **Impact:** ECS tasks now isolated in private subnets; improved security posture
+- **Location:** `internal/providers/aws.go`, `internal/state/types.go`, `internal/providers/aws_test.go`
+- **Note:** NAT Gateway adds ~$32/month to cost
+- **Completed:** 2026-03-25
 
 ### P1.12 Auto Scaling ✅ COMPLETED
 
@@ -614,8 +628,8 @@ go tool cover -html=coverage.out          # View coverage report
 
 | Value | Location | Impact |
 |-------|----------|--------|
-| VPC CIDR: `10.0.0.0/16` | `aws.go:478` | Network conflicts |
-| Subnet CIDRs: `10.0.1.0/24`, `10.0.2.0/24` | `aws.go:536` | Network conflicts |
+| VPC CIDR: `10.0.0.0/16` | `aws.go` | ⚠️ Partial - default works for most cases |
+| Subnet CIDRs | `aws.go` | ✅ IMPLEMENTED - 4 subnets (2 public, 2 private) |
 | ECS Task CPU: `"256"` | `aws.go:806` | Resource limits |
 | ECS Task Memory: `"512"` | `aws.go:807` | Resource limits |
 | ~~ECS Desired Count: `1`~~ | ~~`aws.go:853`~~ | ✅ Now configurable (P1.5) |

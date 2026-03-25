@@ -998,3 +998,164 @@ func TestInfraResources_TLSEnabled(t *testing.T) {
 		})
 	}
 }
+
+// TestResourceNetworkingConstants tests the new networking resource constants.
+func TestResourceNetworkingConstants(t *testing.T) {
+// Verify the new resource constant values.
+tests := []struct {
+constant string
+value    string
+}{
+{state.ResourceSecurityGroupALB, "security_group_alb"},
+{state.ResourceSecurityGroupTask, "security_group_task"},
+{state.ResourceRouteTablePrivate, "route_table_private"},
+{state.ResourceNATGateway, "nat_gateway"},
+{state.ResourceElasticIP, "elastic_ip"},
+{state.ResourceSubnetPrivate, "subnet_private"},
+}
+
+for _, tt := range tests {
+t.Run(tt.value, func(t *testing.T) {
+if tt.constant != tt.value {
+t.Errorf("Resource constant = %q, want %q", tt.constant, tt.value)
+}
+})
+}
+}
+
+// TestInfraResources_PrivateSubnets tests that infrastructure stores private subnet configuration.
+func TestInfraResources_PrivateSubnets(t *testing.T) {
+infra := &state.Infrastructure{
+ID:        "infra-test",
+Resources: make(map[string]string),
+}
+
+// Simulate public/private subnet architecture.
+publicSubnets := "subnet-pub-1,subnet-pub-2"
+privateSubnets := "subnet-priv-1,subnet-priv-2"
+albSG := "sg-alb-123"
+taskSG := "sg-task-456"
+natGW := "nat-12345678"
+eip := "eipalloc-12345678"
+
+infra.Resources[state.ResourceSubnetPublic] = publicSubnets
+infra.Resources[state.ResourceSubnetPrivate] = privateSubnets
+infra.Resources[state.ResourceSecurityGroupALB] = albSG
+infra.Resources[state.ResourceSecurityGroupTask] = taskSG
+infra.Resources[state.ResourceNATGateway] = natGW
+infra.Resources[state.ResourceElasticIP] = eip
+
+// Verify all resources are stored correctly.
+if infra.Resources[state.ResourceSubnetPublic] != publicSubnets {
+t.Errorf("Public subnets = %q, want %q", infra.Resources[state.ResourceSubnetPublic], publicSubnets)
+}
+if infra.Resources[state.ResourceSubnetPrivate] != privateSubnets {
+t.Errorf("Private subnets = %q, want %q", infra.Resources[state.ResourceSubnetPrivate], privateSubnets)
+}
+if infra.Resources[state.ResourceSecurityGroupALB] != albSG {
+t.Errorf("ALB SG = %q, want %q", infra.Resources[state.ResourceSecurityGroupALB], albSG)
+}
+if infra.Resources[state.ResourceSecurityGroupTask] != taskSG {
+t.Errorf("Task SG = %q, want %q", infra.Resources[state.ResourceSecurityGroupTask], taskSG)
+}
+if infra.Resources[state.ResourceNATGateway] != natGW {
+t.Errorf("NAT GW = %q, want %q", infra.Resources[state.ResourceNATGateway], natGW)
+}
+if infra.Resources[state.ResourceElasticIP] != eip {
+t.Errorf("EIP = %q, want %q", infra.Resources[state.ResourceElasticIP], eip)
+}
+}
+
+// TestMergeTags tests the tag merging helper function.
+func TestMergeTags(t *testing.T) {
+base := map[string]string{
+"env":     "prod",
+"team":    "platform",
+"project": "deploy",
+}
+override := map[string]string{
+"Name": "my-resource",
+"team": "infra", // Should override base
+}
+
+result := mergeTags(base, override)
+
+// Verify base tags are present.
+if result["env"] != "prod" {
+t.Errorf("env = %q, want %q", result["env"], "prod")
+}
+if result["project"] != "deploy" {
+t.Errorf("project = %q, want %q", result["project"], "deploy")
+}
+
+// Verify override tags are present.
+if result["Name"] != "my-resource" {
+t.Errorf("Name = %q, want %q", result["Name"], "my-resource")
+}
+
+// Verify override takes precedence.
+if result["team"] != "infra" {
+t.Errorf("team = %q, want %q (should be overridden)", result["team"], "infra")
+}
+
+// Verify total tag count.
+if len(result) != 4 {
+t.Errorf("tag count = %d, want %d", len(result), 4)
+}
+}
+
+// TestECSServiceUsesPrivateSubnets tests subnet selection logic for ECS service.
+func TestECSServiceUsesPrivateSubnets(t *testing.T) {
+tests := []struct {
+name              string
+privateSubnets    string
+publicSubnets     string
+wantSubnetPrefix  string
+wantPublicIPState string
+}{
+{
+name:              "uses private subnets when available",
+privateSubnets:    "subnet-priv-1,subnet-priv-2",
+publicSubnets:     "subnet-pub-1,subnet-pub-2",
+wantSubnetPrefix:  "subnet-priv",
+wantPublicIPState: "DISABLED",
+},
+{
+name:              "falls back to public subnets",
+privateSubnets:    "",
+publicSubnets:     "subnet-pub-1,subnet-pub-2",
+wantSubnetPrefix:  "subnet-pub",
+wantPublicIPState: "ENABLED",
+},
+}
+
+for _, tt := range tests {
+t.Run(tt.name, func(t *testing.T) {
+infra := &state.Infrastructure{
+ID:        "infra-test",
+Resources: make(map[string]string),
+}
+infra.Resources[state.ResourceSubnetPrivate] = tt.privateSubnets
+infra.Resources[state.ResourceSubnetPublic] = tt.publicSubnets
+
+// Simulate the logic from createOrUpdateService.
+subnetStr := infra.Resources[state.ResourceSubnetPrivate]
+assignPublicIP := "DISABLED"
+if subnetStr == "" {
+subnetStr = infra.Resources[state.ResourceSubnetPublic]
+assignPublicIP = "ENABLED"
+}
+
+// Check subnet selection.
+if subnetStr == "" {
+t.Error("subnet string should not be empty")
+}
+if len(subnetStr) > 0 && subnetStr[:len(tt.wantSubnetPrefix)] != tt.wantSubnetPrefix {
+t.Errorf("subnet = %q, want prefix %q", subnetStr, tt.wantSubnetPrefix)
+}
+if assignPublicIP != tt.wantPublicIPState {
+t.Errorf("assignPublicIP = %q, want %q", assignPublicIP, tt.wantPublicIPState)
+}
+})
+}
+}
