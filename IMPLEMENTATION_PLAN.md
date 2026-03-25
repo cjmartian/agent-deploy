@@ -483,12 +483,14 @@
 - **Impact:** Performance issues with many ALBs
 - **Location:** `internal/state/reconcile.go`
 
-### P3.3 Version String Duplicated ❌
+### P3.3 Version String Duplicated ✅ COMPLETED
 
-- [ ] Consolidate version "v0.1.0" (appears at `main.go:41` and `main.go:165`)
-- [ ] Use single constant for version
+- [x] Consolidate version "v0.1.0" (appears at `main.go:41` and `main.go:165`)
+- [x] Use single constant for version
 - **Impact:** Version drift possible if updated in one place only
 - **Location:** `internal/main.go:41,165`
+- **Completed:** 2026-03-25
+- **Details:** Added Version variable at package level; both log message and MCP Implementation use the constant; Makefile injects version from git via ldflags
 
 ### P3.4 Cost Monitor Region Hardcoded ❌
 
@@ -527,13 +529,15 @@
 - **Completed:** 2026-03-25
 - **Details:** Added all, test-race, coverage, coverage-html, run, install, help targets; improved clean target; updated test target
 
-### P3.8 Logging Config AddTime Field Unused ❌
+### P3.8 Logging Config AddTime Field Unused ✅ COMPLETED
 
-- [ ] `AddTime` field in `internal/logging/Config` is defined but never used
-- [ ] Either implement time addition logic or remove the field
+- [x] `AddTime` field in `internal/logging/Config` is defined but never used
+- [x] Either implement time addition logic or remove the field
 - **Impact:** Dead code; confusing API
 - **Location:** `internal/logging/logging.go`
 - **Audit (2026-03-20):** Discovered unused field
+- **Completed:** 2026-03-25
+- **Details:** Removed unused AddTime field from logging.Config; slog handlers already include timestamps by default
 
 ---
 
@@ -658,9 +662,9 @@ go tool cover -html=coverage.out          # View coverage report
 | **P0 Critical** | 0 | ✅ All completed |
 | **P1 Spec Gaps** | 11 | Cost estimation, HTTPS, VPC, subnets, etc. (P1.12 Auto Scaling completed) |
 | **P2 Test Gaps** | 7 | provider.go (0%), aws.go (18.2%), coverage, unit testing (P2.6 AWS SDK Mocking completed) |
-| **P3 Quality** | 7 | Pagination, ALB tags, version, region, errors, disclaimer, unused AddTime (P3.7 Makefile completed) |
+| **P3 Quality** | 5 | Pagination, ALB tags, region, errors, disclaimer (P3.3, P3.7, P3.8 completed) |
 | **P5 Stretch** | 3 | CloudFormation, multi-cloud, secrets |
-| **Total** | **31** | |
+| **Total** | **29** | |
 
 ---
 
