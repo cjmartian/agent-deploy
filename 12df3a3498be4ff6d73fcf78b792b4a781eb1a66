@@ -1,0 +1,26 @@
+Reconciler Unit Tests Implementation
+
+WHY: The reconciler (internal/state/reconcile.go) had 0% test coverage. This is a critical component that syncs local state with AWS resources - detecting orphaned AWS resources and stale local entries.
+
+WHAT CHANGED:
+1. Added ReconcileEC2API, ReconcileECSAPI, ReconcileELBV2API interfaces to enable mock testing
+2. Added NewReconcilerWithClients() constructor for dependency injection
+3. Refactored pagination from SDK paginators to manual token-based pagination
+   - Reason: SDK paginators are tied to concrete client types, can't mock
+   - Behavior unchanged: still handles large accounts with >1000 resources
+4. Added 17 comprehensive test cases covering all reconciler functionality
+
+DESIGN DECISIONS:
+- Mock-based unit tests preferred over LocalStack integration tests
+  - Faster execution (ms vs seconds)
+  - No external dependencies
+  - Same coverage for business logic
+  - LocalStack can be added later if needed for e2e testing
+
+COVERAGE IMPACT:
+- internal/state package: 44.4% → 82.0%
+- reconcile.go functions now have mock-based test coverage
+
+FUTURE WORK:
+- P2.9: main.go still at 0% - entry point testing needed
+- P2.11: spending package at 23% - CostTracker methods need tests
