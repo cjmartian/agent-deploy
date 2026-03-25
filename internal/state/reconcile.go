@@ -3,6 +3,7 @@ package state
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -310,22 +311,31 @@ func (r *Reconciler) countSyncedResources(_ context.Context) int {
 
 // AWS resource discovery helpers
 
+// findTaggedVPCs returns all VPCs tagged with agent-deploy:created-by.
+// WHY pagination: AWS DescribeVpcs returns max 1000 results per call.
+// Without pagination, deployments beyond page 1 are invisible to reconciliation.
+// See spec ralph/specs/operational.md Section 1.
 func (r *Reconciler) findTaggedVPCs(ctx context.Context) ([]ec2types.Vpc, error) {
-	input := &ec2.DescribeVpcsInput{
+	var allVPCs []ec2types.Vpc
+
+	paginator := ec2.NewDescribeVpcsPaginator(r.ec2Client, &ec2.DescribeVpcsInput{
 		Filters: []ec2types.Filter{
 			{
 				Name:   aws.String("tag-key"),
 				Values: []string{"agent-deploy:created-by"},
 			},
 		},
+	})
+
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("describe VPCs: %w", err)
+		}
+		allVPCs = append(allVPCs, page.Vpcs...)
 	}
 
-	output, err := r.ec2Client.DescribeVpcs(ctx, input)
-	if err != nil {
-		return nil, err
-	}
-
-	return output.Vpcs, nil
+	return allVPCs, nil
 }
 
 type taggedCluster struct {
@@ -333,44 +343,62 @@ type taggedCluster struct {
 	Tags       []ec2types.Tag
 }
 
+// findTaggedECSClusters returns all ECS clusters tagged with agent-deploy:created-by.
+// WHY pagination: AWS ListClusters returns max 100 results per call.
+// Without pagination, clusters beyond page 1 are invisible to reconciliation.
+// See spec ralph/specs/operational.md Section 1.
 func (r *Reconciler) findTaggedECSClusters(ctx context.Context) ([]taggedCluster, error) {
-	// List all clusters
-	listOutput, err := r.ecsClient.ListClusters(ctx, &ecs.ListClustersInput{})
-	if err != nil {
-		return nil, err
+	// Collect all cluster ARNs using paginator
+	var allClusterARNs []string
+
+	paginator := ecs.NewListClustersPaginator(r.ecsClient, &ecs.ListClustersInput{})
+
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("list ECS clusters: %w", err)
+		}
+		allClusterARNs = append(allClusterARNs, page.ClusterArns...)
 	}
 
-	if len(listOutput.ClusterArns) == 0 {
+	if len(allClusterARNs) == 0 {
 		return nil, nil
 	}
 
-	// Describe clusters to get tags
-	descOutput, err := r.ecsClient.DescribeClusters(ctx, &ecs.DescribeClustersInput{
-		Clusters: listOutput.ClusterArns,
-		Include:  []ecstypes.ClusterField{ecstypes.ClusterFieldTags},
-	})
-	if err != nil {
-		return nil, err
-	}
-
+	// Describe clusters in batches of 100 (API limit) to get tags
 	var result []taggedCluster
-	for _, cluster := range descOutput.Clusters {
-		// Check if cluster has agent-deploy tag
-		for _, tag := range cluster.Tags {
-			if aws.ToString(tag.Key) == "agent-deploy:created-by" {
-				// Convert ECS tags to EC2 tags for consistency
-				var ec2Tags []ec2types.Tag
-				for _, t := range cluster.Tags {
-					ec2Tags = append(ec2Tags, ec2types.Tag{
-						Key:   t.Key,
-						Value: t.Value,
+	const batchSize = 100
+
+	for i := 0; i < len(allClusterARNs); i += batchSize {
+		end := min(i+batchSize, len(allClusterARNs))
+		batch := allClusterARNs[i:end]
+
+		descOutput, err := r.ecsClient.DescribeClusters(ctx, &ecs.DescribeClustersInput{
+			Clusters: batch,
+			Include:  []ecstypes.ClusterField{ecstypes.ClusterFieldTags},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("describe ECS clusters: %w", err)
+		}
+
+		for _, cluster := range descOutput.Clusters {
+			// Check if cluster has agent-deploy tag
+			for _, tag := range cluster.Tags {
+				if aws.ToString(tag.Key) == "agent-deploy:created-by" {
+					// Convert ECS tags to EC2 tags for consistency
+					var ec2Tags []ec2types.Tag
+					for _, t := range cluster.Tags {
+						ec2Tags = append(ec2Tags, ec2types.Tag{
+							Key:   t.Key,
+							Value: t.Value,
+						})
+					}
+					result = append(result, taggedCluster{
+						ClusterArn: cluster.ClusterArn,
+						Tags:       ec2Tags,
 					})
+					break
 				}
-				result = append(result, taggedCluster{
-					ClusterArn: cluster.ClusterArn,
-					Tags:       ec2Tags,
-				})
-				break
 			}
 		}
 	}
@@ -385,48 +413,84 @@ type taggedALB struct {
 	PlanID       string
 }
 
+// findTaggedALBs returns all ALBs tagged with agent-deploy:created-by.
+// WHY pagination: AWS DescribeLoadBalancers returns max 400 results per call.
+// WHY batch tags: DescribeTags accepts up to 20 ARNs per call, reducing API calls.
+// See spec ralph/specs/operational.md Section 1.
 func (r *Reconciler) findTaggedALBs(ctx context.Context) ([]taggedALB, error) {
-	// List all ALBs
-	listOutput, err := r.albClient.DescribeLoadBalancers(ctx, &elasticloadbalancingv2.DescribeLoadBalancersInput{})
+	// Collect all ALB ARNs using paginator
+	var allALBARNs []string
+
+	paginator := elasticloadbalancingv2.NewDescribeLoadBalancersPaginator(
+		r.albClient,
+		&elasticloadbalancingv2.DescribeLoadBalancersInput{},
+	)
+
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("describe load balancers: %w", err)
+		}
+		for _, lb := range page.LoadBalancers {
+			allALBARNs = append(allALBARNs, aws.ToString(lb.LoadBalancerArn))
+		}
+	}
+
+	if len(allALBARNs) == 0 {
+		return nil, nil
+	}
+
+	// Batch fetch tags (up to 20 per API call)
+	tags, err := r.batchFetchALBTags(ctx, allALBARNs)
 	if err != nil {
 		return nil, err
 	}
 
+	// Filter to only agent-deploy ALBs
 	var result []taggedALB
-	for _, lb := range listOutput.LoadBalancers {
-		// Get tags for this ALB
-		tagsOutput, err := r.albClient.DescribeTags(ctx, &elasticloadbalancingv2.DescribeTagsInput{
-			ResourceArns: []string{aws.ToString(lb.LoadBalancerArn)},
-		})
-		if err != nil {
-			continue
-		}
-
-		for _, tagDesc := range tagsOutput.TagDescriptions {
-			// Check if ALB has agent-deploy tag
-			isAgentDeploy := false
-			alb := taggedALB{ARN: aws.ToString(tagDesc.ResourceArn)}
-
-			for _, tag := range tagDesc.Tags {
-				switch aws.ToString(tag.Key) {
-				case "agent-deploy:created-by":
-					isAgentDeploy = true
-				case "agent-deploy:infra-id":
-					alb.InfraID = aws.ToString(tag.Value)
-				case "agent-deploy:deployment-id":
-					alb.DeploymentID = aws.ToString(tag.Value)
-				case "agent-deploy:plan-id":
-					alb.PlanID = aws.ToString(tag.Value)
-				}
-			}
-
-			if isAgentDeploy {
-				result = append(result, alb)
-			}
+	for arn, tagMap := range tags {
+		if _, ok := tagMap["agent-deploy:created-by"]; ok {
+			result = append(result, taggedALB{
+				ARN:          arn,
+				InfraID:      tagMap["agent-deploy:infra-id"],
+				DeploymentID: tagMap["agent-deploy:deployment-id"],
+				PlanID:       tagMap["agent-deploy:plan-id"],
+			})
 		}
 	}
 
 	return result, nil
+}
+
+// batchFetchALBTags fetches tags for multiple ALBs in batches of 20.
+// WHY: DescribeTags API accepts up to 20 ARNs per call, reducing API calls
+// from N to ceil(N/20) for N load balancers.
+// See spec ralph/specs/operational.md Section 1.
+func (r *Reconciler) batchFetchALBTags(ctx context.Context, arns []string) (map[string]map[string]string, error) {
+	tags := make(map[string]map[string]string)
+	const batchSize = 20 // AWS API limit
+
+	for i := 0; i < len(arns); i += batchSize {
+		end := min(i+batchSize, len(arns))
+		batch := arns[i:end]
+
+		resp, err := r.albClient.DescribeTags(ctx, &elasticloadbalancingv2.DescribeTagsInput{
+			ResourceArns: batch,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("describe ALB tags: %w", err)
+		}
+
+		for _, desc := range resp.TagDescriptions {
+			tagMap := make(map[string]string)
+			for _, tag := range desc.Tags {
+				tagMap[aws.ToString(tag.Key)] = aws.ToString(tag.Value)
+			}
+			tags[aws.ToString(desc.ResourceArn)] = tagMap
+		}
+	}
+
+	return tags, nil
 }
 
 // Resource existence checks
