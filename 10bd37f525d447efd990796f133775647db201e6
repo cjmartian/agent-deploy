@@ -1,0 +1,34 @@
+Implementation Notes for Private Subnet Architecture (P1.10, P1.11):
+
+WHY:
+- ECS tasks were publicly accessible (security risk)
+- Spec requires public/private subnet separation
+- NAT Gateway enables private subnet egress for ECR pulls
+
+WHAT WAS IMPLEMENTED:
+1. 4 subnets (2 public, 2 private) across 2 AZs
+2. NAT Gateway with Elastic IP in first public subnet
+3. Private route table with NAT Gateway route
+4. Separate ALB and Task security groups
+5. ECS tasks run in private subnets (AssignPublicIp: DISABLED)
+6. Updated teardown for all new resources
+
+KEY DESIGN DECISIONS:
+- Subnet CIDRs: Public (.1.0, .2.0), Private (.10.0, .11.0)
+- Task SG allows ALL ports from ALB SG (flexible container ports)
+- NAT Gateway waiter (5 min) before private RT creation
+- Backward compatibility via fallbacks to legacy resources
+
+SECURITY IMPROVEMENTS:
+- Tasks no longer directly accessible from internet
+- Traffic must flow through ALB
+- Reduced attack surface
+
+COST IMPACT:
+- NAT Gateway: ~$32/month (hourly rate + data)
+- Elastic IP: Free when attached
+
+FILES MODIFIED:
+- internal/providers/aws.go (provisionVPC, createOrUpdateService, deleteVPCResources)
+- internal/state/types.go (5 new resource constants)
+- internal/providers/aws_test.go (networking tests)
