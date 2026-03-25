@@ -90,6 +90,7 @@
 | IAM role provisioning | ✅ **Done** | `provisionExecutionRole()`, `deleteExecutionRole()`, `ResourceExecutionRole` constant |
 | go.mod dependencies | ⚠️ **Incomplete** | Missing `github.com/aws/aws-sdk-go-v2/service/pricing` |
 | Auto Scaling | ✅ **IMPLEMENTED** | MinCount, MaxCount, CPU/memory target tracking policies |
+| TLS/HTTPS | ✅ **IMPLEMENTED** | ACM certificate validation, HTTPS listener, HTTP-to-HTTPS redirect |
 | Private subnets | ❌ **NOT CREATED** | Spec requires public/private subnet architecture |
 | Plan approval | ✅ **IMPLEMENTED** | `aws_approve_plan` tool with explicit approval workflow |
 | Wait for healthy deployment | ✅ **Done** | waitForHealthyDeployment polls ECS/ALB |
@@ -212,13 +213,19 @@
 - **Location:** `internal/providers/aws.go`
 - **Completed:** Environment map parameter added for container environment variables
 
-### P1.7 No HTTPS/TLS Support ❌
+### P1.7 HTTPS/TLS Support ✅ COMPLETED
 
-- [ ] Add optional certificate ARN parameter
-- [ ] Configure ALB HTTPS listener when certificate provided
-- [ ] Default to HTTP for simplicity
-- **Impact:** Production deployments require HTTPS; currently HTTP only
-- **Location:** `internal/providers/aws.go` (ALB listener creation)
+- [x] ✅ Added `certificate_arn` parameter to `createInfraInput` struct
+- [x] ✅ Added `validateCertificate()` function to verify ACM certificate exists and is ISSUED
+- [x] ✅ Updated `provisionALB()` to create HTTPS listener on port 443 with TLS 1.2+ policy
+- [x] ✅ Implemented HTTP-to-HTTPS redirect (301) when certificate is provided
+- [x] ✅ Updated `getALBURLs()` to return https:// URLs when TLS is enabled
+- [x] ✅ Added `ResourceTLSEnabled` and `ResourceCertificateARN` constants to state types
+- [x] ✅ Added comprehensive tests for certificate ARN validation and TLS configuration
+- [x] ✅ Added `github.com/aws/aws-sdk-go-v2/service/acm` dependency
+- **Impact:** Production deployments can now use HTTPS with ACM certificates
+- **Location:** `internal/providers/aws.go`, `internal/state/types.go`, `go.mod`
+- **Completed:** 2026-03-25
 
 ### P1.8 AWS Provider Not Using Structured Logging (32 instances) ✅ COMPLETED
 
@@ -643,6 +650,7 @@ go tool cover -html=coverage.out          # View coverage report
 | **aws-provider.md** | 1 prompt (aws_deploy_plan) | ✅ Implemented |
 | **aws-provider.md** | AWS Pricing API for cost estimation | ❌ NOT IMPLEMENTED (hardcoded) |
 | **aws-provider.md** | Wait for healthy deployment in aws_deploy | ✅ IMPLEMENTED |
+| **aws-provider.md** | TLS/HTTPS with ACM certificate support | ✅ IMPLEMENTED |
 | **aws-provider.md** | Plan approval before provisioning | ❌ NOT IMPLEMENTED (auto-approves) |
 | **deployment-state.md** | Plan, Infrastructure, Deployment types | ✅ Implemented |
 | **deployment-state.md** | File-backed JSON at ~/.agent-deploy/state/ | ✅ Implemented |

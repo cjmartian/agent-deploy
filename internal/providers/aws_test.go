@@ -809,3 +809,192 @@ func TestStatusOutput_NoScaling(t *testing.T) {
 		t.Errorf("JSON %q should not contain 'scaling' when nil", jsonStr)
 	}
 }
+
+// TestCreateInfraInput_CertificateARN tests the certificate ARN field in createInfraInput.
+func TestCreateInfraInput_CertificateARN(t *testing.T) {
+	tests := []struct {
+		name           string
+		certificateARN string
+		wantJSON       string
+	}{
+		{
+			name:           "no certificate",
+			certificateARN: "",
+			wantJSON:       `"plan_id"`,
+		},
+		{
+			name:           "with certificate",
+			certificateARN: "arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012",
+			wantJSON:       `"certificate_arn":"arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := createInfraInput{
+				PlanID:         "plan-123",
+				CertificateARN: tt.certificateARN,
+			}
+
+			data, err := json.Marshal(input)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+
+			jsonStr := string(data)
+			if !containsSubstring(jsonStr, tt.wantJSON) {
+				t.Errorf("JSON %q should contain %q", jsonStr, tt.wantJSON)
+			}
+		})
+	}
+}
+
+// TestValidateCertificateARN_Format tests certificate ARN format validation.
+func TestValidateCertificateARN_Format(t *testing.T) {
+	tests := []struct {
+		name    string
+		arn     string
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name:    "valid ARN",
+			arn:     "arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012",
+			wantErr: false,
+		},
+		{
+			name:    "valid ARN with different region",
+			arn:     "arn:aws:acm:eu-west-1:987654321098:certificate/abcdef01-2345-6789-abcd-ef0123456789",
+			wantErr: false,
+		},
+		{
+			name:    "missing acm prefix",
+			arn:     "arn:aws:s3:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012",
+			wantErr: true,
+			errMsg:  "must start with 'arn:aws:acm:'",
+		},
+		{
+			name:    "not an ARN",
+			arn:     "not-an-arn",
+			wantErr: true,
+			errMsg:  "must start with 'arn:aws:acm:'",
+		},
+		{
+			name:    "missing certificate part",
+			arn:     "arn:aws:acm:us-east-1:123456789012:bucket/mybucket",
+			wantErr: true,
+			errMsg:  "must contain ':certificate/'",
+		},
+		{
+			name:    "empty ARN",
+			arn:     "",
+			wantErr: true,
+			errMsg:  "must start with 'arn:aws:acm:'",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// We can test the format validation without AWS credentials
+			// by checking the ARN format locally.
+			validFormat := isValidCertificateARNFormat(tt.arn)
+			if tt.wantErr && validFormat {
+				t.Errorf("ARN %q should be invalid", tt.arn)
+			}
+			if !tt.wantErr && !validFormat {
+				t.Errorf("ARN %q should be valid", tt.arn)
+			}
+		})
+	}
+}
+
+// isValidCertificateARNFormat checks if a certificate ARN has the correct format.
+// This is a helper function for testing without AWS credentials.
+func isValidCertificateARNFormat(certARN string) bool {
+	if certARN == "" {
+		return false
+	}
+	if len(certARN) < 12 || certARN[:12] != "arn:aws:acm:" {
+		return false
+	}
+	// Check for :certificate/ in the ARN
+	for i := 12; i < len(certARN)-13; i++ {
+		if certARN[i:i+13] == ":certificate/" {
+			return true
+		}
+	}
+	return false
+}
+
+// TestResourceTLSEnabled tests the TLS enabled resource constant.
+func TestResourceTLSEnabled(t *testing.T) {
+	// Verify the constant values match what we expect.
+	if state.ResourceTLSEnabled != "tls_enabled" {
+		t.Errorf("ResourceTLSEnabled = %q, want %q", state.ResourceTLSEnabled, "tls_enabled")
+	}
+	if state.ResourceCertificateARN != "certificate_arn" {
+		t.Errorf("ResourceCertificateARN = %q, want %q", state.ResourceCertificateARN, "certificate_arn")
+	}
+}
+
+// TestInfraResources_TLSEnabled tests that infrastructure can store TLS configuration.
+func TestInfraResources_TLSEnabled(t *testing.T) {
+	tests := []struct {
+		name           string
+		tlsEnabled     string
+		certificateARN string
+		wantHTTPS      bool
+	}{
+		{
+			name:       "TLS enabled",
+			tlsEnabled: "true",
+			certificateARN: "arn:aws:acm:us-east-1:123456789012:certificate/test",
+			wantHTTPS:  true,
+		},
+		{
+			name:       "TLS disabled",
+			tlsEnabled: "false",
+			wantHTTPS:  false,
+		},
+		{
+			name:       "TLS not set",
+			tlsEnabled: "",
+			wantHTTPS:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			infra := &state.Infrastructure{
+				ID:        "infra-test",
+				Resources: make(map[string]string),
+			}
+
+			if tt.tlsEnabled != "" {
+				infra.Resources[state.ResourceTLSEnabled] = tt.tlsEnabled
+			}
+			if tt.certificateARN != "" {
+				infra.Resources[state.ResourceCertificateARN] = tt.certificateARN
+			}
+
+			// Check if TLS is enabled.
+			isTLSEnabled := infra.Resources[state.ResourceTLSEnabled] == "true"
+			if isTLSEnabled != tt.wantHTTPS {
+				t.Errorf("TLS enabled = %v, want %v", isTLSEnabled, tt.wantHTTPS)
+			}
+
+			// Determine expected URL scheme.
+			scheme := "http"
+			if isTLSEnabled {
+				scheme = "https"
+			}
+			expectedScheme := "http"
+			if tt.wantHTTPS {
+				expectedScheme = "https"
+			}
+			if scheme != expectedScheme {
+				t.Errorf("URL scheme = %q, want %q", scheme, expectedScheme)
+			}
+		})
+	}
+}

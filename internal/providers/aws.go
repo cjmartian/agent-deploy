@@ -22,6 +22,8 @@ import (
 	ecstypes "github.com/aws/aws-sdk-go-v2/service/ecs/types"
 	elbv2 "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2"
 	elbv2types "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2/types"
+	"github.com/aws/aws-sdk-go-v2/service/acm"
+	acmtypes "github.com/aws/aws-sdk-go-v2/service/acm/types"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	"github.com/cjmartian/agent-deploy/internal/awsclient"
@@ -107,6 +109,7 @@ type planInfraOutput struct {
 type createInfraInput struct {
 	PlanID           string `json:"plan_id"             jsonschema:"the plan ID returned by aws_plan_infra"`
 	LogRetentionDays int    `json:"log_retention_days,omitempty" jsonschema:"CloudWatch log retention in days (default: 7). Valid: 1,3,5,7,14,30,60,90,120,150,180,365,400,545,731,1096,1827,2192,2557,2922,3288,3653"`
+	CertificateARN   string `json:"certificate_arn,omitempty" jsonschema:"ACM certificate ARN for HTTPS (optional). When provided, creates HTTPS listener on port 443 and redirects HTTP to HTTPS"`
 }
 
 type createInfraOutput struct {
@@ -369,7 +372,17 @@ func (p *AWSProvider) createInfra(ctx context.Context, _ *mcp.CallToolRequest, i
 		return nil, createInfraOutput{}, fmt.Errorf("provision ECS cluster: %w", err)
 	}
 
-	if err := p.provisionALB(ctx, cfg, infra, tags); err != nil {
+	// Validate certificate if provided (before creating ALB with HTTPS listener).
+	if in.CertificateARN != "" {
+		if err := p.validateCertificate(ctx, cfg, in.CertificateARN); err != nil {
+			if statusErr := p.store.SetInfraStatus(infraID, state.InfraStatusFailed); statusErr != nil {
+				slog.Error("failed to set infra status", "infraID", infraID, "error", statusErr)
+			}
+			return nil, createInfraOutput{}, fmt.Errorf("validate certificate: %w", err)
+		}
+	}
+
+	if err := p.provisionALB(ctx, cfg, infra, tags, in.CertificateARN); err != nil {
 		if statusErr := p.store.SetInfraStatus(infraID, state.InfraStatusFailed); statusErr != nil {
 			slog.Error("failed to set infra status", "infraID", infraID, "error", statusErr)
 		}
@@ -936,7 +949,7 @@ func (p *AWSProvider) provisionECSCluster(ctx context.Context, cfg aws.Config, i
 	return nil
 }
 
-func (p *AWSProvider) provisionALB(ctx context.Context, cfg aws.Config, infra *state.Infrastructure, tags map[string]string) error {
+func (p *AWSProvider) provisionALB(ctx context.Context, cfg aws.Config, infra *state.Infrastructure, tags map[string]string, certificateARN string) error {
 	elbClient := elbv2.NewFromConfig(cfg)
 
 	// Parse subnet IDs.
@@ -987,25 +1000,86 @@ func (p *AWSProvider) provisionALB(ctx context.Context, cfg aws.Config, infra *s
 	}
 	infra.Resources[state.ResourceTargetGroup] = tgARN
 
-	// Create listener.
-	_, err = elbClient.CreateListener(ctx, &elbv2.CreateListenerInput{
-		LoadBalancerArn: aws.String(albARN),
-		Protocol:        elbv2types.ProtocolEnumHttp,
-		Port:            aws.Int32(80),
-		DefaultActions: []elbv2types.Action{{
-			Type:           elbv2types.ActionTypeEnumForward,
-			TargetGroupArn: aws.String(tgARN),
-		}},
-		Tags: mapToELBTags(tags),
-	})
-	if err != nil {
-		return fmt.Errorf("create listener: %w", err)
+	// Store TLS configuration in infrastructure resources.
+	tlsEnabled := certificateARN != ""
+	if storeErr := p.store.UpdateInfraResource(infra.ID, state.ResourceTLSEnabled, fmt.Sprintf("%t", tlsEnabled)); storeErr != nil {
+		slog.Error("failed to update infra resource", "infraID", infra.ID, "resource", state.ResourceTLSEnabled, "error", storeErr)
+	}
+	infra.Resources[state.ResourceTLSEnabled] = fmt.Sprintf("%t", tlsEnabled)
+
+	if certificateARN != "" {
+		// Store certificate ARN for reference.
+		if storeErr := p.store.UpdateInfraResource(infra.ID, state.ResourceCertificateARN, certificateARN); storeErr != nil {
+			slog.Error("failed to update infra resource", "infraID", infra.ID, "resource", state.ResourceCertificateARN, "error", storeErr)
+		}
+		infra.Resources[state.ResourceCertificateARN] = certificateARN
+
+		// Create HTTPS listener on port 443 with TLS termination.
+		// Per spec ralph/specs/tls-https.md: Use modern TLS policy enforcing TLS 1.2+.
+		_, err = elbClient.CreateListener(ctx, &elbv2.CreateListenerInput{
+			LoadBalancerArn: aws.String(albARN),
+			Protocol:        elbv2types.ProtocolEnumHttps,
+			Port:            aws.Int32(443),
+			SslPolicy:       aws.String("ELBSecurityPolicy-TLS13-1-2-2021-06"),
+			Certificates: []elbv2types.Certificate{{
+				CertificateArn: aws.String(certificateARN),
+			}},
+			DefaultActions: []elbv2types.Action{{
+				Type:           elbv2types.ActionTypeEnumForward,
+				TargetGroupArn: aws.String(tgARN),
+			}},
+			Tags: mapToELBTags(tags),
+		})
+		if err != nil {
+			return fmt.Errorf("create HTTPS listener: %w", err)
+		}
+
+		// Create HTTP listener that redirects to HTTPS (per spec).
+		_, err = elbClient.CreateListener(ctx, &elbv2.CreateListenerInput{
+			LoadBalancerArn: aws.String(albARN),
+			Protocol:        elbv2types.ProtocolEnumHttp,
+			Port:            aws.Int32(80),
+			DefaultActions: []elbv2types.Action{{
+				Type: elbv2types.ActionTypeEnumRedirect,
+				RedirectConfig: &elbv2types.RedirectActionConfig{
+					Protocol:   aws.String("HTTPS"),
+					Port:       aws.String("443"),
+					StatusCode: elbv2types.RedirectActionStatusCodeEnumHttp301,
+				},
+			}},
+			Tags: mapToELBTags(tags),
+		})
+		if err != nil {
+			return fmt.Errorf("create HTTP redirect listener: %w", err)
+		}
+
+		slog.Info("ALB with HTTPS created",
+			slog.String("component", "provisionALB"),
+			slog.String("alb_arn", albARN),
+			slog.String("target_group_arn", tgARN),
+			slog.String("certificate_arn", certificateARN))
+	} else {
+		// No certificate: create HTTP-only listener (forward to target group).
+		_, err = elbClient.CreateListener(ctx, &elbv2.CreateListenerInput{
+			LoadBalancerArn: aws.String(albARN),
+			Protocol:        elbv2types.ProtocolEnumHttp,
+			Port:            aws.Int32(80),
+			DefaultActions: []elbv2types.Action{{
+				Type:           elbv2types.ActionTypeEnumForward,
+				TargetGroupArn: aws.String(tgARN),
+			}},
+			Tags: mapToELBTags(tags),
+		})
+		if err != nil {
+			return fmt.Errorf("create listener: %w", err)
+		}
+
+		slog.Info("ALB and target group created",
+			slog.String("component", "provisionALB"),
+			slog.String("alb_arn", albARN),
+			slog.String("target_group_arn", tgARN))
 	}
 
-	slog.Info("ALB and target group created",
-		slog.String("component", "provisionALB"),
-		slog.String("alb_arn", albARN),
-		slog.String("target_group_arn", tgARN))
 	return nil
 }
 
@@ -1431,10 +1505,17 @@ func (p *AWSProvider) getALBURLs(ctx context.Context, cfg aws.Config, infra *sta
 		return nil, err
 	}
 
+	// Determine URL scheme based on whether TLS is enabled.
+	// Per spec ralph/specs/tls-https.md: Return https:// URLs when TLS is enabled.
+	scheme := "http"
+	if infra.Resources[state.ResourceTLSEnabled] == "true" {
+		scheme = "https"
+	}
+
 	var urls []string
 	for _, lb := range resp.LoadBalancers {
 		if lb.DNSName != nil {
-			urls = append(urls, "http://"+*lb.DNSName)
+			urls = append(urls, scheme+"://"+*lb.DNSName)
 		}
 	}
 	return urls, nil
@@ -2062,4 +2143,63 @@ func splitComma(s string) []string {
 		result = append(result, s[start:])
 	}
 	return result
+}
+
+// validateCertificate validates an ACM certificate ARN before using it for HTTPS.
+// Per spec ralph/specs/tls-https.md: Validates ARN format, certificate existence, and issued status.
+func (p *AWSProvider) validateCertificate(ctx context.Context, cfg aws.Config, certARN string) error {
+	// Validate ARN format: arn:aws:acm:region:account:certificate/id
+	if !strings.HasPrefix(certARN, "arn:aws:acm:") {
+		return fmt.Errorf("invalid certificate ARN format: must start with 'arn:aws:acm:'")
+	}
+	if !strings.Contains(certARN, ":certificate/") {
+		return fmt.Errorf("invalid certificate ARN format: must contain ':certificate/'")
+	}
+
+	// Call ACM to verify the certificate exists and is issued.
+	acmClient := acm.NewFromConfig(cfg)
+	resp, err := acmClient.DescribeCertificate(ctx, &acm.DescribeCertificateInput{
+		CertificateArn: aws.String(certARN),
+	})
+	if err != nil {
+		// Handle common errors with clear messages.
+		if strings.Contains(err.Error(), "ResourceNotFoundException") {
+			return fmt.Errorf("certificate not found: %s", certARN)
+		}
+		return fmt.Errorf("failed to describe certificate: %w", err)
+	}
+
+	if resp.Certificate == nil {
+		return fmt.Errorf("certificate not found: %s", certARN)
+	}
+
+	// Check certificate status.
+	status := resp.Certificate.Status
+	switch status {
+	case acmtypes.CertificateStatusIssued:
+		// Certificate is valid and ready to use.
+		slog.Info("certificate validated",
+			slog.String("component", "validateCertificate"),
+			slog.String("certificate_arn", certARN),
+			slog.String("status", string(status)))
+		return nil
+
+	case acmtypes.CertificateStatusPendingValidation:
+		return fmt.Errorf("certificate is pending validation: complete DNS or email validation for %s", certARN)
+
+	case acmtypes.CertificateStatusExpired:
+		return fmt.Errorf("certificate is expired: %s", certARN)
+
+	case acmtypes.CertificateStatusInactive:
+		return fmt.Errorf("certificate is inactive: %s", certARN)
+
+	case acmtypes.CertificateStatusRevoked:
+		return fmt.Errorf("certificate is revoked: %s", certARN)
+
+	case acmtypes.CertificateStatusFailed:
+		return fmt.Errorf("certificate validation failed: %s", certARN)
+
+	default:
+		return fmt.Errorf("certificate is not in issued status (current: %s): %s", status, certARN)
+	}
 }

@@ -58,6 +58,8 @@ const (
 	ResourceInternetGateway = "internet_gateway"
 	ResourceRouteTable      = "route_table"
 	ResourceExecutionRole   = "execution_role"
+	ResourceTLSEnabled      = "tls_enabled"      // "true" or "false" - whether HTTPS is configured
+	ResourceCertificateARN  = "certificate_arn"  // ACM certificate ARN when TLS is enabled
 )
 
 // Deployment represents an application deployed onto infrastructure.

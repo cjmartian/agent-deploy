@@ -5,6 +5,7 @@ go 1.25.4
 require (
 	github.com/aws/aws-sdk-go-v2 v1.41.4
 	github.com/aws/aws-sdk-go-v2/config v1.32.12
+	github.com/aws/aws-sdk-go-v2/service/acm v1.37.22
 	github.com/aws/aws-sdk-go-v2/service/applicationautoscaling v1.41.13
 	github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs v1.64.1
 	github.com/aws/aws-sdk-go-v2/service/costexplorer v1.63.5
