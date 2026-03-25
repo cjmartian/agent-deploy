@@ -118,6 +118,9 @@ func main() {
 	awsProvider := providers.GetAWSProvider(store)
 
 	// Start cost monitor if enabled and AWS credentials are available.
+	// Note: Cost Explorer API is only available in us-east-1, so we use that region
+	// regardless of the reconciliation region. The CostTracker internally overrides
+	// the region to us-east-1 as well.
 	var costMonitor *spending.CostMonitor
 	if *enableCostMonitor {
 		awsCfg, err := awsclient.LoadConfig(ctx, "us-east-1")

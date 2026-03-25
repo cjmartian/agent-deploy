@@ -4,6 +4,7 @@ package state
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -163,6 +164,10 @@ func (s *Store) ListPlans() ([]*Plan, error) {
 		var plan Plan
 		path := filepath.Join(dir, entry.Name())
 		if err := s.readJSON(path, &plan); err != nil {
+			slog.Warn("skipping malformed state file",
+				slog.String("file", path),
+				slog.String("type", "plan"),
+				slog.Any("error", err))
 			continue
 		}
 		plans = append(plans, &plan)
@@ -300,6 +305,10 @@ func (s *Store) ListInfra() ([]*Infrastructure, error) {
 		var item Infrastructure
 		path := filepath.Join(dir, entry.Name())
 		if err := s.readJSON(path, &item); err != nil {
+			slog.Warn("skipping malformed state file",
+				slog.String("file", path),
+				slog.String("type", "infrastructure"),
+				slog.Any("error", err))
 			continue
 		}
 		items = append(items, &item)
@@ -388,6 +397,10 @@ func (s *Store) ListDeployments() ([]*Deployment, error) {
 		var item Deployment
 		path := filepath.Join(dir, entry.Name())
 		if err := s.readJSON(path, &item); err != nil {
+			slog.Warn("skipping malformed state file",
+				slog.String("file", path),
+				slog.String("type", "deployment"),
+				slog.Any("error", err))
 			continue
 		}
 		items = append(items, &item)
