@@ -1,0 +1,44 @@
+Implementation Notes for Cost Estimation (P1.1, P1.2):
+
+WHY:
+- Hardcoded costs ($15+$20+$25/deployment) were inaccurate
+- No regional pricing variations
+- Budget checks used fake data
+
+WHAT WAS IMPLEMENTED:
+1. PricingEstimator (internal/spending/pricing.go):
+   - AWS Pricing API client with us-east-1 override
+   - 24-hour price cache with TTL
+   - Regional fallback prices for all major regions
+   - EstimateCosts() calculates: Fargate, ALB, NAT GW, CloudWatch
+
+2. planInfra updates:
+   - Uses PricingEstimator for cost calculation
+   - Detailed cost breakdown in output
+   - Includes assumptions and disclaimers
+   - Falls back to simplified formula if API fails
+
+3. createInfra updates:
+   - Uses CostTracker.GetTotalMonthlySpend() for actual spend
+   - Falls back to plan.EstimatedCostMo from local state
+   - Logs source of spend calculation
+
+KEY DESIGN DECISIONS:
+- Fallback-first: Always have a valid estimate even without AWS access
+- Cache: 24h TTL balances accuracy vs API calls
+- Regional pricing: Hardcoded fallbacks for 10 major regions
+- NAT Gateway: Included in estimates (now standard with private subnets)
+
+COST FORMULA:
+- Fargate: (cpu/1024 × vcpu_price + mem/1024 × mem_price) × 730h × count
+- ALB: hourly_rate × 730h + (users/3000 × 0.008 × 730h)
+- NAT GW: 0.045 × 730h + count × 10GB × 0.045
+- CloudWatch: count × 1GB × ($0.50 ingestion + $0.03 storage)
+
+FILES ADDED:
+- internal/spending/pricing.go
+- internal/spending/pricing_test.go
+
+FILES MODIFIED:
+- internal/providers/aws.go (planInfra, createInfra)
+- go.mod, go.sum (pricing SDK)
