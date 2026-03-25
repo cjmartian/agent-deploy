@@ -18,6 +18,11 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// Version is the application version. It can be overridden at build time via ldflags:
+//
+//	go build -ldflags "-X main.Version=v1.2.3" ./internal
+var Version = "v0.1.0"
+
 var (
 	httpAddr           = flag.String("http", "", "if set, use streamable HTTP at this address instead of stdin/stdout")
 	logLevel           = flag.String("log-level", "info", "log level: debug, info, warn, error")
@@ -39,7 +44,7 @@ func main() {
 
 	log := logging.WithComponent(logging.ComponentServer)
 	log.Info("starting agent-deploy server",
-		slog.String("version", "v0.1.0"),
+		slog.String("version", Version),
 		slog.String("log_level", *logLevel),
 	)
 
@@ -171,7 +176,7 @@ func main() {
 			"Supports planning, provisioning, deploying, monitoring, and tearing down infrastructure.",
 	}
 	server := mcp.NewServer(
-		&mcp.Implementation{Name: "agent-deploy", Version: "v0.1.0"},
+		&mcp.Implementation{Name: "agent-deploy", Version: Version},
 		opts,
 	)
 

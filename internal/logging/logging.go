@@ -32,10 +32,9 @@ const (
 // Call this once at application startup.
 func Initialize(opts ...Option) {
 	config := &Config{
-		Level:   slog.LevelInfo,
-		Format:  FormatText,
-		Output:  os.Stderr,
-		AddTime: true,
+		Level:  slog.LevelInfo,
+		Format: FormatText,
+		Output: os.Stderr,
 	}
 
 	for _, opt := range opts {
@@ -65,7 +64,6 @@ type Config struct {
 	Format    Format
 	Output    io.Writer
 	AddSource bool
-	AddTime   bool
 }
 
 // Format specifies the log output format.

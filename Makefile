@@ -1,11 +1,14 @@
 .PHONY: all build test test-race lint coverage coverage-html run install clean deps fmt help
 
+# Version can be overridden: make build VERSION=v1.2.3
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+
 # Default target: lint, test, and build
 all: lint test build
 
-# Build the binary
+# Build the binary with version injection
 build:
-	go build -o agent-deploy ./internal
+	go build -ldflags "-X main.Version=$(VERSION)" -o agent-deploy ./internal
 
 # Run all tests
 test:
