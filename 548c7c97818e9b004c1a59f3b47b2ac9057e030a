@@ -1,0 +1,28 @@
+Implementation details for pagination:
+
+1. findTaggedVPCs() - Now uses ec2.NewDescribeVpcsPaginator
+   - Handles VPCs beyond first 1000 results
+   - Error wrapping with fmt.Errorf for better context
+
+2. findTaggedECSClusters() - Now uses ecs.NewListClustersPaginator
+   - Collects all cluster ARNs across pages
+   - Batch describes clusters (100 per call) to get tags
+   - Reduces API calls vs previous single-page approach
+
+3. findTaggedALBs() - Now uses elbv2.NewDescribeLoadBalancersPaginator
+   - Collects all ALB ARNs across pages (max 400/page)
+   - Uses new batchFetchALBTags() for efficiency
+
+4. batchFetchALBTags() - New helper function
+   - Fetches tags for up to 20 ALBs per API call (AWS limit)
+   - Returns map[arn]map[tagKey]tagValue
+   - Reduces API calls from N to ceil(N/20)
+
+Testing approach:
+- Unit tests pass (existing reconcile_test.go)
+- Race detection enabled
+- No lint issues in state package
+
+Future work:
+- Add integration tests with LocalStack (P2.7)
+- Add reconciler interface for better mocking
