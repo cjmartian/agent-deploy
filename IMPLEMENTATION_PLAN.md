@@ -94,7 +94,7 @@
 | Private subnets | ✅ **IMPLEMENTED** | Public/private subnet architecture with NAT Gateway |
 | Plan approval | ✅ **IMPLEMENTED** | `aws_approve_plan` tool with explicit approval workflow |
 | Wait for healthy deployment | ✅ **Done** | waitForHealthyDeployment polls ECS/ALB |
-| Test coverage | ⚠️ **Improved** | Overall 35.2%; `providers/aws.go` at 42.8%; `providers/provider.go` at ~80% |
+| Test coverage | ⚠️ **Improved** | Overall 48.0%; `spending/` at 50.6%; `providers/aws.go` at 42.8%; `providers/provider.go` at ~80% |
 | Structured logging | ✅ **Done** | All log.Printf migrated to slog (30 in aws.go, 1 in provider.go, ~4 in costs.go) |
 | AWS SDK Mocking Infrastructure | ✅ **Complete** | Mock interfaces (EC2API, ECSAPI, ELBV2API, IAMAPI, ECRAPI, CloudWatchLogsAPI, AutoScalingAPI, ACMAPI), AWSClients struct, compile-time verification |
 | Makefile | ✅ **Complete** | all, test-race, coverage, coverage-html, run, install, help targets added |
@@ -469,13 +469,23 @@
 - **Location:** `internal/state/`
 - **Audit (2026-03-25):** Coverage improved from 44.4% to 82.0% via reconciler mock tests
 
-### P2.11 Spending Package Coverage (21.5%) ⚠️
+### P2.11 Spending Package Coverage (50.6%) ✅ IMPROVED
 
-- [ ] Increase coverage of spending module
-- [ ] Test alert processing edge cases
-- **Impact:** Spending safeguards not fully tested
-- **Location:** `internal/spending/`
-- **Audit (2026-03-20):** Verified 21.5% coverage
+- [x] Added CostExplorerAPI interface for dependency injection
+- [x] Added NewCostTrackerWithClient() constructor
+- [x] Added NewCostMonitorWithTracker() constructor  
+- [x] Comprehensive tests for CostTracker methods:
+  - GetDeploymentCosts (success, empty, API error, invalid amount)
+  - GetTotalMonthlySpend
+  - GetCostsByDeployment
+  - CheckAlerts
+  - GetDeploymentsOverBudget
+  - GenerateMonitoringReport
+- [ ] CostMonitor lifecycle tests (Start/Stop) - requires goroutine testing
+- [ ] PricingEstimator tests - requires Pricing API mock
+**Coverage:** 23.0% → 50.6%
+**Location:** `internal/spending/costs.go`, `internal/spending/costs_test.go`
+**Completed:** 2026-03-25 (partial)
 
 ---
 
@@ -630,9 +640,9 @@ go tool cover -html=coverage.out          # View coverage report
 | `internal/providers/provider.go` | **80%** | All(), AllWithStore(), GetAWSProvider() tested |
 | `internal/providers/aws.go` | **42.9%** | planInfra, deploy, teardown, status, approval workflows, provisionVPC, provisionECSCluster, provisionALB tested |
 | `internal/main.go` | **0%** | Test file doesn't test main() |
-| `internal/spending/` | **~23%** | Config tests, check tests, costs tests |
+| `internal/spending/` | **50.6%** | CostTracker tests added |
 | `internal/state/` | **82.0%** | Reconciler tests added, comprehensive coverage |
-| **Overall** | **35.2%** | Above CI floor (25%), target 50% |
+| **Overall** | **48.0%** | Approaching target 50% |
 
 ### Key Files
 
