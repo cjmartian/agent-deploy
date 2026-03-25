@@ -1,0 +1,29 @@
+Implementation details for partial failure rollback:
+
+1. rollbackInfra() function (lines 2186-2260)
+   - Deletes resources in reverse creation order
+   - Order: log group -> execution role -> ALB -> ECS cluster -> VPC
+   - Continues cleanup even if individual deletes fail
+   - Logs warnings for failed deletions
+   - Returns combined error summary for partial failures
+   - Marks infra as 'destroyed' after rollback
+
+2. createInfra() changes (lines 454-530)
+   - Each provisioning step now calls rollbackInfra() on failure
+   - All errors wrapped with ErrProvisioningFailed
+   - Pattern: rollback first, set status, return wrapped error
+   - Structured logging for rollback failures
+
+3. Error wrapping pattern
+   - fmt.Errorf("%w: provision X: %v", ErrProvisioningFailed, err)
+   - Enables errors.Is(err, ErrProvisioningFailed) checks
+   - Preserves original error message for debugging
+
+4. Tests added
+   - TestRollbackInfra_EmptyInfra: verifies empty infra handling
+   - TestCreateInfraErrorWrapping: validates flow through to createInfra
+
+Design decisions:
+- Using %v instead of %w for inner error to avoid double-wrapping
+- Rollback before setting failed status for cleaner state
+- Continuing rollback on partial failures to maximize cleanup
