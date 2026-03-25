@@ -94,7 +94,7 @@
 | Private subnets | ✅ **IMPLEMENTED** | Public/private subnet architecture with NAT Gateway |
 | Plan approval | ✅ **IMPLEMENTED** | `aws_approve_plan` tool with explicit approval workflow |
 | Wait for healthy deployment | ✅ **Done** | waitForHealthyDeployment polls ECS/ALB |
-| Test coverage | ⚠️ **Improved** | Overall 35.2%; `providers/aws.go` at 42.9%; `providers/provider.go` at ~80% |
+| Test coverage | ⚠️ **Improved** | Overall 35.2%; `providers/aws.go` at 42.8%; `providers/provider.go` at ~80% |
 | Structured logging | ✅ **Done** | All log.Printf migrated to slog (30 in aws.go, 1 in provider.go, ~4 in costs.go) |
 | AWS SDK Mocking Infrastructure | ✅ **Complete** | Mock interfaces (EC2API, ECSAPI, ELBV2API, IAMAPI, ECRAPI, CloudWatchLogsAPI, AutoScalingAPI, ACMAPI), AWSClients struct, compile-time verification |
 | Makefile | ✅ **Complete** | all, test-race, coverage, coverage-html, run, install, help targets added |
@@ -403,6 +403,8 @@
 - [x] Add unit tests with mocked AWS SDK
 - [x] Added NewAWSProviderWithClients and getClients functions for dependency injection
 - [x] provisionVPC: 0% → 77%, provisionECSCluster: 0% → 90.9%, provisionALB: 0% → 61.4%
+- [x] All AWS client calls now use getClients() dependency injection pattern
+- [x] 15+ provisioning/deletion functions updated for testability
 
 **Remaining:**
 - [ ] Test error scenarios with full AWS mocking
@@ -673,7 +675,7 @@ go tool cover -html=coverage.out          # View coverage report
 |----------|-------|-------|
 | **P0 Critical** | 0 | ✅ All completed |
 | **P1 Spec Gaps** | 0 | ✅ All completed (P1.1-P1.18) — Cost estimation, HTTPS, VPC, subnets, auto scaling, etc. |
-| **P2 Test Gaps** | 4 | P2.7, P2.9, P2.10, P2.11 — Integration tests, main.go coverage, edge cases |
+| **P2 Test Gaps** | 4 | P2.7, P2.9, P2.10, P2.11 — Integration tests, main.go coverage, edge cases; P2.5 mostly done (only error scenario tests remain) |
 | **P3 Quality** | 0 | ✅ All completed (P3.1-P3.8) |
 | **P5 Stretch** | 3 | CloudFormation, multi-cloud, secrets |
 | **Total** | **7** | |
