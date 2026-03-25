@@ -1159,3 +1159,367 @@ t.Errorf("assignPublicIP = %q, want %q", assignPublicIP, tt.wantPublicIPState)
 })
 }
 }
+
+// TestDeploy_InfraNotFound tests that deploy fails when infrastructure doesn't exist.
+func TestDeploy_InfraNotFound(t *testing.T) {
+store, _ := state.NewStore(t.TempDir())
+provider := NewAWSProvider(store)
+
+input := deployInput{
+InfraID:  "infra-nonexistent",
+ImageRef: "nginx:latest",
+}
+
+_, _, err := provider.deploy(context.Background(), nil, input)
+if err == nil {
+t.Error("Expected error for nonexistent infrastructure")
+}
+}
+
+// TestDeploy_InfraNotReady tests that deploy fails when infrastructure is not ready.
+func TestDeploy_InfraNotReady(t *testing.T) {
+store, _ := state.NewStore(t.TempDir())
+provider := NewAWSProvider(store)
+
+// Create infrastructure in non-ready state.
+infra := &state.Infrastructure{
+ID:        "infra-test-notready",
+PlanID:    "plan-test",
+Region:    "us-east-1",
+Status:    state.InfraStatusProvisioning, // Not ready
+Resources: make(map[string]string),
+}
+if err := store.CreateInfra(infra); err != nil {
+t.Fatalf("CreateInfra: %v", err)
+}
+
+input := deployInput{
+InfraID:  "infra-test-notready",
+ImageRef: "nginx:latest",
+}
+
+_, _, err := provider.deploy(context.Background(), nil, input)
+if err == nil {
+t.Error("Expected error for infrastructure not ready")
+}
+// Should be ErrInfraNotReady.
+if !containsSubstring(err.Error(), "not ready") && !containsSubstring(err.Error(), "ErrInfraNotReady") {
+t.Errorf("Expected error about infrastructure not ready, got: %v", err)
+}
+}
+
+// TestDeploy_AutoScalingValidation tests deploy fails with invalid auto-scaling params.
+func TestDeploy_AutoScalingValidation(t *testing.T) {
+store, _ := state.NewStore(t.TempDir())
+provider := NewAWSProvider(store)
+
+// Create ready infrastructure.
+infra := &state.Infrastructure{
+ID:        "infra-test-scaling",
+PlanID:    "plan-test",
+Region:    "us-east-1",
+Status:    state.InfraStatusReady,
+Resources: make(map[string]string),
+}
+if err := store.CreateInfra(infra); err != nil {
+t.Fatalf("CreateInfra: %v", err)
+}
+
+tests := []struct {
+name     string
+input    deployInput
+wantErr  string
+}{
+{
+name: "max_count less than min_count",
+input: deployInput{
+InfraID:      "infra-test-scaling",
+ImageRef:     "nginx:latest",
+DesiredCount: 2,
+MinCount:     3,
+MaxCount:     1,
+},
+wantErr: "max_count",
+},
+{
+name: "min_count less than 1",
+input: deployInput{
+InfraID:      "infra-test-scaling",
+ImageRef:     "nginx:latest",
+DesiredCount: 2,
+MinCount:     0,
+MaxCount:     4,
+},
+wantErr: "", // min_count 0 defaults to desired_count
+},
+{
+name: "target CPU out of range",
+input: deployInput{
+InfraID:          "infra-test-scaling",
+ImageRef:         "nginx:latest",
+DesiredCount:     2,
+MinCount:         1,
+MaxCount:         4,
+TargetCPUPercent: 95, // > 90
+},
+wantErr: "target_cpu_percent",
+},
+{
+name: "target memory out of range",
+input: deployInput{
+InfraID:          "infra-test-scaling",
+ImageRef:         "nginx:latest",
+DesiredCount:     2,
+MinCount:         1,
+MaxCount:         4,
+TargetMemPercent: 5, // < 10
+},
+wantErr: "target_memory_percent",
+},
+}
+
+for _, tt := range tests {
+t.Run(tt.name, func(t *testing.T) {
+_, _, err := provider.deploy(context.Background(), nil, tt.input)
+if tt.wantErr == "" {
+// For cases that should proceed (like min_count=0 defaulting),
+// we expect failure later in the process (AWS calls), not validation.
+// So we don't check the error here.
+return
+}
+if err == nil {
+t.Errorf("Expected error containing %q", tt.wantErr)
+return
+}
+if !containsSubstring(err.Error(), tt.wantErr) {
+t.Errorf("Expected error containing %q, got: %v", tt.wantErr, err)
+}
+})
+}
+}
+
+// TestTeardown_NotFound tests that teardown fails when deployment doesn't exist.
+func TestTeardown_NotFound(t *testing.T) {
+store, _ := state.NewStore(t.TempDir())
+provider := NewAWSProvider(store)
+
+input := teardownInput{
+DeploymentID: "deploy-nonexistent",
+}
+
+_, _, err := provider.teardown(context.Background(), nil, input)
+if err == nil {
+t.Error("Expected error for nonexistent deployment")
+}
+}
+
+// TestStatus_NotFound tests that status fails when deployment doesn't exist.
+func TestStatus_NotFound(t *testing.T) {
+store, _ := state.NewStore(t.TempDir())
+provider := NewAWSProvider(store)
+
+input := statusInput{
+DeploymentID: "deploy-nonexistent",
+}
+
+_, _, err := provider.status(context.Background(), nil, input)
+if err == nil {
+t.Error("Expected error for nonexistent deployment")
+}
+}
+
+// TestCreateInfra_PlanNotFound tests that createInfra fails when plan doesn't exist.
+func TestCreateInfra_PlanNotFound(t *testing.T) {
+store, _ := state.NewStore(t.TempDir())
+provider := NewAWSProvider(store)
+
+input := createInfraInput{
+PlanID: "plan-nonexistent",
+}
+
+_, _, err := provider.createInfra(context.Background(), nil, input)
+if err == nil {
+t.Error("Expected error for nonexistent plan")
+}
+}
+
+// TestApprovePlan_Success tests successful plan approval.
+func TestApprovePlan_Approve(t *testing.T) {
+store, _ := state.NewStore(t.TempDir())
+provider := NewAWSProvider(store)
+
+// Create a plan first.
+t.Setenv("AGENT_DEPLOY_PER_DEPLOYMENT_BUDGET", "100")
+planInput := planInfraInput{
+AppDescription: "Test app",
+ExpectedUsers:  50,
+LatencyMS:      200,
+Region:         "us-east-1",
+}
+_, planOutput, err := provider.planInfra(context.Background(), nil, planInput)
+if err != nil {
+t.Fatalf("planInfra: %v", err)
+}
+
+// Approve the plan.
+approveInput := approvePlanInput{
+PlanID:    planOutput.PlanID,
+Confirmed: true,
+}
+_, approveOutput, err := provider.approvePlan(context.Background(), nil, approveInput)
+if err != nil {
+t.Fatalf("approvePlan: %v", err)
+}
+
+if approveOutput.Status != state.PlanStatusApproved {
+t.Errorf("Status = %q, want %q", approveOutput.Status, state.PlanStatusApproved)
+}
+
+// Verify plan state was updated.
+plan, err := store.GetPlan(planOutput.PlanID)
+if err != nil {
+t.Fatalf("GetPlan: %v", err)
+}
+if plan.Status != state.PlanStatusApproved {
+t.Errorf("Plan status = %q, want %q", plan.Status, state.PlanStatusApproved)
+}
+}
+
+// TestApprovePlan_Reject tests plan rejection.
+func TestApprovePlan_RejectPlan(t *testing.T) {
+store, _ := state.NewStore(t.TempDir())
+provider := NewAWSProvider(store)
+
+// Create a plan first.
+t.Setenv("AGENT_DEPLOY_PER_DEPLOYMENT_BUDGET", "100")
+planInput := planInfraInput{
+AppDescription: "Test app",
+ExpectedUsers:  50,
+LatencyMS:      200,
+Region:         "us-east-1",
+}
+_, planOutput, err := provider.planInfra(context.Background(), nil, planInput)
+if err != nil {
+t.Fatalf("planInfra: %v", err)
+}
+
+// Reject the plan (confirmed: false).
+rejectInput := approvePlanInput{
+PlanID:    planOutput.PlanID,
+Confirmed: false,
+}
+_, rejectOutput, err := provider.approvePlan(context.Background(), nil, rejectInput)
+if err != nil {
+t.Fatalf("approvePlan (reject): %v", err)
+}
+
+if rejectOutput.Status != state.PlanStatusRejected {
+t.Errorf("Status = %q, want %q", rejectOutput.Status, state.PlanStatusRejected)
+}
+
+// Verify plan state was updated.
+plan, err := store.GetPlan(planOutput.PlanID)
+if err != nil {
+t.Fatalf("GetPlan: %v", err)
+}
+if plan.Status != state.PlanStatusRejected {
+t.Errorf("Plan status = %q, want %q", plan.Status, state.PlanStatusRejected)
+}
+}
+
+// TestApprovePlan_AlreadyApproved tests that re-approving is idempotent.
+func TestApprovePlan_AlreadyApproved(t *testing.T) {
+store, _ := state.NewStore(t.TempDir())
+provider := NewAWSProvider(store)
+
+// Create and approve a plan.
+t.Setenv("AGENT_DEPLOY_PER_DEPLOYMENT_BUDGET", "100")
+planInput := planInfraInput{
+AppDescription: "Test app",
+ExpectedUsers:  50,
+LatencyMS:      200,
+Region:         "us-east-1",
+}
+_, planOutput, _ := provider.planInfra(context.Background(), nil, planInput)
+
+// Approve first time.
+approveInput := approvePlanInput{PlanID: planOutput.PlanID, Confirmed: true}
+provider.approvePlan(context.Background(), nil, approveInput)
+
+// Approve second time (should be idempotent).
+_, output2, err := provider.approvePlan(context.Background(), nil, approveInput)
+if err != nil {
+t.Fatalf("Second approve failed: %v", err)
+}
+if output2.Status != state.PlanStatusApproved {
+t.Errorf("Status = %q, want %q", output2.Status, state.PlanStatusApproved)
+}
+}
+
+// TestCreateInfra_NotApproved tests that createInfra fails with unapproved plan.
+func TestCreateInfra_NotApprovedPlan(t *testing.T) {
+store, _ := state.NewStore(t.TempDir())
+provider := NewAWSProvider(store)
+
+// Create a plan but don't approve it.
+t.Setenv("AGENT_DEPLOY_PER_DEPLOYMENT_BUDGET", "100")
+planInput := planInfraInput{
+AppDescription: "Test app",
+ExpectedUsers:  50,
+LatencyMS:      200,
+Region:         "us-east-1",
+}
+_, planOutput, _ := provider.planInfra(context.Background(), nil, planInput)
+
+// Try to create infra with unapproved plan.
+createInput := createInfraInput{
+PlanID: planOutput.PlanID,
+}
+_, _, err := provider.createInfra(context.Background(), nil, createInput)
+if err == nil {
+t.Error("Expected error for unapproved plan")
+}
+// Should contain ErrPlanNotApproved or similar message.
+if !containsSubstring(err.Error(), "approved") && !containsSubstring(err.Error(), "approval") {
+t.Errorf("Expected error about plan not approved, got: %v", err)
+}
+}
+
+// TestMergeTags_NilMaps tests mergeTags with nil inputs.
+func TestMergeTags_NilMaps(t *testing.T) {
+// Test with nil first map.
+result := mergeTags(nil, map[string]string{"key1": "val1"})
+if result["key1"] != "val1" {
+t.Errorf("Expected key1=val1, got %v", result)
+}
+
+// Test with nil second map.
+result = mergeTags(map[string]string{"key2": "val2"}, nil)
+if result["key2"] != "val2" {
+t.Errorf("Expected key2=val2, got %v", result)
+}
+
+// Test with both nil.
+result = mergeTags(nil, nil)
+if len(result) != 0 {
+t.Errorf("Expected empty map, got %v", result)
+}
+}
+
+// TestMergeTags_Override tests that second map overrides first.
+func TestMergeTags_Override(t *testing.T) {
+map1 := map[string]string{"key": "original", "unique1": "val1"}
+map2 := map[string]string{"key": "override", "unique2": "val2"}
+
+result := mergeTags(map1, map2)
+
+if result["key"] != "override" {
+t.Errorf("Expected key=override, got %s", result["key"])
+}
+if result["unique1"] != "val1" {
+t.Errorf("Expected unique1=val1, got %s", result["unique1"])
+}
+if result["unique2"] != "val2" {
+t.Errorf("Expected unique2=val2, got %s", result["unique2"])
+}
+}
