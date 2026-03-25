@@ -37,12 +37,36 @@ import (
 
 // AWSProvider implements Provider for Amazon Web Services.
 type AWSProvider struct {
-	store *state.Store
+	store   *state.Store
+	clients *awsclient.AWSClients // Optional: injected clients for testing
 }
 
 // NewAWSProvider creates a new AWS provider with the given state store.
 func NewAWSProvider(store *state.Store) *AWSProvider {
 	return &AWSProvider{store: store}
+}
+
+// NewAWSProviderWithClients creates a new AWS provider with injected AWS clients.
+// This is primarily used for unit testing with mock clients.
+func NewAWSProviderWithClients(store *state.Store, clients *awsclient.AWSClients) *AWSProvider {
+	return &AWSProvider{store: store, clients: clients}
+}
+
+// getClients returns the injected clients if available, otherwise creates real clients from config.
+func (p *AWSProvider) getClients(cfg aws.Config) *awsclient.AWSClients {
+	if p.clients != nil {
+		return p.clients
+	}
+	return &awsclient.AWSClients{
+		EC2:            ec2.NewFromConfig(cfg),
+		ECS:            ecs.NewFromConfig(cfg),
+		ELBV2:          elbv2.NewFromConfig(cfg),
+		IAM:            iam.NewFromConfig(cfg),
+		ECR:            ecr.NewFromConfig(cfg),
+		CloudWatchLogs: cloudwatchlogs.NewFromConfig(cfg),
+		AutoScaling:    applicationautoscaling.NewFromConfig(cfg),
+		ACM:            acm.NewFromConfig(cfg),
+	}
 }
 
 func (p *AWSProvider) Name() string { return "aws" }
@@ -859,7 +883,8 @@ func (p *AWSProvider) teardown(ctx context.Context, _ *mcp.CallToolRequest, in t
 // ---------------------------------------------------------------------------
 
 func (p *AWSProvider) provisionVPC(ctx context.Context, cfg aws.Config, infra *state.Infrastructure, tags map[string]string) error {
-	ec2Client := ec2.NewFromConfig(cfg)
+	clients := p.getClients(cfg)
+	ec2Client := clients.EC2
 
 	// Create VPC.
 	// Per spec ralph/specs/networking.md: Default CIDR 10.0.0.0/16
@@ -1224,7 +1249,8 @@ func mergeTags(base, override map[string]string) map[string]string {
 }
 
 func (p *AWSProvider) provisionECSCluster(ctx context.Context, cfg aws.Config, infra *state.Infrastructure, tags map[string]string) error {
-	ecsClient := ecs.NewFromConfig(cfg)
+	clients := p.getClients(cfg)
+	ecsClient := clients.ECS
 
 	clusterResp, err := ecsClient.CreateCluster(ctx, &ecs.CreateClusterInput{
 		ClusterName: aws.String("agent-deploy-" + infra.ID),
@@ -1250,7 +1276,8 @@ func (p *AWSProvider) provisionECSCluster(ctx context.Context, cfg aws.Config, i
 }
 
 func (p *AWSProvider) provisionALB(ctx context.Context, cfg aws.Config, infra *state.Infrastructure, tags map[string]string, certificateARN string) error {
-	elbClient := elbv2.NewFromConfig(cfg)
+	clients := p.getClients(cfg)
+	elbClient := clients.ELBV2
 
 	// Parse subnet IDs.
 	subnetStr := infra.Resources[state.ResourceSubnetPublic]
@@ -1391,7 +1418,8 @@ func (p *AWSProvider) provisionALB(ctx context.Context, cfg aws.Config, infra *s
 
 // provisionLogGroup creates a CloudWatch log group for ECS task logs.
 func (p *AWSProvider) provisionLogGroup(ctx context.Context, cfg aws.Config, infra *state.Infrastructure, tags map[string]string, logRetentionDays int) error {
-	cwlClient := cloudwatchlogs.NewFromConfig(cfg)
+	clients := p.getClients(cfg)
+	cwlClient := clients.CloudWatchLogs
 
 	logGroupName := "/ecs/agent-deploy-" + infra.ID
 
@@ -1436,7 +1464,8 @@ func (p *AWSProvider) provisionLogGroup(ctx context.Context, cfg aws.Config, inf
 // provisionExecutionRole creates an IAM execution role for ECS Fargate tasks.
 // This role allows tasks to pull images from ECR and write logs to CloudWatch.
 func (p *AWSProvider) provisionExecutionRole(ctx context.Context, cfg aws.Config, infra *state.Infrastructure, tags map[string]string) error {
-	iamClient := iam.NewFromConfig(cfg)
+	clients := p.getClients(cfg)
+	iamClient := clients.IAM
 
 	// Create role name, truncated to 64 chars max (IAM role name limit).
 	roleName := "agent-deploy-ecs-task-" + infra.ID
@@ -1845,7 +1874,8 @@ func (p *AWSProvider) getALBURLs(ctx context.Context, cfg aws.Config, infra *sta
 }
 
 func (p *AWSProvider) deleteECSService(ctx context.Context, cfg aws.Config, infra *state.Infrastructure, deployment *state.Deployment) error {
-	ecsClient := ecs.NewFromConfig(cfg)
+	clients := p.getClients(cfg)
+	ecsClient := clients.ECS
 
 	clusterARN := infra.Resources[state.ResourceECSCluster]
 	if clusterARN == "" || deployment.ServiceARN == "" {
@@ -1874,7 +1904,8 @@ func (p *AWSProvider) deleteECSService(ctx context.Context, cfg aws.Config, infr
 }
 
 func (p *AWSProvider) deleteECSCluster(ctx context.Context, cfg aws.Config, infra *state.Infrastructure) error {
-	ecsClient := ecs.NewFromConfig(cfg)
+	clients := p.getClients(cfg)
+	ecsClient := clients.ECS
 
 	clusterARN := infra.Resources[state.ResourceECSCluster]
 	if clusterARN == "" {
@@ -1888,7 +1919,8 @@ func (p *AWSProvider) deleteECSCluster(ctx context.Context, cfg aws.Config, infr
 }
 
 func (p *AWSProvider) deleteALB(ctx context.Context, cfg aws.Config, infra *state.Infrastructure) error {
-	elbClient := elbv2.NewFromConfig(cfg)
+	clients := p.getClients(cfg)
+	elbClient := clients.ELBV2
 
 	// Delete ALB.
 	albARN := infra.Resources[state.ResourceALB]
@@ -2678,7 +2710,8 @@ func (p *AWSProvider) validateCertificate(ctx context.Context, cfg aws.Config, c
 	}
 
 	// Call ACM to verify the certificate exists and is issued.
-	acmClient := acm.NewFromConfig(cfg)
+	clients := p.getClients(cfg)
+	acmClient := clients.ACM
 	resp, err := acmClient.DescribeCertificate(ctx, &acm.DescribeCertificateInput{
 		CertificateArn: aws.String(certARN),
 	})

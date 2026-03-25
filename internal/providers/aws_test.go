@@ -3,9 +3,16 @@ package providers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/aws/aws-sdk-go-v2/service/ecs"
+	"github.com/cjmartian/agent-deploy/internal/awsclient"
+	"github.com/cjmartian/agent-deploy/internal/awsclient/mocks"
 	"github.com/cjmartian/agent-deploy/internal/state"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -329,24 +336,24 @@ func TestPublicTeardown(t *testing.T) {
 
 // TestTeardownProvider_Interface tests that AWSProvider implements TeardownProvider.
 func TestTeardownProvider_Interface(t *testing.T) {
-store, _ := state.NewStore(t.TempDir())
-provider := NewAWSProvider(store)
+	store, _ := state.NewStore(t.TempDir())
+	provider := NewAWSProvider(store)
 
-// Verify AWSProvider implements TeardownProvider interface
-var _ TeardownProvider = provider
+	// Verify AWSProvider implements TeardownProvider interface
+	var _ TeardownProvider = provider
 }
 
 // TestGetAWSProvider tests the GetAWSProvider helper function.
 func TestGetAWSProvider(t *testing.T) {
-store, _ := state.NewStore(t.TempDir())
-provider := GetAWSProvider(store)
+	store, _ := state.NewStore(t.TempDir())
+	provider := GetAWSProvider(store)
 
-if provider == nil {
-t.Fatal("GetAWSProvider returned nil")
-}
-if provider.Name() != "aws" {
-t.Errorf("Provider name = %q, want %q", provider.Name(), "aws")
-}
+	if provider == nil {
+		t.Fatal("GetAWSProvider returned nil")
+	}
+	if provider.Name() != "aws" {
+		t.Errorf("Provider name = %q, want %q", provider.Name(), "aws")
+	}
 }
 
 // TestApprovePlan tests the aws_approve_plan tool.
@@ -946,10 +953,10 @@ func TestInfraResources_TLSEnabled(t *testing.T) {
 		wantHTTPS      bool
 	}{
 		{
-			name:       "TLS enabled",
-			tlsEnabled: "true",
+			name:           "TLS enabled",
+			tlsEnabled:     "true",
 			certificateARN: "arn:aws:acm:us-east-1:123456789012:certificate/test",
-			wantHTTPS:  true,
+			wantHTTPS:      true,
 		},
 		{
 			name:       "TLS disabled",
@@ -1001,530 +1008,530 @@ func TestInfraResources_TLSEnabled(t *testing.T) {
 
 // TestResourceNetworkingConstants tests the new networking resource constants.
 func TestResourceNetworkingConstants(t *testing.T) {
-// Verify the new resource constant values.
-tests := []struct {
-constant string
-value    string
-}{
-{state.ResourceSecurityGroupALB, "security_group_alb"},
-{state.ResourceSecurityGroupTask, "security_group_task"},
-{state.ResourceRouteTablePrivate, "route_table_private"},
-{state.ResourceNATGateway, "nat_gateway"},
-{state.ResourceElasticIP, "elastic_ip"},
-{state.ResourceSubnetPrivate, "subnet_private"},
-}
+	// Verify the new resource constant values.
+	tests := []struct {
+		constant string
+		value    string
+	}{
+		{state.ResourceSecurityGroupALB, "security_group_alb"},
+		{state.ResourceSecurityGroupTask, "security_group_task"},
+		{state.ResourceRouteTablePrivate, "route_table_private"},
+		{state.ResourceNATGateway, "nat_gateway"},
+		{state.ResourceElasticIP, "elastic_ip"},
+		{state.ResourceSubnetPrivate, "subnet_private"},
+	}
 
-for _, tt := range tests {
-t.Run(tt.value, func(t *testing.T) {
-if tt.constant != tt.value {
-t.Errorf("Resource constant = %q, want %q", tt.constant, tt.value)
-}
-})
-}
+	for _, tt := range tests {
+		t.Run(tt.value, func(t *testing.T) {
+			if tt.constant != tt.value {
+				t.Errorf("Resource constant = %q, want %q", tt.constant, tt.value)
+			}
+		})
+	}
 }
 
 // TestInfraResources_PrivateSubnets tests that infrastructure stores private subnet configuration.
 func TestInfraResources_PrivateSubnets(t *testing.T) {
-infra := &state.Infrastructure{
-ID:        "infra-test",
-Resources: make(map[string]string),
-}
+	infra := &state.Infrastructure{
+		ID:        "infra-test",
+		Resources: make(map[string]string),
+	}
 
-// Simulate public/private subnet architecture.
-publicSubnets := "subnet-pub-1,subnet-pub-2"
-privateSubnets := "subnet-priv-1,subnet-priv-2"
-albSG := "sg-alb-123"
-taskSG := "sg-task-456"
-natGW := "nat-12345678"
-eip := "eipalloc-12345678"
+	// Simulate public/private subnet architecture.
+	publicSubnets := "subnet-pub-1,subnet-pub-2"
+	privateSubnets := "subnet-priv-1,subnet-priv-2"
+	albSG := "sg-alb-123"
+	taskSG := "sg-task-456"
+	natGW := "nat-12345678"
+	eip := "eipalloc-12345678"
 
-infra.Resources[state.ResourceSubnetPublic] = publicSubnets
-infra.Resources[state.ResourceSubnetPrivate] = privateSubnets
-infra.Resources[state.ResourceSecurityGroupALB] = albSG
-infra.Resources[state.ResourceSecurityGroupTask] = taskSG
-infra.Resources[state.ResourceNATGateway] = natGW
-infra.Resources[state.ResourceElasticIP] = eip
+	infra.Resources[state.ResourceSubnetPublic] = publicSubnets
+	infra.Resources[state.ResourceSubnetPrivate] = privateSubnets
+	infra.Resources[state.ResourceSecurityGroupALB] = albSG
+	infra.Resources[state.ResourceSecurityGroupTask] = taskSG
+	infra.Resources[state.ResourceNATGateway] = natGW
+	infra.Resources[state.ResourceElasticIP] = eip
 
-// Verify all resources are stored correctly.
-if infra.Resources[state.ResourceSubnetPublic] != publicSubnets {
-t.Errorf("Public subnets = %q, want %q", infra.Resources[state.ResourceSubnetPublic], publicSubnets)
-}
-if infra.Resources[state.ResourceSubnetPrivate] != privateSubnets {
-t.Errorf("Private subnets = %q, want %q", infra.Resources[state.ResourceSubnetPrivate], privateSubnets)
-}
-if infra.Resources[state.ResourceSecurityGroupALB] != albSG {
-t.Errorf("ALB SG = %q, want %q", infra.Resources[state.ResourceSecurityGroupALB], albSG)
-}
-if infra.Resources[state.ResourceSecurityGroupTask] != taskSG {
-t.Errorf("Task SG = %q, want %q", infra.Resources[state.ResourceSecurityGroupTask], taskSG)
-}
-if infra.Resources[state.ResourceNATGateway] != natGW {
-t.Errorf("NAT GW = %q, want %q", infra.Resources[state.ResourceNATGateway], natGW)
-}
-if infra.Resources[state.ResourceElasticIP] != eip {
-t.Errorf("EIP = %q, want %q", infra.Resources[state.ResourceElasticIP], eip)
-}
+	// Verify all resources are stored correctly.
+	if infra.Resources[state.ResourceSubnetPublic] != publicSubnets {
+		t.Errorf("Public subnets = %q, want %q", infra.Resources[state.ResourceSubnetPublic], publicSubnets)
+	}
+	if infra.Resources[state.ResourceSubnetPrivate] != privateSubnets {
+		t.Errorf("Private subnets = %q, want %q", infra.Resources[state.ResourceSubnetPrivate], privateSubnets)
+	}
+	if infra.Resources[state.ResourceSecurityGroupALB] != albSG {
+		t.Errorf("ALB SG = %q, want %q", infra.Resources[state.ResourceSecurityGroupALB], albSG)
+	}
+	if infra.Resources[state.ResourceSecurityGroupTask] != taskSG {
+		t.Errorf("Task SG = %q, want %q", infra.Resources[state.ResourceSecurityGroupTask], taskSG)
+	}
+	if infra.Resources[state.ResourceNATGateway] != natGW {
+		t.Errorf("NAT GW = %q, want %q", infra.Resources[state.ResourceNATGateway], natGW)
+	}
+	if infra.Resources[state.ResourceElasticIP] != eip {
+		t.Errorf("EIP = %q, want %q", infra.Resources[state.ResourceElasticIP], eip)
+	}
 }
 
 // TestMergeTags tests the tag merging helper function.
 func TestMergeTags(t *testing.T) {
-base := map[string]string{
-"env":     "prod",
-"team":    "platform",
-"project": "deploy",
-}
-override := map[string]string{
-"Name": "my-resource",
-"team": "infra", // Should override base
-}
+	base := map[string]string{
+		"env":     "prod",
+		"team":    "platform",
+		"project": "deploy",
+	}
+	override := map[string]string{
+		"Name": "my-resource",
+		"team": "infra", // Should override base
+	}
 
-result := mergeTags(base, override)
+	result := mergeTags(base, override)
 
-// Verify base tags are present.
-if result["env"] != "prod" {
-t.Errorf("env = %q, want %q", result["env"], "prod")
-}
-if result["project"] != "deploy" {
-t.Errorf("project = %q, want %q", result["project"], "deploy")
-}
+	// Verify base tags are present.
+	if result["env"] != "prod" {
+		t.Errorf("env = %q, want %q", result["env"], "prod")
+	}
+	if result["project"] != "deploy" {
+		t.Errorf("project = %q, want %q", result["project"], "deploy")
+	}
 
-// Verify override tags are present.
-if result["Name"] != "my-resource" {
-t.Errorf("Name = %q, want %q", result["Name"], "my-resource")
-}
+	// Verify override tags are present.
+	if result["Name"] != "my-resource" {
+		t.Errorf("Name = %q, want %q", result["Name"], "my-resource")
+	}
 
-// Verify override takes precedence.
-if result["team"] != "infra" {
-t.Errorf("team = %q, want %q (should be overridden)", result["team"], "infra")
-}
+	// Verify override takes precedence.
+	if result["team"] != "infra" {
+		t.Errorf("team = %q, want %q (should be overridden)", result["team"], "infra")
+	}
 
-// Verify total tag count.
-if len(result) != 4 {
-t.Errorf("tag count = %d, want %d", len(result), 4)
-}
+	// Verify total tag count.
+	if len(result) != 4 {
+		t.Errorf("tag count = %d, want %d", len(result), 4)
+	}
 }
 
 // TestECSServiceUsesPrivateSubnets tests subnet selection logic for ECS service.
 func TestECSServiceUsesPrivateSubnets(t *testing.T) {
-tests := []struct {
-name              string
-privateSubnets    string
-publicSubnets     string
-wantSubnetPrefix  string
-wantPublicIPState string
-}{
-{
-name:              "uses private subnets when available",
-privateSubnets:    "subnet-priv-1,subnet-priv-2",
-publicSubnets:     "subnet-pub-1,subnet-pub-2",
-wantSubnetPrefix:  "subnet-priv",
-wantPublicIPState: "DISABLED",
-},
-{
-name:              "falls back to public subnets",
-privateSubnets:    "",
-publicSubnets:     "subnet-pub-1,subnet-pub-2",
-wantSubnetPrefix:  "subnet-pub",
-wantPublicIPState: "ENABLED",
-},
-}
+	tests := []struct {
+		name              string
+		privateSubnets    string
+		publicSubnets     string
+		wantSubnetPrefix  string
+		wantPublicIPState string
+	}{
+		{
+			name:              "uses private subnets when available",
+			privateSubnets:    "subnet-priv-1,subnet-priv-2",
+			publicSubnets:     "subnet-pub-1,subnet-pub-2",
+			wantSubnetPrefix:  "subnet-priv",
+			wantPublicIPState: "DISABLED",
+		},
+		{
+			name:              "falls back to public subnets",
+			privateSubnets:    "",
+			publicSubnets:     "subnet-pub-1,subnet-pub-2",
+			wantSubnetPrefix:  "subnet-pub",
+			wantPublicIPState: "ENABLED",
+		},
+	}
 
-for _, tt := range tests {
-t.Run(tt.name, func(t *testing.T) {
-infra := &state.Infrastructure{
-ID:        "infra-test",
-Resources: make(map[string]string),
-}
-infra.Resources[state.ResourceSubnetPrivate] = tt.privateSubnets
-infra.Resources[state.ResourceSubnetPublic] = tt.publicSubnets
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			infra := &state.Infrastructure{
+				ID:        "infra-test",
+				Resources: make(map[string]string),
+			}
+			infra.Resources[state.ResourceSubnetPrivate] = tt.privateSubnets
+			infra.Resources[state.ResourceSubnetPublic] = tt.publicSubnets
 
-// Simulate the logic from createOrUpdateService.
-subnetStr := infra.Resources[state.ResourceSubnetPrivate]
-assignPublicIP := "DISABLED"
-if subnetStr == "" {
-subnetStr = infra.Resources[state.ResourceSubnetPublic]
-assignPublicIP = "ENABLED"
-}
+			// Simulate the logic from createOrUpdateService.
+			subnetStr := infra.Resources[state.ResourceSubnetPrivate]
+			assignPublicIP := "DISABLED"
+			if subnetStr == "" {
+				subnetStr = infra.Resources[state.ResourceSubnetPublic]
+				assignPublicIP = "ENABLED"
+			}
 
-// Check subnet selection.
-if subnetStr == "" {
-t.Error("subnet string should not be empty")
-}
-if len(subnetStr) > 0 && subnetStr[:len(tt.wantSubnetPrefix)] != tt.wantSubnetPrefix {
-t.Errorf("subnet = %q, want prefix %q", subnetStr, tt.wantSubnetPrefix)
-}
-if assignPublicIP != tt.wantPublicIPState {
-t.Errorf("assignPublicIP = %q, want %q", assignPublicIP, tt.wantPublicIPState)
-}
-})
-}
+			// Check subnet selection.
+			if subnetStr == "" {
+				t.Error("subnet string should not be empty")
+			}
+			if len(subnetStr) > 0 && subnetStr[:len(tt.wantSubnetPrefix)] != tt.wantSubnetPrefix {
+				t.Errorf("subnet = %q, want prefix %q", subnetStr, tt.wantSubnetPrefix)
+			}
+			if assignPublicIP != tt.wantPublicIPState {
+				t.Errorf("assignPublicIP = %q, want %q", assignPublicIP, tt.wantPublicIPState)
+			}
+		})
+	}
 }
 
 // TestDeploy_InfraNotFound tests that deploy fails when infrastructure doesn't exist.
 func TestDeploy_InfraNotFound(t *testing.T) {
-store, _ := state.NewStore(t.TempDir())
-provider := NewAWSProvider(store)
+	store, _ := state.NewStore(t.TempDir())
+	provider := NewAWSProvider(store)
 
-input := deployInput{
-InfraID:  "infra-nonexistent",
-ImageRef: "nginx:latest",
-}
+	input := deployInput{
+		InfraID:  "infra-nonexistent",
+		ImageRef: "nginx:latest",
+	}
 
-_, _, err := provider.deploy(context.Background(), nil, input)
-if err == nil {
-t.Error("Expected error for nonexistent infrastructure")
-}
+	_, _, err := provider.deploy(context.Background(), nil, input)
+	if err == nil {
+		t.Error("Expected error for nonexistent infrastructure")
+	}
 }
 
 // TestDeploy_InfraNotReady tests that deploy fails when infrastructure is not ready.
 func TestDeploy_InfraNotReady(t *testing.T) {
-store, _ := state.NewStore(t.TempDir())
-provider := NewAWSProvider(store)
+	store, _ := state.NewStore(t.TempDir())
+	provider := NewAWSProvider(store)
 
-// Create infrastructure in non-ready state.
-infra := &state.Infrastructure{
-ID:        "infra-test-notready",
-PlanID:    "plan-test",
-Region:    "us-east-1",
-Status:    state.InfraStatusProvisioning, // Not ready
-Resources: make(map[string]string),
-}
-if err := store.CreateInfra(infra); err != nil {
-t.Fatalf("CreateInfra: %v", err)
-}
+	// Create infrastructure in non-ready state.
+	infra := &state.Infrastructure{
+		ID:        "infra-test-notready",
+		PlanID:    "plan-test",
+		Region:    "us-east-1",
+		Status:    state.InfraStatusProvisioning, // Not ready
+		Resources: make(map[string]string),
+	}
+	if err := store.CreateInfra(infra); err != nil {
+		t.Fatalf("CreateInfra: %v", err)
+	}
 
-input := deployInput{
-InfraID:  "infra-test-notready",
-ImageRef: "nginx:latest",
-}
+	input := deployInput{
+		InfraID:  "infra-test-notready",
+		ImageRef: "nginx:latest",
+	}
 
-_, _, err := provider.deploy(context.Background(), nil, input)
-if err == nil {
-t.Error("Expected error for infrastructure not ready")
-}
-// Should be ErrInfraNotReady.
-if !containsSubstring(err.Error(), "not ready") && !containsSubstring(err.Error(), "ErrInfraNotReady") {
-t.Errorf("Expected error about infrastructure not ready, got: %v", err)
-}
+	_, _, err := provider.deploy(context.Background(), nil, input)
+	if err == nil {
+		t.Error("Expected error for infrastructure not ready")
+	}
+	// Should be ErrInfraNotReady.
+	if !containsSubstring(err.Error(), "not ready") && !containsSubstring(err.Error(), "ErrInfraNotReady") {
+		t.Errorf("Expected error about infrastructure not ready, got: %v", err)
+	}
 }
 
 // TestDeploy_AutoScalingValidation tests deploy fails with invalid auto-scaling params.
 func TestDeploy_AutoScalingValidation(t *testing.T) {
-store, _ := state.NewStore(t.TempDir())
-provider := NewAWSProvider(store)
+	store, _ := state.NewStore(t.TempDir())
+	provider := NewAWSProvider(store)
 
-// Create ready infrastructure.
-infra := &state.Infrastructure{
-ID:        "infra-test-scaling",
-PlanID:    "plan-test",
-Region:    "us-east-1",
-Status:    state.InfraStatusReady,
-Resources: make(map[string]string),
-}
-if err := store.CreateInfra(infra); err != nil {
-t.Fatalf("CreateInfra: %v", err)
-}
+	// Create ready infrastructure.
+	infra := &state.Infrastructure{
+		ID:        "infra-test-scaling",
+		PlanID:    "plan-test",
+		Region:    "us-east-1",
+		Status:    state.InfraStatusReady,
+		Resources: make(map[string]string),
+	}
+	if err := store.CreateInfra(infra); err != nil {
+		t.Fatalf("CreateInfra: %v", err)
+	}
 
-tests := []struct {
-name     string
-input    deployInput
-wantErr  string
-}{
-{
-name: "max_count less than min_count",
-input: deployInput{
-InfraID:      "infra-test-scaling",
-ImageRef:     "nginx:latest",
-DesiredCount: 2,
-MinCount:     3,
-MaxCount:     1,
-},
-wantErr: "max_count",
-},
-{
-name: "min_count less than 1",
-input: deployInput{
-InfraID:      "infra-test-scaling",
-ImageRef:     "nginx:latest",
-DesiredCount: 2,
-MinCount:     0,
-MaxCount:     4,
-},
-wantErr: "", // min_count 0 defaults to desired_count
-},
-{
-name: "target CPU out of range",
-input: deployInput{
-InfraID:          "infra-test-scaling",
-ImageRef:         "nginx:latest",
-DesiredCount:     2,
-MinCount:         1,
-MaxCount:         4,
-TargetCPUPercent: 95, // > 90
-},
-wantErr: "target_cpu_percent",
-},
-{
-name: "target memory out of range",
-input: deployInput{
-InfraID:          "infra-test-scaling",
-ImageRef:         "nginx:latest",
-DesiredCount:     2,
-MinCount:         1,
-MaxCount:         4,
-TargetMemPercent: 5, // < 10
-},
-wantErr: "target_memory_percent",
-},
-}
+	tests := []struct {
+		name    string
+		input   deployInput
+		wantErr string
+	}{
+		{
+			name: "max_count less than min_count",
+			input: deployInput{
+				InfraID:      "infra-test-scaling",
+				ImageRef:     "nginx:latest",
+				DesiredCount: 2,
+				MinCount:     3,
+				MaxCount:     1,
+			},
+			wantErr: "max_count",
+		},
+		{
+			name: "min_count less than 1",
+			input: deployInput{
+				InfraID:      "infra-test-scaling",
+				ImageRef:     "nginx:latest",
+				DesiredCount: 2,
+				MinCount:     0,
+				MaxCount:     4,
+			},
+			wantErr: "", // min_count 0 defaults to desired_count
+		},
+		{
+			name: "target CPU out of range",
+			input: deployInput{
+				InfraID:          "infra-test-scaling",
+				ImageRef:         "nginx:latest",
+				DesiredCount:     2,
+				MinCount:         1,
+				MaxCount:         4,
+				TargetCPUPercent: 95, // > 90
+			},
+			wantErr: "target_cpu_percent",
+		},
+		{
+			name: "target memory out of range",
+			input: deployInput{
+				InfraID:          "infra-test-scaling",
+				ImageRef:         "nginx:latest",
+				DesiredCount:     2,
+				MinCount:         1,
+				MaxCount:         4,
+				TargetMemPercent: 5, // < 10
+			},
+			wantErr: "target_memory_percent",
+		},
+	}
 
-for _, tt := range tests {
-t.Run(tt.name, func(t *testing.T) {
-_, _, err := provider.deploy(context.Background(), nil, tt.input)
-if tt.wantErr == "" {
-// For cases that should proceed (like min_count=0 defaulting),
-// we expect failure later in the process (AWS calls), not validation.
-// So we don't check the error here.
-return
-}
-if err == nil {
-t.Errorf("Expected error containing %q", tt.wantErr)
-return
-}
-if !containsSubstring(err.Error(), tt.wantErr) {
-t.Errorf("Expected error containing %q, got: %v", tt.wantErr, err)
-}
-})
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, err := provider.deploy(context.Background(), nil, tt.input)
+			if tt.wantErr == "" {
+				// For cases that should proceed (like min_count=0 defaulting),
+				// we expect failure later in the process (AWS calls), not validation.
+				// So we don't check the error here.
+				return
+			}
+			if err == nil {
+				t.Errorf("Expected error containing %q", tt.wantErr)
+				return
+			}
+			if !containsSubstring(err.Error(), tt.wantErr) {
+				t.Errorf("Expected error containing %q, got: %v", tt.wantErr, err)
+			}
+		})
+	}
 }
 
 // TestTeardown_NotFound tests that teardown fails when deployment doesn't exist.
 func TestTeardown_NotFound(t *testing.T) {
-store, _ := state.NewStore(t.TempDir())
-provider := NewAWSProvider(store)
+	store, _ := state.NewStore(t.TempDir())
+	provider := NewAWSProvider(store)
 
-input := teardownInput{
-DeploymentID: "deploy-nonexistent",
-}
+	input := teardownInput{
+		DeploymentID: "deploy-nonexistent",
+	}
 
-_, _, err := provider.teardown(context.Background(), nil, input)
-if err == nil {
-t.Error("Expected error for nonexistent deployment")
-}
+	_, _, err := provider.teardown(context.Background(), nil, input)
+	if err == nil {
+		t.Error("Expected error for nonexistent deployment")
+	}
 }
 
 // TestStatus_NotFound tests that status fails when deployment doesn't exist.
 func TestStatus_NotFound(t *testing.T) {
-store, _ := state.NewStore(t.TempDir())
-provider := NewAWSProvider(store)
+	store, _ := state.NewStore(t.TempDir())
+	provider := NewAWSProvider(store)
 
-input := statusInput{
-DeploymentID: "deploy-nonexistent",
-}
+	input := statusInput{
+		DeploymentID: "deploy-nonexistent",
+	}
 
-_, _, err := provider.status(context.Background(), nil, input)
-if err == nil {
-t.Error("Expected error for nonexistent deployment")
-}
+	_, _, err := provider.status(context.Background(), nil, input)
+	if err == nil {
+		t.Error("Expected error for nonexistent deployment")
+	}
 }
 
 // TestCreateInfra_PlanNotFound tests that createInfra fails when plan doesn't exist.
 func TestCreateInfra_PlanNotFound(t *testing.T) {
-store, _ := state.NewStore(t.TempDir())
-provider := NewAWSProvider(store)
+	store, _ := state.NewStore(t.TempDir())
+	provider := NewAWSProvider(store)
 
-input := createInfraInput{
-PlanID: "plan-nonexistent",
-}
+	input := createInfraInput{
+		PlanID: "plan-nonexistent",
+	}
 
-_, _, err := provider.createInfra(context.Background(), nil, input)
-if err == nil {
-t.Error("Expected error for nonexistent plan")
-}
+	_, _, err := provider.createInfra(context.Background(), nil, input)
+	if err == nil {
+		t.Error("Expected error for nonexistent plan")
+	}
 }
 
 // TestApprovePlan_Success tests successful plan approval.
 func TestApprovePlan_Approve(t *testing.T) {
-store, _ := state.NewStore(t.TempDir())
-provider := NewAWSProvider(store)
+	store, _ := state.NewStore(t.TempDir())
+	provider := NewAWSProvider(store)
 
-// Create a plan first.
-t.Setenv("AGENT_DEPLOY_PER_DEPLOYMENT_BUDGET", "100")
-planInput := planInfraInput{
-AppDescription: "Test app",
-ExpectedUsers:  50,
-LatencyMS:      200,
-Region:         "us-east-1",
-}
-_, planOutput, err := provider.planInfra(context.Background(), nil, planInput)
-if err != nil {
-t.Fatalf("planInfra: %v", err)
-}
+	// Create a plan first.
+	t.Setenv("AGENT_DEPLOY_PER_DEPLOYMENT_BUDGET", "100")
+	planInput := planInfraInput{
+		AppDescription: "Test app",
+		ExpectedUsers:  50,
+		LatencyMS:      200,
+		Region:         "us-east-1",
+	}
+	_, planOutput, err := provider.planInfra(context.Background(), nil, planInput)
+	if err != nil {
+		t.Fatalf("planInfra: %v", err)
+	}
 
-// Approve the plan.
-approveInput := approvePlanInput{
-PlanID:    planOutput.PlanID,
-Confirmed: true,
-}
-_, approveOutput, err := provider.approvePlan(context.Background(), nil, approveInput)
-if err != nil {
-t.Fatalf("approvePlan: %v", err)
-}
+	// Approve the plan.
+	approveInput := approvePlanInput{
+		PlanID:    planOutput.PlanID,
+		Confirmed: true,
+	}
+	_, approveOutput, err := provider.approvePlan(context.Background(), nil, approveInput)
+	if err != nil {
+		t.Fatalf("approvePlan: %v", err)
+	}
 
-if approveOutput.Status != state.PlanStatusApproved {
-t.Errorf("Status = %q, want %q", approveOutput.Status, state.PlanStatusApproved)
-}
+	if approveOutput.Status != state.PlanStatusApproved {
+		t.Errorf("Status = %q, want %q", approveOutput.Status, state.PlanStatusApproved)
+	}
 
-// Verify plan state was updated.
-plan, err := store.GetPlan(planOutput.PlanID)
-if err != nil {
-t.Fatalf("GetPlan: %v", err)
-}
-if plan.Status != state.PlanStatusApproved {
-t.Errorf("Plan status = %q, want %q", plan.Status, state.PlanStatusApproved)
-}
+	// Verify plan state was updated.
+	plan, err := store.GetPlan(planOutput.PlanID)
+	if err != nil {
+		t.Fatalf("GetPlan: %v", err)
+	}
+	if plan.Status != state.PlanStatusApproved {
+		t.Errorf("Plan status = %q, want %q", plan.Status, state.PlanStatusApproved)
+	}
 }
 
 // TestApprovePlan_Reject tests plan rejection.
 func TestApprovePlan_RejectPlan(t *testing.T) {
-store, _ := state.NewStore(t.TempDir())
-provider := NewAWSProvider(store)
+	store, _ := state.NewStore(t.TempDir())
+	provider := NewAWSProvider(store)
 
-// Create a plan first.
-t.Setenv("AGENT_DEPLOY_PER_DEPLOYMENT_BUDGET", "100")
-planInput := planInfraInput{
-AppDescription: "Test app",
-ExpectedUsers:  50,
-LatencyMS:      200,
-Region:         "us-east-1",
-}
-_, planOutput, err := provider.planInfra(context.Background(), nil, planInput)
-if err != nil {
-t.Fatalf("planInfra: %v", err)
-}
+	// Create a plan first.
+	t.Setenv("AGENT_DEPLOY_PER_DEPLOYMENT_BUDGET", "100")
+	planInput := planInfraInput{
+		AppDescription: "Test app",
+		ExpectedUsers:  50,
+		LatencyMS:      200,
+		Region:         "us-east-1",
+	}
+	_, planOutput, err := provider.planInfra(context.Background(), nil, planInput)
+	if err != nil {
+		t.Fatalf("planInfra: %v", err)
+	}
 
-// Reject the plan (confirmed: false).
-rejectInput := approvePlanInput{
-PlanID:    planOutput.PlanID,
-Confirmed: false,
-}
-_, rejectOutput, err := provider.approvePlan(context.Background(), nil, rejectInput)
-if err != nil {
-t.Fatalf("approvePlan (reject): %v", err)
-}
+	// Reject the plan (confirmed: false).
+	rejectInput := approvePlanInput{
+		PlanID:    planOutput.PlanID,
+		Confirmed: false,
+	}
+	_, rejectOutput, err := provider.approvePlan(context.Background(), nil, rejectInput)
+	if err != nil {
+		t.Fatalf("approvePlan (reject): %v", err)
+	}
 
-if rejectOutput.Status != state.PlanStatusRejected {
-t.Errorf("Status = %q, want %q", rejectOutput.Status, state.PlanStatusRejected)
-}
+	if rejectOutput.Status != state.PlanStatusRejected {
+		t.Errorf("Status = %q, want %q", rejectOutput.Status, state.PlanStatusRejected)
+	}
 
-// Verify plan state was updated.
-plan, err := store.GetPlan(planOutput.PlanID)
-if err != nil {
-t.Fatalf("GetPlan: %v", err)
-}
-if plan.Status != state.PlanStatusRejected {
-t.Errorf("Plan status = %q, want %q", plan.Status, state.PlanStatusRejected)
-}
+	// Verify plan state was updated.
+	plan, err := store.GetPlan(planOutput.PlanID)
+	if err != nil {
+		t.Fatalf("GetPlan: %v", err)
+	}
+	if plan.Status != state.PlanStatusRejected {
+		t.Errorf("Plan status = %q, want %q", plan.Status, state.PlanStatusRejected)
+	}
 }
 
 // TestApprovePlan_AlreadyApproved tests that re-approving is idempotent.
 func TestApprovePlan_AlreadyApproved(t *testing.T) {
-store, _ := state.NewStore(t.TempDir())
-provider := NewAWSProvider(store)
+	store, _ := state.NewStore(t.TempDir())
+	provider := NewAWSProvider(store)
 
-// Create and approve a plan.
-t.Setenv("AGENT_DEPLOY_PER_DEPLOYMENT_BUDGET", "100")
-planInput := planInfraInput{
-AppDescription: "Test app",
-ExpectedUsers:  50,
-LatencyMS:      200,
-Region:         "us-east-1",
-}
-_, planOutput, _ := provider.planInfra(context.Background(), nil, planInput)
+	// Create and approve a plan.
+	t.Setenv("AGENT_DEPLOY_PER_DEPLOYMENT_BUDGET", "100")
+	planInput := planInfraInput{
+		AppDescription: "Test app",
+		ExpectedUsers:  50,
+		LatencyMS:      200,
+		Region:         "us-east-1",
+	}
+	_, planOutput, _ := provider.planInfra(context.Background(), nil, planInput)
 
-// Approve first time.
-approveInput := approvePlanInput{PlanID: planOutput.PlanID, Confirmed: true}
-_, _, err := provider.approvePlan(context.Background(), nil, approveInput)
-if err != nil {
-	t.Fatalf("First approve failed: %v", err)
-}
+	// Approve first time.
+	approveInput := approvePlanInput{PlanID: planOutput.PlanID, Confirmed: true}
+	_, _, err := provider.approvePlan(context.Background(), nil, approveInput)
+	if err != nil {
+		t.Fatalf("First approve failed: %v", err)
+	}
 
-// Approve second time (should be idempotent).
-_, output2, err := provider.approvePlan(context.Background(), nil, approveInput)
-if err != nil {
-t.Fatalf("Second approve failed: %v", err)
-}
-if output2.Status != state.PlanStatusApproved {
-t.Errorf("Status = %q, want %q", output2.Status, state.PlanStatusApproved)
-}
+	// Approve second time (should be idempotent).
+	_, output2, err := provider.approvePlan(context.Background(), nil, approveInput)
+	if err != nil {
+		t.Fatalf("Second approve failed: %v", err)
+	}
+	if output2.Status != state.PlanStatusApproved {
+		t.Errorf("Status = %q, want %q", output2.Status, state.PlanStatusApproved)
+	}
 }
 
 // TestCreateInfra_NotApproved tests that createInfra fails with unapproved plan.
 func TestCreateInfra_NotApprovedPlan(t *testing.T) {
-store, _ := state.NewStore(t.TempDir())
-provider := NewAWSProvider(store)
+	store, _ := state.NewStore(t.TempDir())
+	provider := NewAWSProvider(store)
 
-// Create a plan but don't approve it.
-t.Setenv("AGENT_DEPLOY_PER_DEPLOYMENT_BUDGET", "100")
-planInput := planInfraInput{
-AppDescription: "Test app",
-ExpectedUsers:  50,
-LatencyMS:      200,
-Region:         "us-east-1",
-}
-_, planOutput, _ := provider.planInfra(context.Background(), nil, planInput)
+	// Create a plan but don't approve it.
+	t.Setenv("AGENT_DEPLOY_PER_DEPLOYMENT_BUDGET", "100")
+	planInput := planInfraInput{
+		AppDescription: "Test app",
+		ExpectedUsers:  50,
+		LatencyMS:      200,
+		Region:         "us-east-1",
+	}
+	_, planOutput, _ := provider.planInfra(context.Background(), nil, planInput)
 
-// Try to create infra with unapproved plan.
-createInput := createInfraInput{
-PlanID: planOutput.PlanID,
-}
-_, _, err := provider.createInfra(context.Background(), nil, createInput)
-if err == nil {
-t.Error("Expected error for unapproved plan")
-}
-// Should contain ErrPlanNotApproved or similar message.
-if !containsSubstring(err.Error(), "approved") && !containsSubstring(err.Error(), "approval") {
-t.Errorf("Expected error about plan not approved, got: %v", err)
-}
+	// Try to create infra with unapproved plan.
+	createInput := createInfraInput{
+		PlanID: planOutput.PlanID,
+	}
+	_, _, err := provider.createInfra(context.Background(), nil, createInput)
+	if err == nil {
+		t.Error("Expected error for unapproved plan")
+	}
+	// Should contain ErrPlanNotApproved or similar message.
+	if !containsSubstring(err.Error(), "approved") && !containsSubstring(err.Error(), "approval") {
+		t.Errorf("Expected error about plan not approved, got: %v", err)
+	}
 }
 
 // TestMergeTags_NilMaps tests mergeTags with nil inputs.
 func TestMergeTags_NilMaps(t *testing.T) {
-// Test with nil first map.
-result := mergeTags(nil, map[string]string{"key1": "val1"})
-if result["key1"] != "val1" {
-t.Errorf("Expected key1=val1, got %v", result)
-}
+	// Test with nil first map.
+	result := mergeTags(nil, map[string]string{"key1": "val1"})
+	if result["key1"] != "val1" {
+		t.Errorf("Expected key1=val1, got %v", result)
+	}
 
-// Test with nil second map.
-result = mergeTags(map[string]string{"key2": "val2"}, nil)
-if result["key2"] != "val2" {
-t.Errorf("Expected key2=val2, got %v", result)
-}
+	// Test with nil second map.
+	result = mergeTags(map[string]string{"key2": "val2"}, nil)
+	if result["key2"] != "val2" {
+		t.Errorf("Expected key2=val2, got %v", result)
+	}
 
-// Test with both nil.
-result = mergeTags(nil, nil)
-if len(result) != 0 {
-t.Errorf("Expected empty map, got %v", result)
-}
+	// Test with both nil.
+	result = mergeTags(nil, nil)
+	if len(result) != 0 {
+		t.Errorf("Expected empty map, got %v", result)
+	}
 }
 
 // TestMergeTags_Override tests that second map overrides first.
 func TestMergeTags_Override(t *testing.T) {
-map1 := map[string]string{"key": "original", "unique1": "val1"}
-map2 := map[string]string{"key": "override", "unique2": "val2"}
+	map1 := map[string]string{"key": "original", "unique1": "val1"}
+	map2 := map[string]string{"key": "override", "unique2": "val2"}
 
-result := mergeTags(map1, map2)
+	result := mergeTags(map1, map2)
 
-if result["key"] != "override" {
-t.Errorf("Expected key=override, got %s", result["key"])
-}
-if result["unique1"] != "val1" {
-t.Errorf("Expected unique1=val1, got %s", result["unique1"])
-}
-if result["unique2"] != "val2" {
-t.Errorf("Expected unique2=val2, got %s", result["unique2"])
-}
+	if result["key"] != "override" {
+		t.Errorf("Expected key=override, got %s", result["key"])
+	}
+	if result["unique1"] != "val1" {
+		t.Errorf("Expected unique1=val1, got %s", result["unique1"])
+	}
+	if result["unique2"] != "val2" {
+		t.Errorf("Expected unique2=val2, got %s", result["unique2"])
+	}
 }
 
 // TestRollbackInfra tests that rollbackInfra handles empty infrastructure gracefully.
@@ -1612,5 +1619,319 @@ func TestCreateInfraErrorWrapping(t *testing.T) {
 	// the plan validation logic works correctly
 	if err == nil {
 		t.Skip("createInfra succeeded unexpectedly (AWS credentials available)")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Mock-based Unit Tests
+// ---------------------------------------------------------------------------
+// Tests below use the mock infrastructure to test AWS provisioning functions
+// without requiring real AWS credentials.
+
+// TestProvisionVPC_WithMocks tests the provisionVPC function with mock AWS clients.
+func TestProvisionVPC_WithMocks(t *testing.T) {
+	store, err := state.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	// Create mock EC2 client
+	ec2Mock := &mocks.EC2Mock{
+		// Override specific behaviors if needed; defaults return success
+	}
+
+	clients := &awsclient.AWSClients{
+		EC2: ec2Mock,
+	}
+
+	provider := NewAWSProviderWithClients(store, clients)
+
+	// Create test infrastructure record and persist it
+	infra := &state.Infrastructure{
+		ID:        "infra-test-vpc-mocks",
+		PlanID:    "plan-test-123",
+		Region:    "us-east-1",
+		Resources: make(map[string]string),
+		Status:    state.InfraStatusProvisioning,
+	}
+	if err := store.CreateInfra(infra); err != nil {
+		t.Fatalf("CreateInfra: %v", err)
+	}
+
+	tags := map[string]string{
+		"agent-deploy:plan-id":  "plan-test-123",
+		"agent-deploy:infra-id": infra.ID,
+	}
+
+	// Call provisionVPC
+	err = provider.provisionVPC(context.Background(), aws.Config{Region: "us-east-1"}, infra, tags)
+	if err != nil {
+		t.Fatalf("provisionVPC: %v", err)
+	}
+
+	// Verify EC2 API calls were made
+	if ec2Mock.CreateVpcCalls != 1 {
+		t.Errorf("CreateVpcCalls = %d, want 1", ec2Mock.CreateVpcCalls)
+	}
+	if ec2Mock.CreateSubnetCalls != 4 { // 2 public + 2 private subnets
+		t.Errorf("CreateSubnetCalls = %d, want 4", ec2Mock.CreateSubnetCalls)
+	}
+
+	// Verify resources were stored in memory
+	if infra.Resources[state.ResourceVPC] == "" {
+		t.Error("VPC ID should be stored")
+	}
+	if infra.Resources[state.ResourceSubnetPublic] == "" {
+		t.Error("Public subnet IDs should be stored")
+	}
+	if infra.Resources[state.ResourceSubnetPrivate] == "" {
+		t.Error("Private subnet IDs should be stored")
+	}
+
+	// Verify resources were persisted to store
+	storedInfra, err := store.GetInfra(infra.ID)
+	if err != nil {
+		t.Fatalf("GetInfra: %v", err)
+	}
+	if storedInfra.Resources[state.ResourceVPC] == "" {
+		t.Error("VPC ID should be persisted to store")
+	}
+}
+
+// TestProvisionVPC_CreateVPCError tests error handling when CreateVpc fails.
+func TestProvisionVPC_CreateVPCError(t *testing.T) {
+	store, err := state.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	ec2Mock := &mocks.EC2Mock{
+		CreateVpcFunc: func(ctx context.Context, params *ec2.CreateVpcInput, optFns ...func(*ec2.Options)) (*ec2.CreateVpcOutput, error) {
+			return nil, fmt.Errorf("vpc quota exceeded")
+		},
+	}
+
+	clients := &awsclient.AWSClients{
+		EC2: ec2Mock,
+	}
+
+	provider := NewAWSProviderWithClients(store, clients)
+	infra := &state.Infrastructure{
+		ID:        "infra-test-123",
+		Resources: make(map[string]string),
+	}
+
+	err = provider.provisionVPC(context.Background(), aws.Config{Region: "us-east-1"}, infra, map[string]string{})
+	if err == nil {
+		t.Fatal("expected error when CreateVpc fails")
+	}
+	if !containsSubstring(err.Error(), "create VPC") {
+		t.Errorf("error should mention VPC creation: %v", err)
+	}
+}
+
+// TestProvisionVPC_SubnetError tests error handling when CreateSubnet fails.
+func TestProvisionVPC_SubnetError(t *testing.T) {
+	store, err := state.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	subnetCallCount := 0
+	ec2Mock := &mocks.EC2Mock{
+		CreateSubnetFunc: func(ctx context.Context, params *ec2.CreateSubnetInput, optFns ...func(*ec2.Options)) (*ec2.CreateSubnetOutput, error) {
+			subnetCallCount++
+			if subnetCallCount > 1 {
+				return nil, fmt.Errorf("subnet limit exceeded")
+			}
+			return &ec2.CreateSubnetOutput{
+				Subnet: &ec2types.Subnet{
+					SubnetId: aws.String("subnet-mock-" + fmt.Sprintf("%d", subnetCallCount)),
+				},
+			}, nil
+		},
+	}
+
+	clients := &awsclient.AWSClients{
+		EC2: ec2Mock,
+	}
+
+	provider := NewAWSProviderWithClients(store, clients)
+	infra := &state.Infrastructure{
+		ID:        "infra-test-123",
+		Resources: make(map[string]string),
+	}
+
+	err = provider.provisionVPC(context.Background(), aws.Config{Region: "us-east-1"}, infra, map[string]string{})
+	if err == nil {
+		t.Fatal("expected error when CreateSubnet fails")
+	}
+	if !containsSubstring(err.Error(), "subnet") {
+		t.Errorf("error should mention subnet creation: %v", err)
+	}
+}
+
+// TestNewAWSProviderWithClients verifies the constructor works correctly.
+func TestNewAWSProviderWithClients(t *testing.T) {
+	store, err := state.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	clients := &awsclient.AWSClients{
+		EC2: &mocks.EC2Mock{},
+	}
+
+	provider := NewAWSProviderWithClients(store, clients)
+	if provider == nil {
+		t.Fatal("provider should not be nil")
+	}
+	if provider.clients != clients {
+		t.Error("provider should use injected clients")
+	}
+}
+
+// TestGetClients_WithInjectedClients verifies getClients returns injected clients.
+func TestGetClients_WithInjectedClients(t *testing.T) {
+	store, err := state.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	mockEC2 := &mocks.EC2Mock{}
+	clients := &awsclient.AWSClients{
+		EC2: mockEC2,
+	}
+
+	provider := NewAWSProviderWithClients(store, clients)
+	got := provider.getClients(aws.Config{})
+
+	if got != clients {
+		t.Error("getClients should return injected clients")
+	}
+}
+
+// TestProvisionECSCluster_WithMocks tests the ECS cluster provisioning with mocks.
+func TestProvisionECSCluster_WithMocks(t *testing.T) {
+	store, err := state.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	ecsMock := &mocks.ECSMock{}
+	clients := &awsclient.AWSClients{
+		ECS: ecsMock,
+	}
+
+	provider := NewAWSProviderWithClients(store, clients)
+
+	// Create and persist infrastructure
+	infra := &state.Infrastructure{
+		ID:        "infra-test-ecs",
+		PlanID:    "plan-test-ecs",
+		Region:    "us-east-1",
+		Resources: make(map[string]string),
+		Status:    state.InfraStatusProvisioning,
+	}
+	if err := store.CreateInfra(infra); err != nil {
+		t.Fatalf("CreateInfra: %v", err)
+	}
+
+	tags := map[string]string{
+		"agent-deploy:infra-id": infra.ID,
+	}
+
+	err = provider.provisionECSCluster(context.Background(), aws.Config{Region: "us-east-1"}, infra, tags)
+	if err != nil {
+		t.Fatalf("provisionECSCluster: %v", err)
+	}
+
+	// Verify ECS API calls
+	if ecsMock.CreateClusterCalls != 1 {
+		t.Errorf("CreateClusterCalls = %d, want 1", ecsMock.CreateClusterCalls)
+	}
+
+	// Verify cluster ARN stored
+	if infra.Resources[state.ResourceECSCluster] == "" {
+		t.Error("ECS cluster ARN should be stored")
+	}
+}
+
+// TestProvisionECSCluster_Error tests error handling when CreateCluster fails.
+func TestProvisionECSCluster_Error(t *testing.T) {
+	store, err := state.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	ecsMock := &mocks.ECSMock{
+		CreateClusterFunc: func(ctx context.Context, params *ecs.CreateClusterInput, optFns ...func(*ecs.Options)) (*ecs.CreateClusterOutput, error) {
+			return nil, fmt.Errorf("cluster limit exceeded")
+		},
+	}
+	clients := &awsclient.AWSClients{
+		ECS: ecsMock,
+	}
+
+	provider := NewAWSProviderWithClients(store, clients)
+	infra := &state.Infrastructure{
+		ID:        "infra-test-ecs-err",
+		Resources: make(map[string]string),
+	}
+
+	err = provider.provisionECSCluster(context.Background(), aws.Config{Region: "us-east-1"}, infra, map[string]string{})
+	if err == nil {
+		t.Fatal("expected error when CreateCluster fails")
+	}
+	if !containsSubstring(err.Error(), "create cluster") {
+		t.Errorf("error should mention cluster creation: %v", err)
+	}
+}
+
+// TestProvisionALB_WithMocks tests ALB provisioning with mocks.
+func TestProvisionALB_WithMocks(t *testing.T) {
+	store, err := state.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	elbMock := &mocks.ELBV2Mock{}
+	clients := &awsclient.AWSClients{
+		ELBV2: elbMock,
+	}
+
+	provider := NewAWSProviderWithClients(store, clients)
+
+	// Create infrastructure with required VPC resources
+	infra := &state.Infrastructure{
+		ID:     "infra-test-alb",
+		PlanID: "plan-test-alb",
+		Region: "us-east-1",
+		Resources: map[string]string{
+			state.ResourceSubnetPublic:      "subnet-1,subnet-2",
+			state.ResourceSecurityGroupALB:  "sg-alb-123",
+			state.ResourceSecurityGroupTask: "sg-task-456",
+		},
+		Status: state.InfraStatusProvisioning,
+	}
+	if err := store.CreateInfra(infra); err != nil {
+		t.Fatalf("CreateInfra: %v", err)
+	}
+
+	tags := map[string]string{
+		"agent-deploy:infra-id": infra.ID,
+	}
+
+	err = provider.provisionALB(context.Background(), aws.Config{Region: "us-east-1"}, infra, tags, "")
+	if err != nil {
+		t.Fatalf("provisionALB: %v", err)
+	}
+
+	// Verify ALB and Target Group created
+	if infra.Resources[state.ResourceALB] == "" {
+		t.Error("ALB ARN should be stored")
+	}
+	if infra.Resources[state.ResourceTargetGroup] == "" {
+		t.Error("Target group ARN should be stored")
 	}
 }

@@ -41,8 +41,9 @@ type EC2Mock struct {
 	DeleteRouteTableFunc     func(ctx context.Context, params *ec2.DeleteRouteTableInput, optFns ...func(*ec2.Options)) (*ec2.DeleteRouteTableOutput, error)
 
 	// NAT Gateway operations
-	CreateNatGatewayFunc func(ctx context.Context, params *ec2.CreateNatGatewayInput, optFns ...func(*ec2.Options)) (*ec2.CreateNatGatewayOutput, error)
-	DeleteNatGatewayFunc func(ctx context.Context, params *ec2.DeleteNatGatewayInput, optFns ...func(*ec2.Options)) (*ec2.DeleteNatGatewayOutput, error)
+	CreateNatGatewayFunc    func(ctx context.Context, params *ec2.CreateNatGatewayInput, optFns ...func(*ec2.Options)) (*ec2.CreateNatGatewayOutput, error)
+	DeleteNatGatewayFunc    func(ctx context.Context, params *ec2.DeleteNatGatewayInput, optFns ...func(*ec2.Options)) (*ec2.DeleteNatGatewayOutput, error)
+	DescribeNatGatewaysFunc func(ctx context.Context, params *ec2.DescribeNatGatewaysInput, optFns ...func(*ec2.Options)) (*ec2.DescribeNatGatewaysOutput, error)
 
 	// Elastic IP operations
 	AllocateAddressFunc func(ctx context.Context, params *ec2.AllocateAddressInput, optFns ...func(*ec2.Options)) (*ec2.AllocateAddressOutput, error)
@@ -243,6 +244,19 @@ func (m *EC2Mock) DeleteNatGateway(ctx context.Context, params *ec2.DeleteNatGat
 	}
 	return &ec2.DeleteNatGatewayOutput{
 		NatGatewayId: params.NatGatewayId,
+	}, nil
+}
+
+func (m *EC2Mock) DescribeNatGateways(ctx context.Context, params *ec2.DescribeNatGatewaysInput, optFns ...func(*ec2.Options)) (*ec2.DescribeNatGatewaysOutput, error) {
+	if m.DescribeNatGatewaysFunc != nil {
+		return m.DescribeNatGatewaysFunc(ctx, params, optFns...)
+	}
+	// Default: return NAT gateway in available state
+	return &ec2.DescribeNatGatewaysOutput{
+		NatGateways: []ec2types.NatGateway{{
+			NatGatewayId: aws.String("nat-mock-12345"),
+			State:        ec2types.NatGatewayStateAvailable,
+		}},
 	}, nil
 }
 

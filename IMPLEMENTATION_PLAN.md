@@ -94,7 +94,7 @@
 | Private subnets | ✅ **IMPLEMENTED** | Public/private subnet architecture with NAT Gateway |
 | Plan approval | ✅ **IMPLEMENTED** | `aws_approve_plan` tool with explicit approval workflow |
 | Wait for healthy deployment | ✅ **Done** | waitForHealthyDeployment polls ECS/ALB |
-| Test coverage | ⚠️ **Improved** | Overall 28.6%; `providers/aws.go` at 27.5%; `providers/provider.go` at ~80% |
+| Test coverage | ⚠️ **Improved** | Overall 35.2%; `providers/aws.go` at 42.9%; `providers/provider.go` at ~80% |
 | Structured logging | ✅ **Done** | All log.Printf migrated to slog (30 in aws.go, 1 in provider.go, ~4 in costs.go) |
 | AWS SDK Mocking Infrastructure | ✅ **Complete** | Mock interfaces (EC2API, ECSAPI, ELBV2API, IAMAPI, ECRAPI, CloudWatchLogsAPI, AutoScalingAPI, ACMAPI), AWSClients struct, compile-time verification |
 | Makefile | ✅ **Complete** | all, test-race, coverage, coverage-html, run, install, help targets added |
@@ -392,23 +392,26 @@
 - **Coverage:** 0% → 80%+ (All: 60%, AllWithStore: 100%, GetAWSProvider: 100%)
 - **Location:** `internal/providers/provider.go`
 
-### P2.5 AWS Provider Tool Tests Missing (Coverage improved 18.2% → 27.5%) ⚠️
+### P2.5 AWS Provider Tool Tests Missing (Coverage improved 18.2% → 42.9%) ⚠️
 
 **Completed:**
 - [x] Added 12 new unit tests for validation and error handling
 - [x] Tests for deploy, teardown, status, createInfra error paths
 - [x] Tests for plan approval/rejection workflows
 - [x] Coverage improved from 18.2% to 27.5%
+- [x] Coverage improved from 27.5% to 42.9%
+- [x] Add unit tests with mocked AWS SDK
+- [x] Added NewAWSProviderWithClients and getClients functions for dependency injection
+- [x] provisionVPC: 0% → 77%, provisionECSCluster: 0% → 90.9%, provisionALB: 0% → 61.4%
 
 **Remaining:**
-- [ ] Add unit tests with mocked AWS SDK (requires provider refactor)
 - [ ] Test error scenarios with full AWS mocking
 
 - **Impact:** Extended test coverage for core AWS provider tools
 - **Location:** `internal/providers/aws_test.go`
 - **Depends on:** P2.6 (AWS SDK mocking setup) ✅ COMPLETED
 - **Audit (2026-03-20):** Verified only planInfra tested, 8.3% coverage
-- **Progress:** 27.5% coverage achieved with new unit tests
+- **Progress:** 42.9% coverage achieved with new unit tests
 
 ### P2.6 AWS SDK Mocking Infrastructure ✅ COMPLETED
 
@@ -419,6 +422,7 @@
 - **Location:** `internal/awsclient/interfaces.go`, `internal/awsclient/mocks/`
 - **Completed:** 2026-03-25
 - **Details:** Created EC2API, ECSAPI, ELBV2API, IAMAPI, ECRAPI, CloudWatchLogsAPI, AutoScalingAPI, ACMAPI interfaces; AWSClients struct; mock implementations; compile-time interface verification tests
+- **Note:** Mocks are now actively used in tests via NewAWSProviderWithClients dependency injection
 
 ### P2.7 Reconciliation AWS Integration Tests ❌
 
@@ -614,11 +618,11 @@ go tool cover -html=coverage.out          # View coverage report
 | `internal/errors/` | **100%** | Comprehensive tests added |
 | `internal/spending/config.go` | **100%** | Comprehensive tests added |
 | `internal/providers/provider.go` | **80%** | All(), AllWithStore(), GetAWSProvider() tested |
-| `internal/providers/aws.go` | **27.5%** | planInfra, deploy, teardown, status, approval workflows tested |
+| `internal/providers/aws.go` | **42.9%** | planInfra, deploy, teardown, status, approval workflows, provisionVPC, provisionECSCluster, provisionALB tested |
 | `internal/main.go` | **0%** | Test file doesn't test main() |
 | `internal/spending/` | **~23%** | Config tests, check tests, costs tests |
 | `internal/state/` | **44.4%** | Store, cleanup, reconcile |
-| **Overall** | **28.6%** | Above CI floor (25%), target 50% |
+| **Overall** | **35.2%** | Above CI floor (25%), target 50% |
 
 ### Key Files
 
