@@ -392,17 +392,22 @@
 - **Coverage:** 0% → 80%+ (All: 60%, AllWithStore: 100%, GetAWSProvider: 100%)
 - **Location:** `internal/providers/provider.go`
 
-### P2.5 AWS Provider Tool Tests Missing (18.2% coverage) ❌
+### P2.5 AWS Provider Tool Tests Missing (Coverage improved 18.2% → 24.2%) ⚠️
 
-- [ ] Add unit tests for `createInfra` with mocked AWS SDK
-- [ ] Add unit tests for `deploy` with mocked AWS SDK
-- [ ] Add unit tests for `status` with mocked AWS SDK
-- [ ] Add unit tests for `teardown` with mocked AWS SDK
-- [ ] Test error scenarios (VPC creation fails, ECS fails, etc.)
-- **Impact:** Only `planInfra` has unit tests; other 4 tools untested
+**Completed:**
+- [x] Added 12 new unit tests for validation and error handling
+- [x] Tests for deploy, teardown, status, createInfra error paths
+- [x] Tests for plan approval/rejection workflows
+
+**Remaining:**
+- [ ] Add unit tests with mocked AWS SDK (requires provider refactor)
+- [ ] Test error scenarios with full AWS mocking
+
+- **Impact:** Extended test coverage for core AWS provider tools
 - **Location:** `internal/providers/aws_test.go`
 - **Depends on:** P2.6 (AWS SDK mocking setup)
 - **Audit (2026-03-20):** Verified only planInfra tested, 8.3% coverage
+- **Progress:** 24.2% coverage achieved with new unit tests
 
 ### P2.6 AWS SDK Mocking Infrastructure ✅ COMPLETED
 
@@ -598,7 +603,7 @@ go tool cover -html=coverage.out          # View coverage report
 | `internal/errors/` | **100%** | Comprehensive tests added |
 | `internal/spending/config.go` | **100%** | Comprehensive tests added |
 | `internal/providers/provider.go` | **0%** | No tests |
-| `internal/providers/aws.go` | **8.3%** | Only planInfra tested |
+| `internal/providers/aws.go` | **24.2%** | planInfra, deploy, teardown, status, approval workflows tested |
 | `internal/main.go` | **0%** | Test file doesn't test main() |
 | `internal/spending/` | **~45%** | Improved with config tests |
 | `internal/state/` | **45.5%** | Partial |
