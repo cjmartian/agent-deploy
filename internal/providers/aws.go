@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/acm"
+	acmtypes "github.com/aws/aws-sdk-go-v2/service/acm/types"
 	"github.com/aws/aws-sdk-go-v2/service/applicationautoscaling"
 	astypes "github.com/aws/aws-sdk-go-v2/service/applicationautoscaling/types"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
@@ -22,8 +24,6 @@ import (
 	ecstypes "github.com/aws/aws-sdk-go-v2/service/ecs/types"
 	elbv2 "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2"
 	elbv2types "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2/types"
-	"github.com/aws/aws-sdk-go-v2/service/acm"
-	acmtypes "github.com/aws/aws-sdk-go-v2/service/acm/types"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	"github.com/cjmartian/agent-deploy/internal/awsclient"
@@ -151,10 +151,10 @@ type deployInput struct {
 	CPU             string            `json:"cpu,omitempty"              jsonschema:"ECS task CPU units (default: 256). Valid: 256,512,1024,2048,4096"`
 	Memory          string            `json:"memory,omitempty"           jsonschema:"ECS task memory in MB (default: 512). Must be compatible with CPU"`
 	// Auto Scaling parameters (per spec ralph/specs/auto-scaling.md).
-	MinCount          int `json:"min_count,omitempty"           jsonschema:"minimum task count for auto scaling (default: same as desired_count)"`
-	MaxCount          int `json:"max_count,omitempty"           jsonschema:"maximum task count for auto scaling (default: same as desired_count, no scaling)"`
-	TargetCPUPercent  int `json:"target_cpu_percent,omitempty"  jsonschema:"target CPU utilization percentage for scaling (default: 70)"`
-	TargetMemPercent  int `json:"target_memory_percent,omitempty" jsonschema:"target memory utilization percentage for scaling (default: 70)"`
+	MinCount         int `json:"min_count,omitempty"           jsonschema:"minimum task count for auto scaling (default: same as desired_count)"`
+	MaxCount         int `json:"max_count,omitempty"           jsonschema:"maximum task count for auto scaling (default: same as desired_count, no scaling)"`
+	TargetCPUPercent int `json:"target_cpu_percent,omitempty"  jsonschema:"target CPU utilization percentage for scaling (default: 70)"`
+	TargetMemPercent int `json:"target_memory_percent,omitempty" jsonschema:"target memory utilization percentage for scaling (default: 70)"`
 }
 
 type deployOutput struct {
@@ -168,11 +168,11 @@ type statusInput struct {
 
 // scalingInfo contains auto scaling configuration details.
 type scalingInfo struct {
-	MinCount          int `json:"min_count"`
-	MaxCount          int `json:"max_count"`
-	CurrentCount      int `json:"current_count"`
-	TargetCPUPercent  int `json:"target_cpu_percent"`
-	TargetMemPercent  int `json:"target_memory_percent"`
+	MinCount         int `json:"min_count"`
+	MaxCount         int `json:"max_count"`
+	CurrentCount     int `json:"current_count"`
+	TargetCPUPercent int `json:"target_cpu_percent"`
+	TargetMemPercent int `json:"target_memory_percent"`
 }
 
 type statusOutput struct {
@@ -251,8 +251,8 @@ func (p *AWSProvider) planInfra(ctx context.Context, _ *mcp.CallToolRequest, in 
 		// Estimate costs with proper pricing.
 		costEstimate, err = estimator.EstimateCosts(ctx, spending.EstimateParams{
 			Region:            in.Region,
-			CPUUnits:          256,  // Default for planning
-			MemoryMB:          512,  // Default for planning
+			CPUUnits:          256, // Default for planning
+			MemoryMB:          512, // Default for planning
 			DesiredCount:      1,
 			ExpectedUsers:     in.ExpectedUsers,
 			IncludeNATGateway: true, // Private subnets are now standard
@@ -1316,13 +1316,13 @@ func (p *AWSProvider) provisionALB(ctx context.Context, cfg aws.Config, infra *s
 
 	// Create target group.
 	tgResp, err := elbClient.CreateTargetGroup(ctx, &elbv2.CreateTargetGroupInput{
-		Name:       aws.String("agent-deploy-" + infra.ID[:8]),
-		Protocol:   elbv2types.ProtocolEnumHttp,
-		Port:       aws.Int32(80),
-		VpcId:      aws.String(infra.Resources[state.ResourceVPC]),
-		TargetType: elbv2types.TargetTypeEnumIp,
+		Name:            aws.String("agent-deploy-" + infra.ID[:8]),
+		Protocol:        elbv2types.ProtocolEnumHttp,
+		Port:            aws.Int32(80),
+		VpcId:           aws.String(infra.Resources[state.ResourceVPC]),
+		TargetType:      elbv2types.TargetTypeEnumIp,
 		HealthCheckPath: aws.String("/"),
-		Tags:       mapToELBTags(tags),
+		Tags:            mapToELBTags(tags),
 	})
 	if err != nil {
 		return fmt.Errorf("create target group: %w", err)
@@ -1539,7 +1539,7 @@ func (p *AWSProvider) ensureECRRepository(ctx context.Context, cfg aws.Config, i
 	clients := p.getClients(cfg)
 	ecrClient := clients.ECR
 
-	repoName := "agent-deploy-" + deployID[:12]
+	repoName := "agent-deploy-" + strings.ToLower(deployID[:12])
 
 	_, err := ecrClient.CreateRepository(ctx, &ecr.CreateRepositoryInput{
 		RepositoryName: aws.String(repoName),
@@ -1607,7 +1607,7 @@ func (p *AWSProvider) createTaskDefinition(ctx context.Context, cfg aws.Config, 
 	}
 
 	resp, err := ecsClient.RegisterTaskDefinition(ctx, &ecs.RegisterTaskDefinitionInput{
-		Family:                  aws.String("agent-deploy-" + deployID[:12]),
+		Family:                  aws.String("agent-deploy-" + strings.ToLower(deployID[:12])),
 		RequiresCompatibilities: []ecstypes.Compatibility{ecstypes.CompatibilityFargate},
 		NetworkMode:             ecstypes.NetworkModeAwsvpc,
 		Cpu:                     aws.String(cpu),
@@ -1671,7 +1671,7 @@ func (p *AWSProvider) createOrUpdateService(ctx context.Context, cfg aws.Config,
 		taskSGID = infra.Resources[state.ResourceSecurityGroup]
 	}
 
-	serviceName := "agent-deploy-" + deployID[:12]
+	serviceName := "agent-deploy-" + strings.ToLower(deployID[:12])
 
 	resp, err := ecsClient.CreateService(ctx, &ecs.CreateServiceInput{
 		Cluster:        aws.String(infra.Resources[state.ResourceECSCluster]),
@@ -2440,7 +2440,7 @@ func (p *AWSProvider) configureAutoScaling(ctx context.Context, cfg aws.Config, 
 	}
 
 	// Create CPU-based scaling policy.
-	cpuPolicyName := "agent-deploy-cpu-" + deployID[:12]
+	cpuPolicyName := "agent-deploy-cpu-" + strings.ToLower(deployID[:12])
 	_, err = asClient.PutScalingPolicy(ctx, &applicationautoscaling.PutScalingPolicyInput{
 		PolicyName:        aws.String(cpuPolicyName),
 		ServiceNamespace:  astypes.ServiceNamespaceEcs,
@@ -2461,7 +2461,7 @@ func (p *AWSProvider) configureAutoScaling(ctx context.Context, cfg aws.Config, 
 	}
 
 	// Create memory-based scaling policy.
-	memPolicyName := "agent-deploy-memory-" + deployID[:12]
+	memPolicyName := "agent-deploy-memory-" + strings.ToLower(deployID[:12])
 	_, err = asClient.PutScalingPolicy(ctx, &applicationautoscaling.PutScalingPolicyInput{
 		PolicyName:        aws.String(memPolicyName),
 		ServiceNamespace:  astypes.ServiceNamespaceEcs,
@@ -2493,7 +2493,7 @@ func (p *AWSProvider) deleteAutoScaling(ctx context.Context, cfg aws.Config, clu
 	resourceID := fmt.Sprintf("service/%s/%s", clusterName, serviceName)
 
 	// Delete CPU scaling policy.
-	cpuPolicyName := "agent-deploy-cpu-" + deployID[:12]
+	cpuPolicyName := "agent-deploy-cpu-" + strings.ToLower(deployID[:12])
 	_, err := asClient.DeleteScalingPolicy(ctx, &applicationautoscaling.DeleteScalingPolicyInput{
 		PolicyName:        aws.String(cpuPolicyName),
 		ServiceNamespace:  astypes.ServiceNamespaceEcs,
@@ -2508,7 +2508,7 @@ func (p *AWSProvider) deleteAutoScaling(ctx context.Context, cfg aws.Config, clu
 	}
 
 	// Delete memory scaling policy.
-	memPolicyName := "agent-deploy-memory-" + deployID[:12]
+	memPolicyName := "agent-deploy-memory-" + strings.ToLower(deployID[:12])
 	_, err = asClient.DeleteScalingPolicy(ctx, &applicationautoscaling.DeleteScalingPolicyInput{
 		PolicyName:        aws.String(memPolicyName),
 		ServiceNamespace:  astypes.ServiceNamespaceEcs,
