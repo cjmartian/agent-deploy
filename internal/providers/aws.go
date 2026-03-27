@@ -3,8 +3,10 @@ package providers
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/url"
 	"strings"
@@ -32,6 +34,9 @@ import (
 	"github.com/cjmartian/agent-deploy/internal/logging"
 	"github.com/cjmartian/agent-deploy/internal/spending"
 	"github.com/cjmartian/agent-deploy/internal/state"
+	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/registry"
+	dockerclient "github.com/docker/docker/client"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -644,8 +649,27 @@ func (p *AWSProvider) deploy(ctx context.Context, _ *mcp.CallToolRequest, in dep
 		return nil, deployOutput{}, fmt.Errorf("ECR setup: %w", err)
 	}
 
+	// Push local image to ECR if needed (per spec ralph/specs/ecr-image-push.md).
+	// This step detects if the image is a local-only reference and pushes it to ECR.
+	imageForTask := in.ImageRef
+	if isLocalImage(in.ImageRef) {
+		slog.Info("detected local image, pushing to ECR",
+			slog.String("component", "aws_deploy"),
+			slog.String("imageRef", in.ImageRef),
+			logging.DeploymentID(deployID))
+
+		ecrImageURI, pushErr := p.pushImageToECR(ctx, cfg, infra, in.ImageRef, deployID)
+		if pushErr != nil {
+			if statusErr := p.store.UpdateDeploymentStatus(deployID, state.DeploymentStatusFailed, nil); statusErr != nil {
+				slog.Error("failed to update deployment status", "deployID", deployID, "error", statusErr)
+			}
+			return nil, deployOutput{}, fmt.Errorf("push image to ECR: %w", pushErr)
+		}
+		imageForTask = ecrImageURI
+	}
+
 	// Create ECS task definition.
-	taskDefARN, err := p.createTaskDefinition(ctx, cfg, infra, in.ImageRef, deployID, containerPort, in.Environment, in.CPU, in.Memory)
+	taskDefARN, err := p.createTaskDefinition(ctx, cfg, infra, imageForTask, deployID, containerPort, in.Environment, in.CPU, in.Memory)
 	if err != nil {
 		if statusErr := p.store.UpdateDeploymentStatus(deployID, state.DeploymentStatusFailed, nil); statusErr != nil {
 			slog.Error("failed to update deployment status", "deployID", deployID, "error", statusErr)
@@ -2770,4 +2794,199 @@ func (p *AWSProvider) validateCertificate(ctx context.Context, cfg aws.Config, c
 	default:
 		return fmt.Errorf("certificate is not in issued status (current: %s): %s", status, certARN)
 	}
+}
+
+// isLocalImage determines whether an image reference is a local-only image (needs to be pushed to ECR)
+// or a fully-qualified registry reference that can be used directly.
+//
+// Classification:
+// - ECR URI (*.dkr.ecr.*.amazonaws.com/*): use as-is
+// - Public registries (docker.io, ghcr.io, public.ecr.aws, gcr.io, quay.io): use as-is
+// - Local image (name:tag or just name, no registry prefix): push to ECR
+func isLocalImage(imageRef string) bool {
+	if imageRef == "" {
+		return false
+	}
+
+	// ECR URI pattern: <account>.dkr.ecr.<region>.amazonaws.com/<repo>
+	if strings.Contains(imageRef, ".dkr.ecr.") && strings.Contains(imageRef, ".amazonaws.com") {
+		return false
+	}
+
+	// Common public registries.
+	publicRegistries := []string{
+		"docker.io/",
+		"index.docker.io/",
+		"ghcr.io/",
+		"public.ecr.aws/",
+		"gcr.io/",
+		"quay.io/",
+		"registry.hub.docker.com/",
+		"mcr.microsoft.com/",
+	}
+
+	for _, registry := range publicRegistries {
+		if strings.HasPrefix(imageRef, registry) {
+			return false
+		}
+	}
+
+	// Check for any registry prefix (contains '/' and first part has a '.' or ':')
+	// e.g., "myregistry.com/myimage:tag" or "localhost:5000/myimage:tag"
+	parts := strings.SplitN(imageRef, "/", 2)
+	if len(parts) == 2 {
+		firstPart := parts[0]
+		// If the first part looks like a domain (contains '.' or ':'), it's a registry reference.
+		if strings.Contains(firstPart, ".") || strings.Contains(firstPart, ":") {
+			return false
+		}
+	}
+
+	// It's a local image (e.g., "myimage:tag", "myimage", "library/nginx").
+	return true
+}
+
+// pushImageToECR pushes a local Docker image to the ECR repository.
+// It authenticates with ECR, tags the local image with the ECR URI, and pushes it.
+// Returns the full ECR image URI to use in the task definition.
+func (p *AWSProvider) pushImageToECR(
+	ctx context.Context,
+	cfg aws.Config,
+	infra *state.Infrastructure,
+	imageRef string,
+	deployID string,
+) (string, error) {
+	clients := p.getClients(cfg)
+	ecrClient := clients.ECR
+
+	slog.Info("pushing image to ECR",
+		slog.String("component", "pushImageToECR"),
+		slog.String("imageRef", imageRef),
+		logging.DeploymentID(deployID))
+
+	// Step 1: Get ECR authorization token.
+	authResp, err := ecrClient.GetAuthorizationToken(ctx, &ecr.GetAuthorizationTokenInput{})
+	if err != nil {
+		return "", fmt.Errorf("failed to get ECR authorization token: %w", err)
+	}
+	if len(authResp.AuthorizationData) == 0 {
+		return "", fmt.Errorf("no authorization data returned from ECR")
+	}
+
+	authData := authResp.AuthorizationData[0]
+	if authData.AuthorizationToken == nil || authData.ProxyEndpoint == nil {
+		return "", fmt.Errorf("invalid authorization data from ECR")
+	}
+
+	// Step 2: Decode the base64 authorization token (format: "username:password").
+	decodedToken, err := base64.StdEncoding.DecodeString(*authData.AuthorizationToken)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode ECR authorization token: %w", err)
+	}
+	tokenParts := strings.SplitN(string(decodedToken), ":", 2)
+	if len(tokenParts) != 2 {
+		return "", fmt.Errorf("invalid ECR authorization token format")
+	}
+	username := tokenParts[0]
+	password := tokenParts[1]
+
+	// Step 3: Construct the ECR image URI.
+	// Repository name format: agent-deploy-<deployID[:12]>
+	repoName := infra.Resources[state.ResourceECRRepository]
+	if repoName == "" {
+		repoName = "agent-deploy-" + strings.ToLower(deployID[:12])
+	}
+
+	// Extract the registry endpoint (e.g., "123456789012.dkr.ecr.us-east-1.amazonaws.com").
+	registryEndpoint := strings.TrimPrefix(*authData.ProxyEndpoint, "https://")
+
+	// Extract tag from imageRef (default to "latest").
+	tag := "latest"
+	if idx := strings.LastIndex(imageRef, ":"); idx != -1 {
+		// Check it's not a port number (e.g., localhost:5000/image).
+		potentialTag := imageRef[idx+1:]
+		if !strings.Contains(potentialTag, "/") {
+			tag = potentialTag
+		}
+	}
+
+	ecrImageURI := fmt.Sprintf("%s/%s:%s", registryEndpoint, repoName, tag)
+
+	slog.Info("ECR image URI constructed",
+		slog.String("component", "pushImageToECR"),
+		slog.String("ecrURI", ecrImageURI),
+		slog.String("originalImage", imageRef))
+
+	// Step 4: Create Docker client.
+	dockerCli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	if err != nil {
+		return "", fmt.Errorf("failed to create Docker client - is Docker daemon running? %w", err)
+	}
+	defer dockerCli.Close()
+
+	// Step 5: Tag the local image with the ECR URI.
+	if err = dockerCli.ImageTag(ctx, imageRef, ecrImageURI); err != nil {
+		return "", fmt.Errorf("image '%s' not found locally; build it first or provide a full registry URI: %w", imageRef, err)
+	}
+
+	slog.Info("image tagged for ECR",
+		slog.String("component", "pushImageToECR"),
+		slog.String("sourceImage", imageRef),
+		slog.String("ecrURI", ecrImageURI))
+
+	// Step 6: Build the registry auth config for push.
+	authConfig := registry.AuthConfig{
+		Username:      username,
+		Password:      password,
+		ServerAddress: registryEndpoint,
+	}
+	authConfigBytes, err := json.Marshal(authConfig)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal auth config: %w", err)
+	}
+	encodedAuth := base64.URLEncoding.EncodeToString(authConfigBytes)
+
+	// Step 7: Push the image to ECR.
+	pushResp, err := dockerCli.ImagePush(ctx, ecrImageURI, image.PushOptions{
+		RegistryAuth: encodedAuth,
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to push image to ECR: %w", err)
+	}
+	defer pushResp.Close()
+
+	// Step 8: Read the push response stream to check for errors.
+	// The Docker API returns JSON messages in the stream.
+	type pushMessage struct {
+		Status   string `json:"status"`
+		Progress string `json:"progress,omitempty"`
+		Error    string `json:"error,omitempty"`
+	}
+
+	decoder := json.NewDecoder(pushResp)
+	for {
+		var msg pushMessage
+		if err = decoder.Decode(&msg); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return "", fmt.Errorf("failed to read push response: %w", err)
+		}
+		if msg.Error != "" {
+			return "", fmt.Errorf("image push failed: %s", msg.Error)
+		}
+		// Log progress for debugging.
+		if msg.Status != "" {
+			slog.Debug("push progress",
+				slog.String("component", "pushImageToECR"),
+				slog.String("status", msg.Status),
+				slog.String("progress", msg.Progress))
+		}
+	}
+
+	slog.Info("image pushed to ECR",
+		slog.String("component", "pushImageToECR"),
+		slog.String("ecrURI", ecrImageURI))
+
+	return ecrImageURI, nil
 }

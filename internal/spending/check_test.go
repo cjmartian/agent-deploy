@@ -52,6 +52,10 @@ func TestCheckBudget_ExceedsRemainingMonthly(t *testing.T) {
 }
 
 func TestLoadLimits_Defaults(t *testing.T) {
+	// Use temp HOME to avoid picking up real config file.
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
 	// Clear any env vars that might interfere.
 	_ = os.Unsetenv("AGENT_DEPLOY_MONTHLY_BUDGET")
 	_ = os.Unsetenv("AGENT_DEPLOY_PER_DEPLOYMENT_BUDGET")

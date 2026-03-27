@@ -1935,3 +1935,126 @@ func TestProvisionALB_WithMocks(t *testing.T) {
 		t.Error("Target group ARN should be stored")
 	}
 }
+
+// TestIsLocalImage tests the isLocalImage function for classifying image references.
+func TestIsLocalImage(t *testing.T) {
+	tests := []struct {
+		name     string
+		imageRef string
+		want     bool
+	}{
+		// Local images (should return true).
+		{
+			name:     "simple name",
+			imageRef: "myapp",
+			want:     true,
+		},
+		{
+			name:     "name with tag",
+			imageRef: "myapp:latest",
+			want:     true,
+		},
+		{
+			name:     "name with version tag",
+			imageRef: "myapp:v1.0.0",
+			want:     true,
+		},
+		{
+			name:     "library image without registry",
+			imageRef: "nginx:latest",
+			want:     true,
+		},
+		{
+			name:     "library path",
+			imageRef: "library/nginx:latest",
+			want:     true,
+		},
+		{
+			name:     "user prefix without registry",
+			imageRef: "username/myapp:latest",
+			want:     true,
+		},
+
+		// ECR images (should return false).
+		{
+			name:     "ECR URI",
+			imageRef: "123456789012.dkr.ecr.us-east-1.amazonaws.com/myrepo:latest",
+			want:     false,
+		},
+		{
+			name:     "ECR URI different region",
+			imageRef: "123456789012.dkr.ecr.eu-west-1.amazonaws.com/myrepo:v1",
+			want:     false,
+		},
+
+		// Public registries (should return false).
+		{
+			name:     "docker.io",
+			imageRef: "docker.io/library/nginx:latest",
+			want:     false,
+		},
+		{
+			name:     "index.docker.io",
+			imageRef: "index.docker.io/nginx:alpine",
+			want:     false,
+		},
+		{
+			name:     "ghcr.io",
+			imageRef: "ghcr.io/owner/repo:tag",
+			want:     false,
+		},
+		{
+			name:     "public.ecr.aws",
+			imageRef: "public.ecr.aws/nginx/nginx:latest",
+			want:     false,
+		},
+		{
+			name:     "gcr.io",
+			imageRef: "gcr.io/project/image:tag",
+			want:     false,
+		},
+		{
+			name:     "quay.io",
+			imageRef: "quay.io/prometheus/prometheus:latest",
+			want:     false,
+		},
+		{
+			name:     "mcr.microsoft.com",
+			imageRef: "mcr.microsoft.com/dotnet/aspnet:6.0",
+			want:     false,
+		},
+
+		// Custom registry with domain (should return false).
+		{
+			name:     "custom registry with domain",
+			imageRef: "myregistry.example.com/myapp:latest",
+			want:     false,
+		},
+		{
+			name:     "localhost registry",
+			imageRef: "localhost:5000/myapp:latest",
+			want:     false,
+		},
+		{
+			name:     "IP-based registry",
+			imageRef: "192.168.1.100:5000/myapp:latest",
+			want:     false,
+		},
+
+		// Edge cases.
+		{
+			name:     "empty string",
+			imageRef: "",
+			want:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isLocalImage(tt.imageRef)
+			if got != tt.want {
+				t.Errorf("isLocalImage(%q) = %v, want %v", tt.imageRef, got, tt.want)
+			}
+		})
+	}
+}

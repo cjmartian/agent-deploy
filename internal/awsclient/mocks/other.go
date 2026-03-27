@@ -72,11 +72,13 @@ func (m *IAMMock) DeleteRole(ctx context.Context, params *iam.DeleteRoleInput, o
 
 // ECRMock is a mock implementation of awsclient.ECRAPI for testing.
 type ECRMock struct {
-	CreateRepositoryFunc func(ctx context.Context, params *ecr.CreateRepositoryInput, optFns ...func(*ecr.Options)) (*ecr.CreateRepositoryOutput, error)
-	DeleteRepositoryFunc func(ctx context.Context, params *ecr.DeleteRepositoryInput, optFns ...func(*ecr.Options)) (*ecr.DeleteRepositoryOutput, error)
+	CreateRepositoryFunc      func(ctx context.Context, params *ecr.CreateRepositoryInput, optFns ...func(*ecr.Options)) (*ecr.CreateRepositoryOutput, error)
+	DeleteRepositoryFunc      func(ctx context.Context, params *ecr.DeleteRepositoryInput, optFns ...func(*ecr.Options)) (*ecr.DeleteRepositoryOutput, error)
+	GetAuthorizationTokenFunc func(ctx context.Context, params *ecr.GetAuthorizationTokenInput, optFns ...func(*ecr.Options)) (*ecr.GetAuthorizationTokenOutput, error)
 
-	CreateRepositoryCalls int
-	DeleteRepositoryCalls int
+	CreateRepositoryCalls      int
+	DeleteRepositoryCalls      int
+	GetAuthorizationTokenCalls int
 }
 
 func (m *ECRMock) CreateRepository(ctx context.Context, params *ecr.CreateRepositoryInput, optFns ...func(*ecr.Options)) (*ecr.CreateRepositoryOutput, error) {
@@ -101,6 +103,22 @@ func (m *ECRMock) DeleteRepository(ctx context.Context, params *ecr.DeleteReposi
 	return &ecr.DeleteRepositoryOutput{
 		Repository: &ecrtypes.Repository{
 			RepositoryName: params.RepositoryName,
+		},
+	}, nil
+}
+
+func (m *ECRMock) GetAuthorizationToken(ctx context.Context, params *ecr.GetAuthorizationTokenInput, optFns ...func(*ecr.Options)) (*ecr.GetAuthorizationTokenOutput, error) {
+	m.GetAuthorizationTokenCalls++
+	if m.GetAuthorizationTokenFunc != nil {
+		return m.GetAuthorizationTokenFunc(ctx, params, optFns...)
+	}
+	// Return a default mock authorization token (base64 encoded "AWS:password").
+	return &ecr.GetAuthorizationTokenOutput{
+		AuthorizationData: []ecrtypes.AuthorizationData{
+			{
+				AuthorizationToken: aws.String("QVdTOnBhc3N3b3Jk"), // base64("AWS:password")
+				ProxyEndpoint:      aws.String("https://123456789012.dkr.ecr.us-east-1.amazonaws.com"),
+			},
 		},
 	}, nil
 }

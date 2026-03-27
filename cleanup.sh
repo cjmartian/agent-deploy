@@ -1,8 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-export AWS_ACCESS_KEY_ID=AKIA26E46E5H2EBZI34O
-export AWS_SECRET_ACCESS_KEY=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
+export AWS_ACCESS_KEY_ID=
+export AWS_SECRET_ACCESS_KEY=
 export AWS_REGION=us-east-1
 
 MODE="${1:-discover}"

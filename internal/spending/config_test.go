@@ -47,6 +47,10 @@ func TestLoadLimits_EnvVars(t *testing.T) {
 
 // TestLoadLimits_InvalidEnvVarFallsBackToDefault tests that invalid env vars are ignored.
 func TestLoadLimits_InvalidEnvVarFallsBackToDefault(t *testing.T) {
+	// Use temp HOME to avoid picking up real config file.
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
 	t.Setenv("AGENT_DEPLOY_MONTHLY_BUDGET", "not-a-number")
 	t.Setenv("AGENT_DEPLOY_PER_DEPLOYMENT_BUDGET", "invalid")
 	t.Setenv("AGENT_DEPLOY_ALERT_THRESHOLD", "abc")
@@ -70,6 +74,10 @@ func TestLoadLimits_InvalidEnvVarFallsBackToDefault(t *testing.T) {
 
 // TestLoadLimits_NoEnvVars tests that defaults are used when no env vars are set.
 func TestLoadLimits_NoEnvVars(t *testing.T) {
+	// Use temp HOME to avoid picking up real config file.
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
 	// Ensure no env vars are set by using t.Setenv with empty string.
 	// This is preferred over os.Unsetenv which is harder to track.
 	t.Setenv("AGENT_DEPLOY_MONTHLY_BUDGET", "")
