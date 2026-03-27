@@ -17,7 +17,6 @@
 ### HIGH PRIORITY — Spec Compliance
 | ID | Issue | Impact |
 |----|-------|--------|
-| **P1.19-P1.27** | Input validations MISSING (7 items) | Invalid configs fail at AWS API with cryptic errors instead of helpful messages |
 | **P1.21** | Per-request spending override MISSING | Users cannot set deployment-specific budget caps |
 | **P1.22** | Auto-scaling cost range MISSING | Cannot predict worst-case costs when auto-scaling configured |
 
@@ -130,7 +129,7 @@
 | Structured logging | ✅ **Done** | All log.Printf migrated to slog (30 in aws.go, 1 in provider.go, ~4 in costs.go) |
 | AWS SDK Mocking Infrastructure | ✅ **Complete** | Mock interfaces (EC2API, ECSAPI, ELBV2API, IAMAPI, ECRAPI, CloudWatchLogsAPI, AutoScalingAPI, ACMAPI), AWSClients struct, compile-time verification |
 | Makefile | ✅ **Complete** | all, test-race, coverage, coverage-html, run, install, help targets added |
-| **Input validation** | ⚠️ **MISSING** | 7 validation functions not implemented (P1.19-P1.20, P1.23-P1.27, P1.28) |
+| **Input validation** | ✅ **Complete** | ValidateFargateResources, ValidateLogRetention, ValidateContainerPort, ValidateEnvironmentVariables, ValidateHealthCheckPath, ValidateAWSRegion, ValidateDesiredCount implemented in `internal/providers/validation.go` |
 | **Rollback on failure** | ✅ **Done** | rollbackInfra() cleans up partially created resources on provisioning failure |
 | **Error types** | ⚠️ **INCOMPLETE** | Missing ErrCertificateInvalid, ErrInvalidInput (P3.10) |
 
@@ -404,25 +403,23 @@
 - **Location:** `internal/providers/aws.go:226`
 - **Resolution:** Error wrapping was fixed as part of the P0.1 implementation when ErrPlanNotApproved was wired in. Verified that `%w` is used consistently for error wrapping throughout the codebase.
 
-### P1.19 Fargate CPU/Memory Validation MISSING ❌
+### P1.19 Fargate CPU/Memory Validation ✅ COMPLETED
 
-- [ ] No ValidateFargateResources(cpu, memory string) function
-- [ ] Invalid combinations passed directly to AWS API
-- [ ] Users get cryptic AWS SDK errors instead of helpful messages
-- **Status:** NOT IMPLEMENTED
+- [x] Implemented `ValidateFargateResources(cpu, memory string) error`
+- [x] Validates against valid Fargate CPU/memory combinations per AWS docs
+- [x] Clear error messages listing valid combinations
+- **Status:** IMPLEMENTED
 - **Spec:** ralph/specs/deploy-configuration.md
-- **Impact:** Poor user experience; invalid configs fail at AWS
-- **Location:** `internal/providers/aws.go`
+- **Location:** `internal/providers/validation.go`
 
-### P1.20 Log Retention Validation MISSING ❌
+### P1.20 Log Retention Validation ✅ COMPLETED
 
-- [ ] No ValidateLogRetention(days int) function
-- [ ] Only default handling (if <=0, use 7)
-- [ ] Invalid values fail at CloudWatch API
-- **Status:** NOT IMPLEMENTED
+- [x] Implemented `ValidateLogRetention(days int) error`
+- [x] Validates against CloudWatch-accepted retention values
+- [x] Wired into createInfra
+- **Status:** IMPLEMENTED
 - **Spec:** ralph/specs/deploy-configuration.md
-- **Impact:** Poor user experience; invalid retention fails at AWS
-- **Location:** `internal/providers/aws.go`
+- **Location:** `internal/providers/validation.go`
 
 ### P1.21 Per-Request Spending Override MISSING ❌
 
@@ -444,49 +441,47 @@
 - **Impact:** Users cannot predict worst-case costs during planning
 - **Location:** `internal/providers/aws.go`
 
-### P1.23 Container Port Validation MISSING ❌
+### P1.23 Container Port Validation ✅ COMPLETED
 
-- [ ] Container port not validated against valid range (1-65535)
-- [ ] Invalid ports passed directly to AWS API
-- [ ] Users get cryptic AWS SDK errors instead of helpful messages
-- **Status:** NOT IMPLEMENTED
+- [x] Implemented `ValidateContainerPort(port int) error`
+- [x] Validates port range 1-65535
+- [x] Wired into deploy
+- **Status:** IMPLEMENTED
 - **Spec:** ralph/specs/deploy-configuration.md
-- **Impact:** Poor user experience; invalid configs fail at AWS
-- **Location:** `internal/providers/aws.go`
+- **Location:** `internal/providers/validation.go`
 
-### P1.24 Environment Variables Validation MISSING ❌
+### P1.24 Environment Variables Validation ✅ COMPLETED
 
-- [ ] Environment variable names not validated (AWS requires alphanumeric + underscore)
-- [ ] Empty values not validated
-- [ ] Reserved AWS variable names not blocked
-- **Status:** NOT IMPLEMENTED
-- **Impact:** Invalid env vars fail at task registration
-- **Location:** `internal/providers/aws.go`
+- [x] Implemented `ValidateEnvironmentVariables(env map[string]string) error`
+- [x] Validates name format (alphanumeric + underscore)
+- [x] Blocks reserved AWS_, ECS_, FARGATE_ prefixes
+- [x] Wired into deploy
+- **Status:** IMPLEMENTED
+- **Location:** `internal/providers/validation.go`
 
-### P1.25 Health Check Path Validation MISSING ❌
+### P1.25 Health Check Path Validation ✅ COMPLETED
 
-- [ ] Health check path not validated (must start with /)
-- [ ] Invalid paths passed directly to ALB target group
-- **Status:** NOT IMPLEMENTED
-- **Impact:** Invalid health check paths fail at AWS
-- **Location:** `internal/providers/aws.go`
+- [x] Implemented `ValidateHealthCheckPath(path string) error`
+- [x] Validates path starts with /
+- [x] Wired into deploy
+- **Status:** IMPLEMENTED
+- **Location:** `internal/providers/validation.go`
 
-### P1.26 AWS Region Validation MISSING ❌
+### P1.26 AWS Region Validation ✅ COMPLETED
 
-- [ ] Region not validated against valid AWS regions
-- [ ] Invalid regions cause silent failures or cryptic errors
-- **Status:** NOT IMPLEMENTED
-- **Impact:** Invalid regions cause confusing errors
-- **Location:** `internal/providers/aws.go`
+- [x] Implemented `ValidateAWSRegion(region string) error`
+- [x] Validates against list of valid AWS regions
+- [x] Wired into planInfra
+- **Status:** IMPLEMENTED
+- **Location:** `internal/providers/validation.go`
 
-### P1.27 Desired Count Upper Limit MISSING ❌
+### P1.27 Desired Count Upper Limit ✅ COMPLETED
 
-- [ ] DesiredCount has no upper limit validation
-- [ ] Could accidentally spin up thousands of tasks
-- [ ] Should have reasonable max (e.g., 100) or require confirmation
-- **Status:** NOT IMPLEMENTED
-- **Impact:** Potential runaway cost if large count specified
-- **Location:** `internal/providers/aws.go`
+- [x] Implemented `ValidateDesiredCount(count int) error`
+- [x] Enforces max of 100 to prevent runaway costs
+- [x] Wired into deploy
+- **Status:** IMPLEMENTED
+- **Location:** `internal/providers/validation.go`
 
 ### P1.28 Container Health Check MISSING ❌
 
@@ -944,24 +939,24 @@ go tool cover -html=coverage.out          # View coverage report
 
 | Validation | Location | Status |
 |------------|----------|--------|
-| Fargate CPU/Memory compatibility | `aws.go` | ❌ NOT VALIDATED (P1.19) |
-| Log retention (CloudWatch allowed values) | `aws.go` | ❌ NOT VALIDATED (P1.20) |
-| Container port (1-65535) | `aws.go` | ❌ NOT VALIDATED (P1.23) |
-| Environment variable names | `aws.go` | ❌ NOT VALIDATED (P1.24) |
-| Health check path (must start with /) | `aws.go` | ❌ NOT VALIDATED (P1.25) |
-| AWS region | `aws.go` | ❌ NOT VALIDATED (P1.26) |
-| Desired count upper limit | `aws.go` | ❌ NOT VALIDATED (P1.27) |
+| Fargate CPU/Memory compatibility | `validation.go` | ✅ VALIDATED (P1.19) |
+| Log retention (CloudWatch allowed values) | `validation.go` | ✅ VALIDATED (P1.20) |
+| Container port (1-65535) | `validation.go` | ✅ VALIDATED (P1.23) |
+| Environment variable names | `validation.go` | ✅ VALIDATED (P1.24) |
+| Health check path (must start with /) | `validation.go` | ✅ VALIDATED (P1.25) |
+| AWS region | `validation.go` | ✅ VALIDATED (P1.26) |
+| Desired count upper limit | `validation.go` | ✅ VALIDATED (P1.27) |
 
 ### Remaining Work by Priority
 
 | Priority | Count | Items |
 |----------|-------|-------|
 | **P0 Critical** | 0 | *(All P0 issues resolved — P0.6 ECR Image Push completed)* |
-| **P1 Spec Gaps** | 11 | P1.9 (VPC CIDR hardcoded), P1.19 (Fargate validation), P1.20 (Log retention validation), P1.21 (Per-request spending override), P1.22 (Auto-scaling cost range), P1.23 (Container port validation), P1.24 (Env vars validation), P1.25 (Health check path validation), P1.26 (Region validation), P1.27 (Desired count limit), P1.28 (Container health check) |
+| **P1 Spec Gaps** | 4 | P1.9 (VPC CIDR hardcoded), P1.21 (Per-request spending override), P1.22 (Auto-scaling cost range), P1.28 (Container health check) |
 | **P2 Test Gaps** | 3 | P2.5 (AWS error scenarios), P2.9 (main.go 0% confirmed), P2.10 (concurrent access untested) |
 | **P3 Quality** | 6 | P3.9 (silent error suppression at store.go:86,123,220), P3.10 (missing error types), P3.11 (non-atomic updates), P3.12 (missing state transitions), P3.13 (shallow reconciliation - 3/19 types), P3.14 (startup error handling) |
 | **P5 Stretch** | 3 | CloudFormation, multi-cloud, secrets |
-| **Total** | **23** | |
+| **Total** | **16** | |
 
 ---
 
@@ -978,11 +973,11 @@ go tool cover -html=coverage.out          # View coverage report
 | **aws-provider.md** | Plan approval before provisioning | ✅ IMPLEMENTED — explicit approval workflow |
 | **aws-provider.md** | Rollback on provisioning failure | ✅ IMPLEMENTED — rollbackInfra() cleans up partial resources |
 | **ecr-image-push.md** | Push local images to ECR | ✅ **IMPLEMENTED** — P0.6 completed (isLocalImage detection, pushImageToECR with Docker SDK) |
-| **deploy-configuration.md** | Fargate CPU/memory validation | ❌ NOT IMPLEMENTED — P1.19 |
-| **deploy-configuration.md** | Log retention validation | ❌ NOT IMPLEMENTED — P1.20 |
-| **deploy-configuration.md** | Container port validation (1-65535) | ❌ NOT IMPLEMENTED — P1.23 |
-| **deploy-configuration.md** | Environment variables validation | ❌ NOT IMPLEMENTED — P1.24 |
-| **deploy-configuration.md** | Health check path validation (must start with /) | ❌ NOT IMPLEMENTED — P1.25 |
+| **deploy-configuration.md** | Fargate CPU/memory validation | ✅ IMPLEMENTED — P1.19 |
+| **deploy-configuration.md** | Log retention validation | ✅ IMPLEMENTED — P1.20 |
+| **deploy-configuration.md** | Container port validation (1-65535) | ✅ IMPLEMENTED — P1.23 |
+| **deploy-configuration.md** | Environment variables validation | ✅ IMPLEMENTED — P1.24 |
+| **deploy-configuration.md** | Health check path validation (must start with /) | ✅ IMPLEMENTED — P1.25 |
 | **deployment-state.md** | Plan, Infrastructure, Deployment types | ✅ Implemented |
 | **deployment-state.md** | File-backed JSON at ~/.agent-deploy/state/ | ✅ Implemented |
 | **deployment-state.md** | 24-hour plan expiration, hourly cleanup | ✅ Implemented |

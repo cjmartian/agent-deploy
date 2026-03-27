@@ -2058,3 +2058,257 @@ func TestIsLocalImage(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateFargateResources tests the Fargate CPU/memory validation.
+func TestValidateFargateResources(t *testing.T) {
+	tests := []struct {
+		name    string
+		cpu     string
+		memory  string
+		wantErr bool
+	}{
+		// Valid combinations.
+		{"256_512", "256", "512", false},
+		{"256_1024", "256", "1024", false},
+		{"256_2048", "256", "2048", false},
+		{"512_1024", "512", "1024", false},
+		{"512_4096", "512", "4096", false},
+		{"1024_2048", "1024", "2048", false},
+		{"1024_8192", "1024", "8192", false},
+		{"2048_4096", "2048", "4096", false},
+		{"2048_16384", "2048", "16384", false},
+		{"4096_8192", "4096", "8192", false},
+		{"4096_30720", "4096", "30720", false},
+
+		// Invalid CPU values.
+		{"invalid_cpu", "100", "512", true},
+		{"invalid_cpu_string", "abc", "512", true},
+
+		// Invalid memory for CPU.
+		{"256_256_invalid", "256", "256", true},
+		{"256_4096_invalid", "256", "4096", true},
+		{"512_512_invalid", "512", "512", true},
+		{"1024_512_invalid", "1024", "512", true},
+		{"4096_4096_invalid", "4096", "4096", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateFargateResources(tt.cpu, tt.memory)
+			if tt.wantErr && err == nil {
+				t.Errorf("ValidateFargateResources(%q, %q) expected error, got nil", tt.cpu, tt.memory)
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("ValidateFargateResources(%q, %q) unexpected error: %v", tt.cpu, tt.memory, err)
+			}
+		})
+	}
+}
+
+// TestValidateLogRetention tests CloudWatch log retention validation.
+func TestValidateLogRetention(t *testing.T) {
+	validDays := []int{1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653}
+	for _, days := range validDays {
+		t.Run(fmt.Sprintf("valid_%d", days), func(t *testing.T) {
+			if err := ValidateLogRetention(days); err != nil {
+				t.Errorf("ValidateLogRetention(%d) unexpected error: %v", days, err)
+			}
+		})
+	}
+
+	invalidDays := []int{0, 2, 4, 6, 8, 10, 15, 31, 100, 366, 999, 5000}
+	for _, days := range invalidDays {
+		t.Run(fmt.Sprintf("invalid_%d", days), func(t *testing.T) {
+			if err := ValidateLogRetention(days); err == nil {
+				t.Errorf("ValidateLogRetention(%d) expected error, got nil", days)
+			}
+		})
+	}
+}
+
+// TestValidateContainerPort tests container port validation.
+func TestValidateContainerPort(t *testing.T) {
+	tests := []struct {
+		port    int
+		wantErr bool
+	}{
+		{1, false},
+		{80, false},
+		{443, false},
+		{3000, false},
+		{8080, false},
+		{65535, false},
+		{0, true},
+		{-1, true},
+		{65536, true},
+		{100000, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("port_%d", tt.port), func(t *testing.T) {
+			err := ValidateContainerPort(tt.port)
+			if tt.wantErr && err == nil {
+				t.Errorf("ValidateContainerPort(%d) expected error, got nil", tt.port)
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("ValidateContainerPort(%d) unexpected error: %v", tt.port, err)
+			}
+		})
+	}
+}
+
+// TestValidateHealthCheckPath tests health check path validation.
+func TestValidateHealthCheckPath(t *testing.T) {
+	tests := []struct {
+		path    string
+		wantErr bool
+	}{
+		{"", false},       // Empty uses default
+		{"/", false},
+		{"/health", false},
+		{"/healthz", false},
+		{"/api/health", false},
+		{"/api/v1/healthcheck", false},
+		{"health", true},  // Must start with /
+		{"api/health", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			err := ValidateHealthCheckPath(tt.path)
+			if tt.wantErr && err == nil {
+				t.Errorf("ValidateHealthCheckPath(%q) expected error, got nil", tt.path)
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("ValidateHealthCheckPath(%q) unexpected error: %v", tt.path, err)
+			}
+		})
+	}
+}
+
+// TestValidateAWSRegion tests AWS region validation.
+func TestValidateAWSRegion(t *testing.T) {
+	validRegions := []string{
+		"us-east-1", "us-east-2", "us-west-1", "us-west-2",
+		"eu-west-1", "eu-west-2", "eu-central-1",
+		"ap-northeast-1", "ap-southeast-1",
+	}
+	for _, region := range validRegions {
+		t.Run("valid_"+region, func(t *testing.T) {
+			if err := ValidateAWSRegion(region); err != nil {
+				t.Errorf("ValidateAWSRegion(%q) unexpected error: %v", region, err)
+			}
+		})
+	}
+
+	invalidRegions := []string{"", "invalid", "us-east", "eu-1", "test-region"}
+	for _, region := range invalidRegions {
+		t.Run("invalid_"+region, func(t *testing.T) {
+			if err := ValidateAWSRegion(region); err == nil {
+				t.Errorf("ValidateAWSRegion(%q) expected error, got nil", region)
+			}
+		})
+	}
+}
+
+// TestValidateDesiredCount tests desired task count validation.
+func TestValidateDesiredCount(t *testing.T) {
+	tests := []struct {
+		count   int
+		wantErr bool
+	}{
+		{1, false},
+		{5, false},
+		{10, false},
+		{50, false},
+		{100, false},
+		{0, true},
+		{-1, true},
+		{101, true},
+		{1000, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("count_%d", tt.count), func(t *testing.T) {
+			err := ValidateDesiredCount(tt.count)
+			if tt.wantErr && err == nil {
+				t.Errorf("ValidateDesiredCount(%d) expected error, got nil", tt.count)
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("ValidateDesiredCount(%d) unexpected error: %v", tt.count, err)
+			}
+		})
+	}
+}
+
+// TestValidateEnvironmentVariables tests environment variable validation.
+func TestValidateEnvironmentVariables(t *testing.T) {
+	tests := []struct {
+		name    string
+		env     map[string]string
+		wantErr bool
+	}{
+		{
+			name:    "empty",
+			env:     map[string]string{},
+			wantErr: false,
+		},
+		{
+			name:    "valid_simple",
+			env:     map[string]string{"MY_VAR": "value"},
+			wantErr: false,
+		},
+		{
+			name:    "valid_multiple",
+			env:     map[string]string{"VAR1": "a", "VAR_2": "b", "_VAR3": "c"},
+			wantErr: false,
+		},
+		{
+			name:    "valid_underscore_prefix",
+			env:     map[string]string{"_MY_VAR": "value"},
+			wantErr: false,
+		},
+		{
+			name:    "invalid_starts_with_digit",
+			env:     map[string]string{"1VAR": "value"},
+			wantErr: true,
+		},
+		{
+			name:    "invalid_has_dash",
+			env:     map[string]string{"MY-VAR": "value"},
+			wantErr: true,
+		},
+		{
+			name:    "invalid_has_space",
+			env:     map[string]string{"MY VAR": "value"},
+			wantErr: true,
+		},
+		{
+			name:    "reserved_AWS_prefix",
+			env:     map[string]string{"AWS_SECRET_KEY": "value"},
+			wantErr: true,
+		},
+		{
+			name:    "reserved_ECS_prefix",
+			env:     map[string]string{"ECS_TASK_ID": "value"},
+			wantErr: true,
+		},
+		{
+			name:    "reserved_FARGATE_prefix",
+			env:     map[string]string{"FARGATE_SOMETHING": "value"},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateEnvironmentVariables(tt.env)
+			if tt.wantErr && err == nil {
+				t.Errorf("ValidateEnvironmentVariables() expected error, got nil")
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("ValidateEnvironmentVariables() unexpected error: %v", err)
+			}
+		})
+	}
+}

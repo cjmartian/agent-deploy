@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -207,6 +208,129 @@ type approvePlanOutput struct {
 	Message string `json:"message"`
 }
 
+// --- input validation functions (per spec ralph/specs/deploy-configuration.md) ---
+
+// validFargateConfigs defines the valid CPU/memory combinations for Fargate.
+// Per AWS documentation: https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-cpu-memory-error.html
+var validFargateConfigs = map[string][]string{
+	"256":  {"512", "1024", "2048"},
+	"512":  {"1024", "2048", "3072", "4096"},
+	"1024": {"2048", "3072", "4096", "5120", "6144", "7168", "8192"},
+	"2048": {"4096", "5120", "6144", "7168", "8192", "9216", "10240", "11264", "12288", "13312", "14336", "15360", "16384"},
+	"4096": {"8192", "9216", "10240", "11264", "12288", "13312", "14336", "15360", "16384", "17408", "18432", "19456", "20480", "21504", "22528", "23552", "24576", "25600", "26624", "27648", "28672", "29696", "30720"},
+}
+
+// ValidateFargateResources checks that the CPU/memory combination is valid for Fargate.
+func ValidateFargateResources(cpu, memory string) error {
+	validMemory, cpuValid := validFargateConfigs[cpu]
+	if !cpuValid {
+		return fmt.Errorf("invalid Fargate CPU value: %q. Valid values: 256, 512, 1024, 2048, 4096", cpu)
+	}
+
+	for _, vm := range validMemory {
+		if vm == memory {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("invalid Fargate CPU/memory combination: CPU=%s, Memory=%s. Valid memory values for CPU %s: %v",
+		cpu, memory, cpu, validMemory)
+}
+
+// validLogRetentionDays contains the CloudWatch-accepted retention values.
+var validLogRetentionDays = map[int]bool{
+	1: true, 3: true, 5: true, 7: true, 14: true, 30: true,
+	60: true, 90: true, 120: true, 150: true, 180: true, 365: true,
+	400: true, 545: true, 731: true, 1096: true, 1827: true,
+	2192: true, 2557: true, 2922: true, 3288: true, 3653: true,
+}
+
+// ValidateLogRetention checks that the log retention days value is accepted by CloudWatch.
+func ValidateLogRetention(days int) error {
+	if validLogRetentionDays[days] {
+		return nil
+	}
+	return fmt.Errorf("invalid log_retention_days: %d. Valid values: 1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653", days)
+}
+
+// ValidateContainerPort checks that the port is in valid range (1-65535).
+func ValidateContainerPort(port int) error {
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("invalid container_port: %d. Must be between 1 and 65535", port)
+	}
+	return nil
+}
+
+// ValidateHealthCheckPath checks that the health check path starts with /.
+func ValidateHealthCheckPath(path string) error {
+	if path == "" {
+		return nil // Empty path uses default "/"
+	}
+	if !strings.HasPrefix(path, "/") {
+		return fmt.Errorf("invalid health_check_path: %q. Must start with /", path)
+	}
+	return nil
+}
+
+// validAWSRegions contains valid AWS region codes.
+var validAWSRegions = map[string]bool{
+	"us-east-1": true, "us-east-2": true, "us-west-1": true, "us-west-2": true,
+	"eu-west-1": true, "eu-west-2": true, "eu-west-3": true, "eu-central-1": true,
+	"eu-north-1": true, "eu-south-1": true,
+	"ap-northeast-1": true, "ap-northeast-2": true, "ap-northeast-3": true,
+	"ap-southeast-1": true, "ap-southeast-2": true, "ap-south-1": true,
+	"sa-east-1": true,
+	"ca-central-1": true,
+	"me-south-1": true,
+	"af-south-1": true,
+}
+
+// ValidateAWSRegion checks that the region is a valid AWS region code.
+func ValidateAWSRegion(region string) error {
+	if validAWSRegions[region] {
+		return nil
+	}
+	return fmt.Errorf("invalid AWS region: %q. Use a valid region code like 'us-east-1', 'eu-west-1', etc.", region)
+}
+
+// ValidateDesiredCount checks that the desired task count is reasonable.
+// Upper limit prevents accidental runaway costs.
+func ValidateDesiredCount(count int) error {
+	if count < 1 {
+		return fmt.Errorf("invalid desired_count: %d. Must be at least 1", count)
+	}
+	if count > 100 {
+		return fmt.Errorf("desired_count %d exceeds maximum of 100. For higher counts, use auto-scaling with max_count instead", count)
+	}
+	return nil
+}
+
+// envVarNameRegex matches valid environment variable names.
+// AWS ECS requires: letters, digits, underscores; must start with letter or underscore.
+var envVarNameRegex = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+
+// reservedEnvVars are AWS-reserved environment variable prefixes that users shouldn't set.
+var reservedEnvVars = []string{
+	"AWS_", "ECS_", "FARGATE_",
+}
+
+// ValidateEnvironmentVariables checks that environment variable names are valid.
+func ValidateEnvironmentVariables(env map[string]string) error {
+	for name := range env {
+		// Check format.
+		if !envVarNameRegex.MatchString(name) {
+			return fmt.Errorf("invalid environment variable name: %q. Must contain only letters, digits, and underscores, and start with a letter or underscore", name)
+		}
+		// Check for reserved prefixes.
+		for _, prefix := range reservedEnvVars {
+			if strings.HasPrefix(name, prefix) {
+				return fmt.Errorf("environment variable %q uses reserved prefix %q. AWS ECS reserves variables starting with AWS_, ECS_, and FARGATE_", name, prefix)
+			}
+		}
+	}
+	return nil
+}
+
 // --- tool handlers ---
 
 // planInfra analyzes requirements and creates an infrastructure plan with cost estimate.
@@ -217,6 +341,10 @@ func (p *AWSProvider) planInfra(ctx context.Context, _ *mcp.CallToolRequest, in 
 	}
 	if strings.TrimSpace(in.Region) == "" {
 		return nil, planInfraOutput{}, fmt.Errorf("region is required and cannot be empty")
+	}
+	// Validate AWS region (P1.26).
+	if err := ValidateAWSRegion(in.Region); err != nil {
+		return nil, planInfraOutput{}, err
 	}
 	if in.ExpectedUsers <= 0 {
 		return nil, planInfraOutput{}, fmt.Errorf("expected_users must be a positive integer, got %d", in.ExpectedUsers)
@@ -389,6 +517,13 @@ func (p *AWSProvider) approvePlan(_ context.Context, _ *mcp.CallToolRequest, in 
 
 // createInfra provisions AWS infrastructure according to an approved plan.
 func (p *AWSProvider) createInfra(ctx context.Context, _ *mcp.CallToolRequest, in createInfraInput) (*mcp.CallToolResult, createInfraOutput, error) {
+	// Validate log retention if provided (P1.20).
+	if in.LogRetentionDays != 0 {
+		if err := ValidateLogRetention(in.LogRetentionDays); err != nil {
+			return nil, createInfraOutput{}, err
+		}
+	}
+
 	// Get and validate plan.
 	plan, err := p.store.GetPlan(in.PlanID)
 	if err != nil {
@@ -593,6 +728,33 @@ func (p *AWSProvider) deploy(ctx context.Context, _ *mcp.CallToolRequest, in dep
 	desiredCount := in.DesiredCount
 	if desiredCount == 0 {
 		desiredCount = 1
+	}
+
+	// Apply defaults for CPU/memory.
+	cpu := in.CPU
+	if cpu == "" {
+		cpu = "256"
+	}
+	memory := in.Memory
+	if memory == "" {
+		memory = "512"
+	}
+
+	// Validate all input parameters (per spec ralph/specs/deploy-configuration.md).
+	if err := ValidateContainerPort(containerPort); err != nil {
+		return nil, deployOutput{}, err
+	}
+	if err := ValidateHealthCheckPath(healthCheckPath); err != nil {
+		return nil, deployOutput{}, err
+	}
+	if err := ValidateDesiredCount(desiredCount); err != nil {
+		return nil, deployOutput{}, err
+	}
+	if err := ValidateFargateResources(cpu, memory); err != nil {
+		return nil, deployOutput{}, err
+	}
+	if err := ValidateEnvironmentVariables(in.Environment); err != nil {
+		return nil, deployOutput{}, err
 	}
 
 	// Auto-scaling defaults (per spec ralph/specs/auto-scaling.md).
