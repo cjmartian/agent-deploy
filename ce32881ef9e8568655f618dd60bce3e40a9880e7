@@ -1,0 +1,38 @@
+Input Validation Implementation (P1.19-P1.27):
+
+WHY: Users were getting cryptic AWS SDK errors when providing invalid config
+values (wrong CPU/memory combos, invalid ports, bad regions). Validating
+inputs early provides clear, actionable error messages.
+
+VALIDATIONS IMPLEMENTED:
+
+P1.19 - Fargate CPU/Memory:
+- validFargateConfigs map defines all valid combinations per AWS docs
+- Error message lists valid memory values for the given CPU
+
+P1.20 - Log Retention:
+- validLogRetentionDays map with CloudWatch-accepted values
+- Wired into createInfra before provisioning
+
+P1.23 - Container Port:
+- Range check 1-65535
+- Wired into deploy
+
+P1.24 - Environment Variables:
+- Regex: ^[a-zA-Z_][a-zA-Z0-9_]*$
+- Blocks AWS_, ECS_, FARGATE_ prefixes (reserved)
+- Wired into deploy
+
+P1.25 - Health Check Path:
+- Must start with / (or empty for default)
+- Wired into deploy
+
+P1.26 - AWS Region:
+- validAWSRegions map with major regions
+- Wired into planInfra
+
+P1.27 - Desired Count:
+- Range 1-100 (prevents runaway costs)
+- Higher counts require auto-scaling
+
+TESTING: 100+ test cases covering edge cases for all validations
