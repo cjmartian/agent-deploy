@@ -3,8 +3,10 @@ package spending
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"sync"
 	"time"
 
@@ -225,6 +227,7 @@ func (p *PricingEstimator) getFargatePricing(ctx context.Context, region string)
 }
 
 // queryFargatePrice queries the AWS Pricing API for Fargate pricing.
+// The AWS Pricing API returns JSON with a complex nested structure that we need to parse.
 func (p *PricingEstimator) queryFargatePrice(ctx context.Context, region, resourceType string) (float64, error) {
 	// Map region to AWS region code format for Pricing API.
 	regionName := getRegionName(region)
@@ -267,9 +270,50 @@ func (p *PricingEstimator) queryFargatePrice(ctx context.Context, region, resour
 		return 0, fmt.Errorf("no pricing data found for %s in %s", resourceType, region)
 	}
 
-	// Parse the price from the response (simplified - actual parsing is complex).
-	// For now, return fallback prices since parsing AWS pricing JSON is non-trivial.
-	return 0, fmt.Errorf("pricing API response parsing not implemented")
+	// Parse the price from the AWS Pricing API response.
+	// The response is a JSON string with nested structures for terms and price dimensions.
+	price, err := parsePricingResponse(resp.PriceList[0])
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse pricing response for %s: %w", resourceType, err)
+	}
+
+	return price, nil
+}
+
+// pricingResponse represents the AWS Pricing API response structure.
+// The actual response is complex; this captures the fields we need.
+type pricingResponse struct {
+	Terms struct {
+		OnDemand map[string]struct {
+			PriceDimensions map[string]struct {
+				PricePerUnit map[string]string `json:"pricePerUnit"`
+			} `json:"priceDimensions"`
+		} `json:"OnDemand"`
+	} `json:"terms"`
+}
+
+// parsePricingResponse extracts the USD price from an AWS Pricing API response.
+func parsePricingResponse(priceListItem string) (float64, error) {
+	var resp pricingResponse
+	if err := json.Unmarshal([]byte(priceListItem), &resp); err != nil {
+		return 0, fmt.Errorf("unmarshal pricing response: %w", err)
+	}
+
+	// Navigate the nested structure to find the USD price.
+	// Structure: terms.OnDemand.<skuTermCode>.priceDimensions.<rateCode>.pricePerUnit.USD
+	for _, termData := range resp.Terms.OnDemand {
+		for _, dimension := range termData.PriceDimensions {
+			if usdPrice, ok := dimension.PricePerUnit["USD"]; ok {
+				price, err := strconv.ParseFloat(usdPrice, 64)
+				if err != nil {
+					return 0, fmt.Errorf("parse USD price %q: %w", usdPrice, err)
+				}
+				return price, nil
+			}
+		}
+	}
+
+	return 0, fmt.Errorf("no USD price found in pricing response")
 }
 
 // getFargateFallbackPrices returns hardcoded Fargate prices for a region.

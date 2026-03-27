@@ -17,7 +17,6 @@
 ### HIGH PRIORITY — Spec Compliance
 | ID | Issue | Impact |
 |----|-------|--------|
-| **P1.1** | Pricing API parsing STUBBED | Cost estimates always use outdated hardcoded fallback prices |
 | **P1.19-P1.27** | Input validations MISSING (7 items) | Invalid configs fail at AWS API with cryptic errors instead of helpful messages |
 | **P1.21** | Per-request spending override MISSING | Users cannot set deployment-specific budget caps |
 | **P1.22** | Auto-scaling cost range MISSING | Cannot predict worst-case costs when auto-scaling configured |
@@ -115,7 +114,7 @@
 | AWS 6 tools | ✅ **Complete** | All features work including ECR image push (P0.6 completed) |
 | AWS `aws:deployments` resource | ✅ **Implemented** | `internal/providers/aws.go` |
 | AWS `aws_deploy_plan` prompt | ✅ **Implemented** | `internal/providers/aws.go` |
-| Cost estimation (planInfra) | ⚠️ **STUBBED** | Architecture done but queryFargatePrice() at line 272 returns "not implemented" — ALWAYS uses hardcoded fallback (P1.1) |
+| Cost estimation (planInfra) | ✅ **Working** | AWS Pricing API parsing implemented — `parsePricingResponse()` extracts prices from API response (P1.1 completed) |
 | Current spend calculation | ✅ **IMPLEMENTED** | CostTracker.GetTotalMonthlySpend() from Cost Explorer with fallback |
 | Auto-teardown | ✅ **Working** | TeardownCallback wired to AWS provider's teardown method |
 | CI/CD workflows | ✅ **Working** | `.github/workflows/ci.yml`, `.golangci.yml` |
@@ -212,20 +211,20 @@
 
 ## P1 — Spec Compliance Gaps
 
-### P1.1 Pricing API Parsing STUBBED ⚠️ 🔴
+### P1.1 Pricing API Parsing ✅ COMPLETED
 
 - [x] Added `github.com/aws/aws-sdk-go-v2/service/pricing` to `go.mod`
 - [x] Created `internal/spending/pricing.go` with PricingEstimator
 - [x] Architecture for AWS Pricing API with regional pricing lookup
 - [x] Implemented 24-hour cache for pricing data
-- [ ] **queryFargatePrice() at line 272 returns: "pricing API response parsing not implemented"**
-- [ ] **API is called but JSON response parsing intentionally fails**
-- [ ] **ALWAYS falls back to hardcoded regional prices (dated "2026-03" placeholder)**
+- [x] **Implemented `parsePricingResponse()` to parse AWS Pricing API JSON responses**
+- [x] **Navigates nested structure: `terms.OnDemand.<skuTermCode>.priceDimensions.<rateCode>.pricePerUnit.USD`**
+- [x] **Handles all error cases: invalid JSON, missing terms, missing USD price, invalid price format**
+- [x] **`queryFargatePrice()` now returns actual prices from the API (no longer stubbed)**
+- [x] **Added comprehensive tests in `pricing_test.go` (9 test cases for parsePricingResponse)**
 - [ ] ALB, NAT Gateway, CloudWatch Logs use hardcoded values directly (no API calls)
-- **Status:** ARCHITECTURALLY SOUND BUT NON-FUNCTIONAL — always uses outdated hardcoded prices
-- **Impact:** Cost estimates use stale hardcoded prices, not real AWS pricing data; users may get inaccurate budget projections
-- **Location:** `internal/spending/pricing.go:272`, `internal/providers/aws.go`, `go.mod`
-- **Required Work:** Parse AWS Pricing API JSON response structure for Fargate (AmazonECS product)
+- **Status:** ✅ COMPLETED — Fargate pricing now uses real AWS Pricing API data
+- **Location:** `internal/spending/pricing.go`, `internal/spending/pricing_test.go`
 
 ### P1.2 Current Spend Calculation Hardcoded ✅ COMPLETED
 
@@ -928,7 +927,7 @@ go tool cover -html=coverage.out          # View coverage report
 |-------|----------|--------|
 | VPC CIDR: `10.0.0.0/16` | `aws.go:893` | ❌ HARDCODED — No `vpc_cidr` parameter (P1.9) |
 | Subnet CIDRs | `aws.go:962,997` | ❌ HARDCODED — CIDRs calculated from fixed VPC CIDR (P1.9) |
-| Fargate pricing | `pricing.go:272` | ⚠️ **STUBBED** — queryFargatePrice() returns "not implemented", always falls back to hardcoded prices (P1.1) |
+| Fargate pricing | `pricing.go` | ✅ **IMPLEMENTED** — parsePricingResponse() extracts prices from AWS Pricing API (P1.1 completed) |
 | ALB pricing | `pricing.go` | ❌ HARDCODED — No Pricing API call for ALB |
 | NAT Gateway pricing | `pricing.go` | ❌ HARDCODED — No Pricing API call for NAT Gateway |
 | CloudWatch Logs pricing | `pricing.go` | ❌ HARDCODED — No Pricing API call for CloudWatch |
@@ -958,11 +957,11 @@ go tool cover -html=coverage.out          # View coverage report
 | Priority | Count | Items |
 |----------|-------|-------|
 | **P0 Critical** | 0 | *(All P0 issues resolved — P0.6 ECR Image Push completed)* |
-| **P1 Spec Gaps** | 12 | P1.1 (Pricing API stubbed), P1.9 (VPC CIDR hardcoded), P1.19 (Fargate validation), P1.20 (Log retention validation), P1.21 (Per-request spending override), P1.22 (Auto-scaling cost range), P1.23 (Container port validation), P1.24 (Env vars validation), P1.25 (Health check path validation), P1.26 (Region validation), P1.27 (Desired count limit), P1.28 (Container health check) |
+| **P1 Spec Gaps** | 11 | P1.9 (VPC CIDR hardcoded), P1.19 (Fargate validation), P1.20 (Log retention validation), P1.21 (Per-request spending override), P1.22 (Auto-scaling cost range), P1.23 (Container port validation), P1.24 (Env vars validation), P1.25 (Health check path validation), P1.26 (Region validation), P1.27 (Desired count limit), P1.28 (Container health check) |
 | **P2 Test Gaps** | 3 | P2.5 (AWS error scenarios), P2.9 (main.go 0% confirmed), P2.10 (concurrent access untested) |
 | **P3 Quality** | 6 | P3.9 (silent error suppression at store.go:86,123,220), P3.10 (missing error types), P3.11 (non-atomic updates), P3.12 (missing state transitions), P3.13 (shallow reconciliation - 3/19 types), P3.14 (startup error handling) |
 | **P5 Stretch** | 3 | CloudFormation, multi-cloud, secrets |
-| **Total** | **24** | |
+| **Total** | **23** | |
 
 ---
 
@@ -973,7 +972,7 @@ go tool cover -html=coverage.out          # View coverage report
 | **aws-provider.md** | 6 tools | ✅ Implemented (plan, approve, create, deploy, status, teardown) |
 | **aws-provider.md** | 1 resource (aws:deployments) | ✅ Implemented |
 | **aws-provider.md** | 1 prompt (aws_deploy_plan) | ✅ Implemented |
-| **aws-provider.md** | AWS Pricing API for cost estimation | ⚠️ **STUBBED** — queryFargatePrice() returns "not implemented", always uses hardcoded fallback (P1.1) |
+| **aws-provider.md** | AWS Pricing API for cost estimation | ✅ **IMPLEMENTED** — parsePricingResponse() extracts Fargate prices from AWS Pricing API (P1.1 completed) |
 | **aws-provider.md** | Wait for healthy deployment in aws_deploy | ✅ IMPLEMENTED — polls ECS + ALB health checks |
 | **aws-provider.md** | TLS/HTTPS with ACM certificate support | ✅ IMPLEMENTED — TLS 1.2+ policy, HTTP-to-HTTPS redirect |
 | **aws-provider.md** | Plan approval before provisioning | ✅ IMPLEMENTED — explicit approval workflow |

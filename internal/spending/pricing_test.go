@@ -198,3 +198,197 @@ func TestPriceCacheTTL(t *testing.T) {
 		t.Errorf("PriceCacheTTL = %v, want 24 hours", PriceCacheTTL)
 	}
 }
+
+// TestParsePricingResponse tests parsing of AWS Pricing API responses.
+func TestParsePricingResponse(t *testing.T) {
+	tests := []struct {
+		name      string
+		jsonInput string
+		wantPrice float64
+		wantErr   bool
+	}{
+		{
+			name: "valid_fargate_cpu_pricing",
+			jsonInput: `{
+				"terms": {
+					"OnDemand": {
+						"ABCD.1234": {
+							"priceDimensions": {
+								"ABCD.1234.RATE": {
+									"pricePerUnit": {
+										"USD": "0.04048"
+									}
+								}
+							}
+						}
+					}
+				}
+			}`,
+			wantPrice: 0.04048,
+			wantErr:   false,
+		},
+		{
+			name: "valid_fargate_memory_pricing",
+			jsonInput: `{
+				"terms": {
+					"OnDemand": {
+						"EFGH.5678": {
+							"priceDimensions": {
+								"EFGH.5678.RATE": {
+									"pricePerUnit": {
+										"USD": "0.004445"
+									}
+								}
+							}
+						}
+					}
+				}
+			}`,
+			wantPrice: 0.004445,
+			wantErr:   false,
+		},
+		{
+			name: "multiple_terms_takes_first_price",
+			jsonInput: `{
+				"terms": {
+					"OnDemand": {
+						"SKU1.TERM1": {
+							"priceDimensions": {
+								"SKU1.TERM1.RATE": {
+									"pricePerUnit": {
+										"USD": "0.05"
+									}
+								}
+							}
+						},
+						"SKU2.TERM2": {
+							"priceDimensions": {
+								"SKU2.TERM2.RATE": {
+									"pricePerUnit": {
+										"USD": "0.06"
+									}
+								}
+							}
+						}
+					}
+				}
+			}`,
+			wantPrice: 0.05, // Could be either, but should succeed
+			wantErr:   false,
+		},
+		{
+			name:      "invalid_json",
+			jsonInput: `not valid json`,
+			wantPrice: 0,
+			wantErr:   true,
+		},
+		{
+			name: "missing_terms",
+			jsonInput: `{
+				"product": {}
+			}`,
+			wantPrice: 0,
+			wantErr:   true,
+		},
+		{
+			name: "empty_on_demand",
+			jsonInput: `{
+				"terms": {
+					"OnDemand": {}
+				}
+			}`,
+			wantPrice: 0,
+			wantErr:   true,
+		},
+		{
+			name: "missing_usd_price",
+			jsonInput: `{
+				"terms": {
+					"OnDemand": {
+						"SKU.TERM": {
+							"priceDimensions": {
+								"SKU.TERM.RATE": {
+									"pricePerUnit": {
+										"EUR": "0.04"
+									}
+								}
+							}
+						}
+					}
+				}
+			}`,
+			wantPrice: 0,
+			wantErr:   true,
+		},
+		{
+			name: "invalid_price_format",
+			jsonInput: `{
+				"terms": {
+					"OnDemand": {
+						"SKU.TERM": {
+							"priceDimensions": {
+								"SKU.TERM.RATE": {
+									"pricePerUnit": {
+										"USD": "not-a-number"
+									}
+								}
+							}
+						}
+					}
+				}
+			}`,
+			wantPrice: 0,
+			wantErr:   true,
+		},
+		{
+			name: "zero_price_valid",
+			jsonInput: `{
+				"terms": {
+					"OnDemand": {
+						"SKU.TERM": {
+							"priceDimensions": {
+								"SKU.TERM.RATE": {
+									"pricePerUnit": {
+										"USD": "0.0000000000"
+									}
+								}
+							}
+						}
+					}
+				}
+			}`,
+			wantPrice: 0,
+			wantErr:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			price, err := parsePricingResponse(tt.jsonInput)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("parsePricingResponse() expected error, got nil")
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("parsePricingResponse() unexpected error: %v", err)
+				return
+			}
+
+			// For tests with multiple possible prices, just check it's > 0.
+			if tt.name == "multiple_terms_takes_first_price" {
+				if price <= 0 {
+					t.Errorf("parsePricingResponse() = %f, want > 0", price)
+				}
+				return
+			}
+
+			if price != tt.wantPrice {
+				t.Errorf("parsePricingResponse() = %f, want %f", price, tt.wantPrice)
+			}
+		})
+	}
+}
