@@ -1,0 +1,33 @@
+Implementation details for ECR image push (P0.6):
+
+WHY: Local images (e.g., 'myapp:latest') cannot be pulled by ECS Fargate from the local
+Docker daemon. The deploy flow creates an ECR repo but never pushes images, causing
+tasks to fail and ALB to return 503 errors.
+
+WHAT WAS DONE:
+1. isLocalImage(imageRef string) bool - Classifies image references:
+   - ECR URIs (*.dkr.ecr.*.amazonaws.com/*) -> use as-is
+   - Public registries (docker.io, ghcr.io, etc.) -> use as-is
+   - Local images (name:tag without registry) -> push to ECR
+
+2. pushImageToECR() implementation:
+   - Gets ECR auth token via ecr:GetAuthorizationToken
+   - Decodes base64 token to get username:password
+   - Creates Docker client via docker/client SDK
+   - Tags local image with ECR URI
+   - Pushes image with registry auth
+   - Reads push response stream for errors
+   - Returns full ECR URI for task definition
+
+3. Deploy flow updated:
+   - After ensureECRRepository(), check isLocalImage()
+   - If local, call pushImageToECR() to get ECR URI
+   - Pass ECR URI (not original imageRef) to createTaskDefinition()
+
+TESTING:
+- Added TestIsLocalImage with 19 test cases covering all classification scenarios
+- Mock implementation added for GetAuthorizationToken
+
+ALSO FIXED:
+- P2.12: Spending config tests were picking up ~/.agent-deploy/config.json
+  which had $70 instead of default $25. Tests now use isolated HOME.
