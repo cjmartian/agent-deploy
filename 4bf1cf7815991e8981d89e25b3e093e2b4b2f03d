@@ -1,0 +1,35 @@
+P1.1 Pricing API Implementation Details:
+
+PROBLEM:
+- queryFargatePrice() in pricing.go was stubbed to return error
+- Line 272 returned: 'pricing API response parsing not implemented'
+- Cost estimates always fell back to hardcoded regional prices
+
+SOLUTION:
+- Implemented parsePricingResponse() to parse AWS Pricing API JSON
+- AWS response structure:
+  terms.OnDemand.<skuTermCode>.priceDimensions.<rateCode>.pricePerUnit.USD
+- Added pricingResponse struct to unmarshal the nested JSON
+- Extracts USD price string and converts to float64
+
+ERROR HANDLING:
+- Invalid JSON -> unmarshal error
+- Missing terms.OnDemand -> 'no USD price found'
+- Missing USD in pricePerUnit -> 'no USD price found'
+- Invalid price format -> 'parse USD price' error
+
+TESTING:
+- 9 test cases in TestParsePricingResponse:
+  - valid_fargate_cpu_pricing (0.04048)
+  - valid_fargate_memory_pricing (0.004445)
+  - multiple_terms_takes_first_price
+  - invalid_json
+  - missing_terms
+  - empty_on_demand
+  - missing_usd_price
+  - invalid_price_format
+  - zero_price_valid
+
+FALLBACK BEHAVIOR UNCHANGED:
+- If Pricing API call fails, getFargateFallbackPrices() is still used
+- This ensures the system degrades gracefully
