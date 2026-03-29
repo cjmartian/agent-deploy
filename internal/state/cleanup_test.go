@@ -343,3 +343,46 @@ func TestCleanupService_DoubleStop(t *testing.T) {
 	service.Stop()
 	service.Stop() // Double stop should be safe
 }
+
+// TestCleanupService_ConcurrentStop verifies that concurrent Stop() calls
+// do not cause a panic from closing an already-closed channel.
+// This tests the fix for P3.21 race condition.
+func TestCleanupService_ConcurrentStop(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	config := CleanupConfig{
+		Interval: 100 * time.Millisecond,
+	}
+	service := NewCleanupService(store, config)
+
+	ctx := context.Background()
+	if err := service.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// Let the service run briefly
+	time.Sleep(50 * time.Millisecond)
+
+	// Call Stop() concurrently from multiple goroutines.
+	// Without the sync.Once fix, this would panic with
+	// "close of closed channel".
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			service.Stop()
+		}()
+	}
+
+	// Wait for all Stop() calls to complete
+	wg.Wait()
+
+	// Verify service is stopped
+	if service.IsRunning() {
+		t.Error("Service should not be running after concurrent stops")
+	}
+}

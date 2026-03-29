@@ -37,7 +37,7 @@
 | **P3.18** | Silent error suppression in config.go:36 | Config file load errors silently ignored (low severity - fallback to defaults acceptable) |
 | **P3.19** | Hardcoded ALB/NAT/CloudWatch pricing | Cost estimation inaccurate when Pricing API unavailable |
 | **P3.20** | NAT Gateway single AZ | NAT Gateway only created in first public subnet; no redundancy across AZs; single point of failure for private subnet traffic |
-| **P3.21** | Cleanup service race condition | cleanup.go:78-96 — lock released between checking `running` and closing `stopCh` |
+| ~~**P3.21**~~ | ~~Cleanup service race condition~~ | ✅ FIXED — Added sync.Once protection around channel close |
 | **P3.22** | Deployment status update failures silently ignored | aws.go:1163-1212 log errors but continue; status could become stale |
 | **P3.23** | Certificate ARN storage failures silently ignored | aws.go:3633-3641 errors logged but not propagated; certificate state could be lost |
 | **P3.24** | No exponential backoff in certificate validation | aws.go:3661 polls with fixed 2s delay; could overload API |
@@ -513,9 +513,9 @@
 - [ ] Document cost impact (additional NAT Gateway hourly charges)
 - **Location:** `internal/providers/aws.go:1624`
 
-### P3.21 Cleanup Service Race Condition ⚠️ NEW
+### ~~P3.21 Cleanup Service Race Condition~~ ✅ COMPLETE
 
-**Status:** NOT ADDRESSED  
+**Status:** COMPLETE  
 **Impact:** Could panic on concurrent Stop() calls; minor race condition
 
 **Evidence:**
@@ -523,10 +523,12 @@
 - Concurrent Stop() calls could both pass the `running` check before either closes channel
 - Second close on already-closed channel would panic
 
-**Required Work:**
-- [ ] Add `sync.Once` protection around channel close
-- [ ] Or hold lock through the channel close operation
-- **Location:** `internal/state/cleanup.go:78-96`
+**Fix Applied:**
+- [x] Added `sync.Once` field (`stopOnce`) to CleanupService struct to ensure Stop() is safe to call concurrently
+- [x] Modified Stop() to use `stopOnce.Do()` when closing the stopCh channel, preventing panic from concurrent close
+- [x] Modified Start() to reset `stopOnce` for new run cycles
+- [x] Added TestCleanupService_ConcurrentStop test to verify the fix
+- **Location:** `internal/state/cleanup.go`
 
 ### P3.22 Deployment Status Update Failures Silently Ignored ⚠️ NEW
 

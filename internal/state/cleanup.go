@@ -31,10 +31,11 @@ type CleanupService struct {
 	store  *Store
 	config CleanupConfig
 
-	mu      sync.Mutex
-	running bool
-	stopCh  chan struct{}
-	doneCh  chan struct{}
+	mu       sync.Mutex
+	running  bool
+	stopCh   chan struct{}
+	doneCh   chan struct{}
+	stopOnce sync.Once // Ensures Stop() is safe to call concurrently
 
 	// Stats
 	totalDeleted int
@@ -65,6 +66,7 @@ func (c *CleanupService) Start(ctx context.Context) error {
 	c.running = true
 	c.stopCh = make(chan struct{})
 	c.doneCh = make(chan struct{})
+	c.stopOnce = sync.Once{} // Reset stopOnce for new run cycle
 	c.mu.Unlock()
 
 	go c.runLoop(ctx)
@@ -81,10 +83,17 @@ func (c *CleanupService) Stop() {
 		c.mu.Unlock()
 		return
 	}
+	// Get references to channels while holding lock
+	stopCh := c.stopCh
+	doneCh := c.doneCh
 	c.mu.Unlock()
 
-	close(c.stopCh)
-	<-c.doneCh
+	// Use sync.Once to ensure channel is closed exactly once,
+	// preventing panic from concurrent Stop() calls.
+	c.stopOnce.Do(func() {
+		close(stopCh)
+	})
+	<-doneCh
 
 	c.mu.Lock()
 	c.running = false
