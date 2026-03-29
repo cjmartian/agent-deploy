@@ -39,7 +39,7 @@ Coverage: 50.2% (meets 50% target)
 |----|-------|--------|
 | **P2.9** | main.go test coverage | Entry point components tested; main() itself architecturally hard to test |
 | ~~**P2.10**~~ | ~~Concurrent access patterns untested~~ | ✅ COMPLETE — comprehensive concurrent tests added with -race flag verification |
-| **P2.5** | AWS provider error scenarios incomplete | 42.6% coverage; Route53/ALB/IAM/ECR/CloudWatch error paths and E2E flows untested |
+| **P2.5** | AWS provider error scenarios incomplete | 48.7% coverage; Route53/ALB/IAM/ECR/CloudWatch error paths and E2E flows untested |
 
 ### LOWER PRIORITY — Quality (P3)
 | ID | Issue | Impact |
@@ -380,15 +380,28 @@ All tests pass with `-race` flag, verifying the RWMutex locking is correct.
 
 ### P2.5 AWS Provider Error Scenarios Incomplete ⚠️
 
-**Status:** Partial coverage (42.6%)  
+**Status:** Partial coverage (48.7%)  
 **Impact:** Error paths not fully covered; missing E2E flow tests
 
-**Evidence:**
+**Progress (2025-01):**
+Added VPC cleanup, route table, and rollback error scenario tests:
+- `TestDeleteVPCResources_Success` - Tests full VPC resource cleanup with proper deletion order
+- `TestDeleteVPCResources_EmptyInfra` - Tests cleanup of empty infrastructure
+- `TestDeleteVPCResources_VPCDeleteError` - Tests VPC delete error propagation
+- `TestDeleteVPCResources_PartialFailureContinues` - Tests that non-VPC errors don't block cleanup
+- `TestDeleteRouteTable_WithAssociations` - Tests route table disassociation before deletion
+- `TestDeleteRouteTable_DescribeError` - Tests describe error handling
+- `TestDeleteRouteTable_DisassociateError` - Tests disassociate error handling
+- `TestRollbackInfra_WithResources` - Tests rollback with resources to clean up
+- `TestRollbackInfra_ContinuesOnErrors` - Tests rollback continues despite errors
+
+Coverage improved from 44.6% → 48.7% on providers package.
+
+**Evidence (remaining):**
 - Route 53 error scenarios untested
 - ALB provisioning error paths untested
 - IAM/ECR/CloudWatch error handling untested
 - No E2E flow tests (provision → deploy → teardown)
-- Rollback scenarios only test empty infrastructure
 - Context/deadline handling untested
 
 **Required Work:**
@@ -396,7 +409,7 @@ All tests pass with `-race` flag, verifying the RWMutex locking is correct.
 - [ ] Test ALB provisioning error paths (target group creation, listener setup, health checks)
 - [ ] Test IAM/ECR/CloudWatch error handling
 - [ ] Add E2E flow tests (full provision → deploy → teardown cycles)
-- [ ] Test rollback with non-empty infrastructure
+- [x] Test rollback with non-empty infrastructure
 - [ ] Test context/deadline handling
 - **Location:** `internal/providers/aws_test.go`
 

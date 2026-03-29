@@ -9,9 +9,11 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
+	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/cjmartian/agent-deploy/internal/awsclient"
 	"github.com/cjmartian/agent-deploy/internal/awsclient/mocks"
 	"github.com/cjmartian/agent-deploy/internal/state"
@@ -3280,4 +3282,452 @@ t.Errorf("delay %v below minimum %v", delay, baseDelay/2)
 }
 }
 })
+}
+
+// ---------------------------------------------------------------------------
+// Delete/Teardown Operation Tests (P2.5)
+// ---------------------------------------------------------------------------
+// WHY: Per IMPLEMENTATION_PLAN.md P2.5 - AWS provider error scenarios for
+// teardown/delete paths are critical for preventing resource leaks and cost
+// overruns. These tests verify proper cleanup behavior and error handling.
+
+func TestDeleteVPCResources_Success(t *testing.T) {
+	store, err := state.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	// Track calls to verify deletion order
+	var deletedResources []string
+
+	ec2Mock := &mocks.EC2Mock{
+		DeleteNatGatewayFunc: func(ctx context.Context, params *ec2.DeleteNatGatewayInput, optFns ...func(*ec2.Options)) (*ec2.DeleteNatGatewayOutput, error) {
+			deletedResources = append(deletedResources, "nat:"+*params.NatGatewayId)
+			return &ec2.DeleteNatGatewayOutput{NatGatewayId: params.NatGatewayId}, nil
+		},
+		DescribeNatGatewaysFunc: func(ctx context.Context, params *ec2.DescribeNatGatewaysInput, optFns ...func(*ec2.Options)) (*ec2.DescribeNatGatewaysOutput, error) {
+			// Return deleted state immediately for fast test
+			return &ec2.DescribeNatGatewaysOutput{
+				NatGateways: []ec2types.NatGateway{{
+					NatGatewayId: aws.String(params.NatGatewayIds[0]),
+					State:        ec2types.NatGatewayStateDeleted,
+				}},
+			}, nil
+		},
+		ReleaseAddressFunc: func(ctx context.Context, params *ec2.ReleaseAddressInput, optFns ...func(*ec2.Options)) (*ec2.ReleaseAddressOutput, error) {
+			deletedResources = append(deletedResources, "eip:"+*params.AllocationId)
+			return &ec2.ReleaseAddressOutput{}, nil
+		},
+		DeleteSecurityGroupFunc: func(ctx context.Context, params *ec2.DeleteSecurityGroupInput, optFns ...func(*ec2.Options)) (*ec2.DeleteSecurityGroupOutput, error) {
+			deletedResources = append(deletedResources, "sg:"+*params.GroupId)
+			return &ec2.DeleteSecurityGroupOutput{}, nil
+		},
+		DescribeRouteTablesFunc: func(ctx context.Context, params *ec2.DescribeRouteTablesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeRouteTablesOutput, error) {
+			return &ec2.DescribeRouteTablesOutput{RouteTables: []ec2types.RouteTable{}}, nil
+		},
+		DeleteRouteTableFunc: func(ctx context.Context, params *ec2.DeleteRouteTableInput, optFns ...func(*ec2.Options)) (*ec2.DeleteRouteTableOutput, error) {
+			deletedResources = append(deletedResources, "rtb:"+*params.RouteTableId)
+			return &ec2.DeleteRouteTableOutput{}, nil
+		},
+		DeleteSubnetFunc: func(ctx context.Context, params *ec2.DeleteSubnetInput, optFns ...func(*ec2.Options)) (*ec2.DeleteSubnetOutput, error) {
+			deletedResources = append(deletedResources, "subnet:"+*params.SubnetId)
+			return &ec2.DeleteSubnetOutput{}, nil
+		},
+		DetachInternetGatewayFunc: func(ctx context.Context, params *ec2.DetachInternetGatewayInput, optFns ...func(*ec2.Options)) (*ec2.DetachInternetGatewayOutput, error) {
+			deletedResources = append(deletedResources, "detach-igw:"+*params.InternetGatewayId)
+			return &ec2.DetachInternetGatewayOutput{}, nil
+		},
+		DeleteInternetGatewayFunc: func(ctx context.Context, params *ec2.DeleteInternetGatewayInput, optFns ...func(*ec2.Options)) (*ec2.DeleteInternetGatewayOutput, error) {
+			deletedResources = append(deletedResources, "igw:"+*params.InternetGatewayId)
+			return &ec2.DeleteInternetGatewayOutput{}, nil
+		},
+		DeleteVpcFunc: func(ctx context.Context, params *ec2.DeleteVpcInput, optFns ...func(*ec2.Options)) (*ec2.DeleteVpcOutput, error) {
+			deletedResources = append(deletedResources, "vpc:"+*params.VpcId)
+			return &ec2.DeleteVpcOutput{}, nil
+		},
+	}
+
+	clients := &awsclient.AWSClients{EC2: ec2Mock}
+	provider := NewAWSProviderWithClients(store, clients)
+
+	// Create infrastructure with all resource types
+	infra := &state.Infrastructure{
+		ID:     "infra-delete-test",
+		PlanID: "plan-test",
+		Region: "us-east-1",
+		Resources: map[string]string{
+			state.ResourceVPC:               "vpc-123",
+			state.ResourceNATGateway:        "nat-123",
+			state.ResourceElasticIP:         "eipalloc-123",
+			state.ResourceSecurityGroupTask: "sg-task-123",
+			state.ResourceSecurityGroupALB:  "sg-alb-123",
+			state.ResourceRouteTable:        "rtb-public-123",
+			state.ResourceRouteTablePrivate: "rtb-private-123",
+			state.ResourceSubnetPublic:      "subnet-pub-1,subnet-pub-2",
+			state.ResourceSubnetPrivate:     "subnet-priv-1,subnet-priv-2",
+			state.ResourceInternetGateway:   "igw-123",
+		},
+		Status: state.InfraStatusReady,
+	}
+
+	err = provider.deleteVPCResources(context.Background(), aws.Config{Region: "us-east-1"}, infra)
+	if err != nil {
+		t.Fatalf("deleteVPCResources: %v", err)
+	}
+
+	// Verify deletion order (should be reverse of creation order)
+	// NAT -> EIP -> SGs -> Route Tables -> Subnets -> IGW -> VPC
+	expectedOrder := []string{
+		"nat:nat-123",
+		"eip:eipalloc-123",
+		"sg:sg-task-123",
+		"sg:sg-alb-123",
+		"rtb:rtb-private-123",
+		"rtb:rtb-public-123",
+		"subnet:subnet-priv-1",
+		"subnet:subnet-priv-2",
+		"subnet:subnet-pub-1",
+		"subnet:subnet-pub-2",
+		"detach-igw:igw-123",
+		"igw:igw-123",
+		"vpc:vpc-123",
+	}
+
+	// Verify all resources were deleted
+	if len(deletedResources) != len(expectedOrder) {
+		t.Errorf("deletedResources count = %d, want %d", len(deletedResources), len(expectedOrder))
+		t.Logf("deleted: %v", deletedResources)
+	}
+
+	// Verify VPC is deleted last
+	if len(deletedResources) > 0 && deletedResources[len(deletedResources)-1] != "vpc:vpc-123" {
+		t.Errorf("VPC should be deleted last, got %v", deletedResources)
+	}
+}
+
+func TestDeleteVPCResources_EmptyInfra(t *testing.T) {
+	store, err := state.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	ec2Mock := &mocks.EC2Mock{}
+	clients := &awsclient.AWSClients{EC2: ec2Mock}
+	provider := NewAWSProviderWithClients(store, clients)
+
+	// Infrastructure with no resources
+	infra := &state.Infrastructure{
+		ID:        "infra-empty",
+		Resources: map[string]string{},
+	}
+
+	err = provider.deleteVPCResources(context.Background(), aws.Config{Region: "us-east-1"}, infra)
+	if err != nil {
+		t.Fatalf("deleteVPCResources with empty infra should succeed: %v", err)
+	}
+
+	// Verify no delete calls were made
+	if ec2Mock.DeleteVpcCalls > 0 {
+		t.Errorf("DeleteVpcCalls = %d, want 0", ec2Mock.DeleteVpcCalls)
+	}
+}
+
+func TestDeleteVPCResources_VPCDeleteError(t *testing.T) {
+	store, err := state.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	ec2Mock := &mocks.EC2Mock{
+		DeleteVpcFunc: func(ctx context.Context, params *ec2.DeleteVpcInput, optFns ...func(*ec2.Options)) (*ec2.DeleteVpcOutput, error) {
+			return nil, fmt.Errorf("DependencyViolation: VPC has dependencies")
+		},
+	}
+
+	clients := &awsclient.AWSClients{EC2: ec2Mock}
+	provider := NewAWSProviderWithClients(store, clients)
+
+	infra := &state.Infrastructure{
+		ID:        "infra-vpc-error",
+		Resources: map[string]string{state.ResourceVPC: "vpc-123"},
+	}
+
+	err = provider.deleteVPCResources(context.Background(), aws.Config{Region: "us-east-1"}, infra)
+	if err == nil {
+		t.Error("deleteVPCResources should fail when VPC delete fails")
+	}
+	if !strings.Contains(err.Error(), "DependencyViolation") {
+		t.Errorf("error should contain 'DependencyViolation', got: %v", err)
+	}
+}
+
+func TestDeleteVPCResources_PartialFailureContinues(t *testing.T) {
+	store, err := state.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	sgDeleteAttempts := 0
+	ec2Mock := &mocks.EC2Mock{
+		DeleteSecurityGroupFunc: func(ctx context.Context, params *ec2.DeleteSecurityGroupInput, optFns ...func(*ec2.Options)) (*ec2.DeleteSecurityGroupOutput, error) {
+			sgDeleteAttempts++
+			// Fail on first SG, succeed on second
+			if sgDeleteAttempts == 1 {
+				return nil, fmt.Errorf("DependencyViolation: SG in use")
+			}
+			return &ec2.DeleteSecurityGroupOutput{}, nil
+		},
+	}
+
+	clients := &awsclient.AWSClients{EC2: ec2Mock}
+	provider := NewAWSProviderWithClients(store, clients)
+
+	infra := &state.Infrastructure{
+		ID:     "infra-partial-fail",
+		Region: "us-east-1",
+		Resources: map[string]string{
+			state.ResourceVPC:               "vpc-123",
+			state.ResourceSecurityGroupTask: "sg-task-123",
+			state.ResourceSecurityGroupALB:  "sg-alb-123",
+		},
+	}
+
+	// Should succeed overall (VPC delete is the only critical error)
+	err = provider.deleteVPCResources(context.Background(), aws.Config{Region: "us-east-1"}, infra)
+	if err != nil {
+		t.Fatalf("deleteVPCResources should succeed despite SG delete failure: %v", err)
+	}
+
+	// Both SGs should have been attempted
+	if sgDeleteAttempts != 2 {
+		t.Errorf("sgDeleteAttempts = %d, want 2 (should continue after first failure)", sgDeleteAttempts)
+	}
+}
+
+func TestDeleteRouteTable_WithAssociations(t *testing.T) {
+	store, err := state.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	disassociateCalls := 0
+	ec2Mock := &mocks.EC2Mock{
+		DescribeRouteTablesFunc: func(ctx context.Context, params *ec2.DescribeRouteTablesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeRouteTablesOutput, error) {
+			return &ec2.DescribeRouteTablesOutput{
+				RouteTables: []ec2types.RouteTable{{
+					RouteTableId: aws.String(params.RouteTableIds[0]),
+					Associations: []ec2types.RouteTableAssociation{
+						{RouteTableAssociationId: aws.String("rtbassoc-1"), Main: aws.Bool(false)},
+						{RouteTableAssociationId: aws.String("rtbassoc-2"), Main: aws.Bool(false)},
+						{RouteTableAssociationId: aws.String("rtbassoc-main"), Main: aws.Bool(true)}, // Should skip main
+					},
+				}},
+			}, nil
+		},
+		DisassociateRouteTableFunc: func(ctx context.Context, params *ec2.DisassociateRouteTableInput, optFns ...func(*ec2.Options)) (*ec2.DisassociateRouteTableOutput, error) {
+			disassociateCalls++
+			return &ec2.DisassociateRouteTableOutput{}, nil
+		},
+		DeleteRouteTableFunc: func(ctx context.Context, params *ec2.DeleteRouteTableInput, optFns ...func(*ec2.Options)) (*ec2.DeleteRouteTableOutput, error) {
+			return &ec2.DeleteRouteTableOutput{}, nil
+		},
+	}
+
+	clients := &awsclient.AWSClients{EC2: ec2Mock}
+	provider := NewAWSProviderWithClients(store, clients)
+
+	err = provider.deleteRouteTable(context.Background(), ec2Mock, "rtb-123")
+	if err != nil {
+		t.Fatalf("deleteRouteTable: %v", err)
+	}
+
+	// Should disassociate non-main associations only (2 out of 3)
+	if disassociateCalls != 2 {
+		t.Errorf("disassociateCalls = %d, want 2 (should skip main association)", disassociateCalls)
+	}
+}
+
+func TestDeleteRouteTable_DescribeError(t *testing.T) {
+	store, err := state.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	ec2Mock := &mocks.EC2Mock{
+		DescribeRouteTablesFunc: func(ctx context.Context, params *ec2.DescribeRouteTablesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeRouteTablesOutput, error) {
+			return nil, fmt.Errorf("InvalidRouteTableID.NotFound")
+		},
+	}
+
+	clients := &awsclient.AWSClients{EC2: ec2Mock}
+	provider := NewAWSProviderWithClients(store, clients)
+
+	err = provider.deleteRouteTable(context.Background(), ec2Mock, "rtb-notfound")
+	if err == nil {
+		t.Error("deleteRouteTable should fail on describe error")
+	}
+	if !strings.Contains(err.Error(), "describe route table") {
+		t.Errorf("error should wrap describe error, got: %v", err)
+	}
+}
+
+func TestDeleteRouteTable_DisassociateError(t *testing.T) {
+	store, err := state.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	ec2Mock := &mocks.EC2Mock{
+		DescribeRouteTablesFunc: func(ctx context.Context, params *ec2.DescribeRouteTablesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeRouteTablesOutput, error) {
+			return &ec2.DescribeRouteTablesOutput{
+				RouteTables: []ec2types.RouteTable{{
+					RouteTableId: aws.String("rtb-123"),
+					Associations: []ec2types.RouteTableAssociation{
+						{RouteTableAssociationId: aws.String("rtbassoc-1"), Main: aws.Bool(false)},
+					},
+				}},
+			}, nil
+		},
+		DisassociateRouteTableFunc: func(ctx context.Context, params *ec2.DisassociateRouteTableInput, optFns ...func(*ec2.Options)) (*ec2.DisassociateRouteTableOutput, error) {
+			return nil, fmt.Errorf("InvalidAssociationID.NotFound")
+		},
+	}
+
+	clients := &awsclient.AWSClients{EC2: ec2Mock}
+	provider := NewAWSProviderWithClients(store, clients)
+
+	err = provider.deleteRouteTable(context.Background(), ec2Mock, "rtb-123")
+	if err == nil {
+		t.Error("deleteRouteTable should fail on disassociate error")
+	}
+	if !strings.Contains(err.Error(), "disassociate route table") {
+		t.Errorf("error should wrap disassociate error, got: %v", err)
+	}
+}
+
+func TestRollbackInfra_WithResources(t *testing.T) {
+	store, err := state.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	var deletedLogGroup, deletedRole bool
+
+	// Create mocks for all services used by rollback
+	ec2Mock := &mocks.EC2Mock{}
+	ecsMock := &mocks.ECSMock{}
+	elbMock := &mocks.ELBV2Mock{}
+	iamMock := &mocks.IAMMock{
+		DeleteRoleFunc: func(ctx context.Context, params *iam.DeleteRoleInput, optFns ...func(*iam.Options)) (*iam.DeleteRoleOutput, error) {
+			deletedRole = true
+			return &iam.DeleteRoleOutput{}, nil
+		},
+	}
+	cwMock := &mocks.CloudWatchLogsMock{
+		DeleteLogGroupFunc: func(ctx context.Context, params *cloudwatchlogs.DeleteLogGroupInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.DeleteLogGroupOutput, error) {
+			deletedLogGroup = true
+			return &cloudwatchlogs.DeleteLogGroupOutput{}, nil
+		},
+	}
+
+	clients := &awsclient.AWSClients{
+		EC2:            ec2Mock,
+		ECS:            ecsMock,
+		ELBV2:          elbMock,
+		IAM:            iamMock,
+		CloudWatchLogs: cwMock,
+	}
+
+	provider := NewAWSProviderWithClients(store, clients)
+
+	// Create infrastructure with some resources - use 'failed' status so transition to destroyed is valid
+	infra := &state.Infrastructure{
+		ID:     "infra-rollback-test",
+		PlanID: "plan-test",
+		Region: "us-east-1",
+		Resources: map[string]string{
+			state.ResourceLogGroup:      "/ecs/test-app",
+			state.ResourceExecutionRole: "arn:aws:iam::123456789012:role/test-role",
+		},
+		Status:    state.InfraStatusFailed, // Failed status allows transition to destroyed
+		CreatedAt: time.Now(),
+	}
+
+	err = store.CreateInfra(infra)
+	if err != nil {
+		t.Fatalf("CreateInfra: %v", err)
+	}
+
+	err = provider.rollbackInfra(context.Background(), aws.Config{Region: "us-east-1"}, infra)
+	if err != nil {
+		t.Fatalf("rollbackInfra: %v", err)
+	}
+
+	// Verify cleanup was attempted
+	if !deletedLogGroup {
+		t.Error("log group should have been deleted")
+	}
+	if !deletedRole {
+		t.Error("execution role deletion should have been attempted")
+	}
+}
+
+func TestRollbackInfra_ContinuesOnErrors(t *testing.T) {
+	store, err := state.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	var deleteAttempts int
+
+	cwMock := &mocks.CloudWatchLogsMock{
+		DeleteLogGroupFunc: func(ctx context.Context, params *cloudwatchlogs.DeleteLogGroupInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.DeleteLogGroupOutput, error) {
+			deleteAttempts++
+			return nil, fmt.Errorf("AccessDenied: insufficient permissions")
+		},
+	}
+	iamMock := &mocks.IAMMock{
+		DeleteRoleFunc: func(ctx context.Context, params *iam.DeleteRoleInput, optFns ...func(*iam.Options)) (*iam.DeleteRoleOutput, error) {
+			deleteAttempts++
+			return nil, fmt.Errorf("AccessDenied: insufficient permissions")
+		},
+	}
+
+	clients := &awsclient.AWSClients{
+		EC2:            &mocks.EC2Mock{},
+		ECS:            &mocks.ECSMock{},
+		ELBV2:          &mocks.ELBV2Mock{},
+		IAM:            iamMock,
+		CloudWatchLogs: cwMock,
+	}
+
+	provider := NewAWSProviderWithClients(store, clients)
+
+	// Use failed status so transition to destroyed is valid
+	infra := &state.Infrastructure{
+		ID:     "infra-rollback-errors",
+		PlanID: "plan-test",
+		Region: "us-east-1",
+		Resources: map[string]string{
+			state.ResourceLogGroup:      "/ecs/test-app",
+			state.ResourceExecutionRole: "arn:aws:iam::123456789012:role/test-role",
+		},
+		Status: state.InfraStatusFailed,
+	}
+
+	err = store.CreateInfra(infra)
+	if err != nil {
+		t.Fatalf("CreateInfra: %v", err)
+	}
+
+	// Rollback should return error with accumulated failures
+	err = provider.rollbackInfra(context.Background(), aws.Config{Region: "us-east-1"}, infra)
+	if err == nil {
+		t.Error("rollbackInfra should return error when cleanup fails")
+	}
+
+	// Should have attempted both deletes despite errors
+	if deleteAttempts != 2 {
+		t.Errorf("deleteAttempts = %d, want 2 (should continue after failures)", deleteAttempts)
+	}
 }
