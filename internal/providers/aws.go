@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand"
 	"net"
 	"net/url"
 	"regexp"
@@ -3394,6 +3395,36 @@ Important: Do not exceed any spending limits I have set.`, app),
 // Helpers
 // ---------------------------------------------------------------------------
 
+// backoffWithJitter calculates the next backoff duration with exponential backoff and jitter.
+// baseDelay is the starting delay, attempt is the 0-indexed attempt number (0, 1, 2, ...),
+// maxDelay is the maximum delay cap. Adds ±25% jitter to prevent thundering herd.
+func backoffWithJitter(baseDelay time.Duration, attempt int, maxDelay time.Duration) time.Duration {
+	// Calculate exponential backoff: baseDelay * 2^attempt
+	delay := baseDelay
+	for i := 0; i < attempt; i++ {
+		delay *= 2
+		if delay > maxDelay {
+			delay = maxDelay
+			break
+		}
+	}
+
+	// Add jitter: ±25%
+	jitterRange := float64(delay) * 0.25
+	jitter := time.Duration((rand.Float64() * 2 * jitterRange) - jitterRange)
+	delay += jitter
+
+	// Ensure we don't go below minimum or above maximum
+	if delay < baseDelay/2 {
+		delay = baseDelay / 2
+	}
+	if delay > maxDelay {
+		delay = maxDelay
+	}
+
+	return delay
+}
+
 func mapToEC2Tags(tags map[string]string) []ec2types.Tag {
 	result := make([]ec2types.Tag, 0, len(tags))
 	for k, v := range tags {
@@ -3806,8 +3837,10 @@ func (p *AWSProvider) provisionCertificate(
 		slog.String("certificate_arn", certARN))
 
 	// Step 2: Wait for DomainValidationOptions to be populated.
+	// Uses exponential backoff with jitter to avoid overloading the API.
 	var validationRecord *acmtypes.ResourceRecord
-	for i := 0; i < 30; i++ { // Poll for up to 60 seconds.
+	const maxValidationAttempts = 15 // With exponential backoff, covers ~2 minutes
+	for i := 0; i < maxValidationAttempts; i++ {
 		descResp, descErr := acmClient.DescribeCertificate(ctx, &acm.DescribeCertificateInput{
 			CertificateArn: aws.String(certARN),
 		})
@@ -3819,7 +3852,9 @@ func (p *AWSProvider) provisionCertificate(
 			validationRecord = descResp.Certificate.DomainValidationOptions[0].ResourceRecord
 			break
 		}
-		time.Sleep(2 * time.Second)
+		// Exponential backoff: 1s, 2s, 4s, 8s, ... up to 15s max
+		delay := backoffWithJitter(1*time.Second, i, 15*time.Second)
+		time.Sleep(delay)
 	}
 	if validationRecord == nil {
 		return "", fmt.Errorf("timeout waiting for certificate DNS validation record")
@@ -3852,11 +3887,13 @@ func (p *AWSProvider) provisionCertificate(
 	}
 
 	// Step 4: Wait for certificate to be issued (up to 5 minutes).
+	// Uses exponential backoff with jitter to avoid overloading the API.
 	slog.Info("waiting for certificate validation",
 		slog.String("component", "provisionCertificate"),
 		slog.String("certificate_arn", certARN))
 
-	for i := 0; i < 60; i++ { // Poll for up to 5 minutes.
+	const maxIssuanceAttempts = 20 // With exponential backoff (5s base, 30s max), covers ~5 minutes
+	for i := 0; i < maxIssuanceAttempts; i++ {
 		descResp, descErr := acmClient.DescribeCertificate(ctx, &acm.DescribeCertificateInput{
 			CertificateArn: aws.String(certARN),
 		})
@@ -3873,7 +3910,9 @@ func (p *AWSProvider) provisionCertificate(
 			reason := string(descResp.Certificate.FailureReason)
 			return "", fmt.Errorf("certificate validation failed: %s", reason)
 		}
-		time.Sleep(5 * time.Second)
+		// Exponential backoff: 5s, 10s, 20s, ... up to 30s max
+		delay := backoffWithJitter(5*time.Second, i, 30*time.Second)
+		time.Sleep(delay)
 	}
 
 	return "", fmt.Errorf("timeout waiting for certificate validation (5 minutes). Check ACM console for status")

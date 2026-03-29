@@ -34,7 +34,7 @@
 | **P3.13** | Shallow reconciliation (3/19 resource types) | Orphaned resources (subnets, NAT GW, SGs, etc.) may not be detected; SyncedCount misleading |
 | **P3.12** | Missing state transitions | No deployment update or infrastructure retry transitions; any→any transitions allowed |
 | **P3.14** | Main.go startup error handling (partial) | Background services not cleaned up on startup failure |
-| **P3.18** | Silent error suppression in config.go:36 | Config file load errors silently ignored (low severity - fallback to defaults acceptable) |
+| ~~**P3.18**~~ | ~~Silent error suppression in config.go:36~~ | ✅ FIXED — Added warning log when config file exists but fails to parse |
 | **P3.19** | Hardcoded ALB/NAT/CloudWatch pricing | Cost estimation inaccurate when Pricing API unavailable |
 | **P3.20** | NAT Gateway single AZ | NAT Gateway only created in first public subnet; no redundancy across AZs; single point of failure for private subnet traffic |
 | ~~**P3.21**~~ | ~~Cleanup service race condition~~ | ✅ FIXED — Added sync.Once protection around channel close |
@@ -485,19 +485,21 @@ All tests pass with `-race` flag, verifying the RWMutex locking is correct.
 - [x] Added `github.com/aws/aws-sdk-go-v2/service/route53` dependency to `go.mod`
 - **Location:** `internal/providers/aws.go`, `go.mod`
 
-### P3.18 Silent Error Suppression in config.go ❌
+### P3.18 Silent Error Suppression in config.go ✅
 
-**Status:** NOT ADDRESSED  
+**Status:** FIXED  
 **Impact:** Config file load errors silently ignored; users unaware of malformed config
 
 **Evidence:**
 - `config.go:36` — Config file load errors silently ignored with `_ = err`
 - Comment says "Config file is optional; log but don't fail" but NO LOGGING
 
-**Required Work:**
-- [ ] Add warning log when config file exists but fails to load
-- [ ] Log the specific error reason
-- **Location:** `internal/spending/config.go:36`
+**Work Completed:**
+- [x] Added slog import and logging package import to config.go
+- [x] Changed `_ = err` to proper warning log when config file exists but fails to parse
+- [x] Only logs if error is NOT "file not found" (missing file is expected behavior)
+- [x] Uses logging.ComponentSpending for consistent component tagging
+- **Location:** `internal/spending/config.go`
 
 ### P3.19 Hardcoded ALB/NAT/CloudWatch Pricing ❌
 
@@ -878,10 +880,10 @@ go tool cover -html=coverage.out          # View coverage report
 | ~~**P0 Critical**~~ | ~~2~~ 0 | ~~P0.1 (non-atomic writes), P0.2 (silent error suppression)~~ ✅ ALL FIXED |
 | ~~**P1 Spec Gaps**~~ | ~~1~~ 0 | ~~P1.31 (missing input validations)~~ ✅ ALL FIXED |
 | **P2 Test Gaps** | 2 | P2.9 (main.go components ⚠️), ~~P2.10 (concurrent access)~~ ✅, P2.5 (AWS error scenarios) |
-| **P3 Quality** | 11 | P3.12-P3.14, P3.18-P3.25 (reconciliation, state transitions, error handling, pricing, NAT Gateway, cleanup race, status updates, cert storage, cert backoff, image validation) |
+| **P3 Quality** | 10 | P3.12-P3.14, ~~P3.18~~, P3.19-P3.25 (reconciliation, state transitions, error handling, ~~config errors~~ ✅, pricing, NAT Gateway, cleanup race, status updates, cert storage, cert backoff, image validation) |
 | **P4 New Features** | 7 | P4.1 (Lightsail), P4.2-P4.7 (workload types) |
 | **P5 Stretch** | 4 | CloudFormation, multi-cloud, secrets, CI enhancements |
-| **Total remaining** | **25** | |
+| **Total remaining** | **24** | |
 
 ---
 

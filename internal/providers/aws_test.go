@@ -3189,3 +3189,60 @@ func TestValidateCertificateARNRegion(t *testing.T) {
 		})
 	}
 }
+
+// TestBackoffWithJitter tests the exponential backoff helper function (P3.24).
+func TestBackoffWithJitter(t *testing.T) {
+baseDelay := 1 * time.Second
+maxDelay := 30 * time.Second
+
+t.Run("exponential growth", func(t *testing.T) {
+// Test that delays grow exponentially (ignoring jitter)
+// Attempt 0: ~1s, Attempt 1: ~2s, Attempt 2: ~4s, etc.
+for attempt := 0; attempt < 5; attempt++ {
+delay := backoffWithJitter(baseDelay, attempt, maxDelay)
+expected := baseDelay << attempt // 2^attempt
+if expected > maxDelay {
+expected = maxDelay
+}
+// Allow ±30% for jitter
+minExpected := time.Duration(float64(expected) * 0.7)
+maxExpected := time.Duration(float64(expected) * 1.3)
+if delay < minExpected || delay > maxExpected {
+t.Errorf("attempt %d: delay %v not in range [%v, %v]",
+attempt, delay, minExpected, maxExpected)
+}
+}
+})
+
+t.Run("respects max delay", func(t *testing.T) {
+// High attempt number should be capped at maxDelay
+delay := backoffWithJitter(baseDelay, 100, maxDelay)
+// Should not exceed maxDelay (with some jitter margin)
+if delay > maxDelay*2 {
+t.Errorf("delay %v exceeds max %v by too much", delay, maxDelay)
+}
+})
+
+t.Run("jitter provides variance", func(t *testing.T) {
+// Run multiple times and check we get different values (jitter working)
+seen := make(map[time.Duration]bool)
+for i := 0; i < 10; i++ {
+delay := backoffWithJitter(baseDelay, 2, maxDelay)
+seen[delay] = true
+}
+// Should see at least 2 different values (jitter is random)
+if len(seen) < 2 {
+t.Errorf("jitter not working: only saw %d unique values", len(seen))
+}
+})
+
+t.Run("minimum delay maintained", func(t *testing.T) {
+// Even with jitter, should not go below baseDelay/2
+for i := 0; i < 20; i++ {
+delay := backoffWithJitter(baseDelay, 0, maxDelay)
+if delay < baseDelay/2 {
+t.Errorf("delay %v below minimum %v", delay, baseDelay/2)
+}
+}
+})
+}
