@@ -1,0 +1,40 @@
+P3.22 VERIFIED + P3.23 FIXED - Error Handling Review
+
+## P3.22 Deployment Status Update Failures — VERIFIED
+
+### Concern
+aws.go:1163-1212 log errors but continue; status could become stale
+
+### Review Findings
+Current behavior is CORRECT:
+- When primary operation fails, try to update status to 'failed'
+- If status update fails, log with slog.Error, return primary error
+- This avoids masking the real failure with a secondary error
+- Logging is structured with deployID and error fields
+
+### Conclusion
+No changes needed. Pattern is correct for error handling.
+
+## P3.23 Certificate ARN Storage Failures — FIXED
+
+### Problem
+- aws.go:3825-3828 logged error but continued
+- If storage failed, certificate would be orphaned
+- Teardown wouldn't know to delete it
+- Orphaned certificates accumulate AWS costs
+
+### Solution
+- If certificate ARN storage fails:
+  1. Log the error
+  2. Attempt to delete the certificate (rollback)
+  3. Return error to fail provisioning
+- Auto-created flag failure is still non-fatal (metadata only)
+
+### Code Changes
+- Added DeleteCertificate rollback attempt
+- Return error instead of continuing
+- Added comments explaining why each behavior
+
+### Impact
+- Prevents orphaned ACM certificates
+- Certificate provisioning is now transactional (store succeeds or rollback)
