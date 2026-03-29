@@ -128,13 +128,28 @@ type planInfraInput struct {
 	ExpectedUsers  int    `json:"expected_users"   jsonschema:"estimated number of concurrent users"`
 	LatencyMS      int    `json:"latency_ms"       jsonschema:"target p99 latency in milliseconds"`
 	Region         string `json:"region"           jsonschema:"preferred AWS region (e.g. us-east-1)"`
+	// Auto-scaling parameters (P1.22): Allow cost range calculation during planning.
+	// WHY: Users need to understand min/max cost impact before committing to auto-scaling.
+	MinCount int `json:"min_count,omitempty" jsonschema:"minimum task count for auto scaling (default: 1)"`
+	MaxCount int `json:"max_count,omitempty" jsonschema:"maximum task count for auto scaling (default: same as min_count, no scaling)"`
 }
 
 type planInfraOutput struct {
-	PlanID          string   `json:"plan_id"`
-	Services        []string `json:"services"`
-	EstimatedCostMo string   `json:"estimated_cost_monthly"`
-	Summary         string   `json:"summary"`
+	PlanID          string     `json:"plan_id"`
+	Services        []string   `json:"services"`
+	EstimatedCostMo string     `json:"estimated_cost_monthly"`
+	Summary         string     `json:"summary"`
+	// Cost range fields (P1.22): Show min/max costs when auto-scaling is configured.
+	// WHY: When max_count > min_count, costs can vary significantly based on load.
+	CostRange *costRange `json:"cost_range,omitempty"`
+}
+
+// costRange represents the minimum and maximum monthly cost range for auto-scaling deployments.
+// WHY (P1.22): Users need to understand worst-case costs when auto-scaling is configured.
+type costRange struct {
+	MinimumCostMo float64 `json:"minimum_monthly"`
+	MaximumCostMo float64 `json:"maximum_monthly"`
+	Note          string  `json:"note"`
 }
 
 type createInfraInput struct {
@@ -358,9 +373,25 @@ func (p *AWSProvider) planInfra(ctx context.Context, _ *mcp.CallToolRequest, in 
 		return nil, planInfraOutput{}, fmt.Errorf("latency_ms must be a positive integer, got %d", in.LatencyMS)
 	}
 
+	// Apply auto-scaling defaults (P1.22).
+	// WHY: Allow users to specify scaling during planning to see cost range.
+	minCount := in.MinCount
+	if minCount <= 0 {
+		minCount = 1
+	}
+	maxCount := in.MaxCount
+	if maxCount <= 0 {
+		maxCount = minCount // Default: no auto-scaling
+	}
+	if maxCount < minCount {
+		return nil, planInfraOutput{}, fmt.Errorf("max_count (%d) must be >= min_count (%d)", maxCount, minCount)
+	}
+	autoScalingEnabled := maxCount > minCount
+
 	// Select services based on requirements.
 	services := []string{"VPC", "ECS Fargate", "ALB", "CloudWatch Logs"}
-	if in.ExpectedUsers > 1000 {
+	// Add Auto Scaling to services if enabled via parameters OR high expected users.
+	if autoScalingEnabled || in.ExpectedUsers > 1000 {
 		services = append(services, "Auto Scaling")
 	}
 
@@ -414,9 +445,42 @@ func (p *AWSProvider) planInfra(ctx context.Context, _ *mcp.CallToolRequest, in 
 
 	estimatedCost := costEstimate.TotalMonthlyUSD
 
+	// Calculate cost range for auto-scaling (P1.22).
+	// WHY: Users need to understand min/max costs before committing to auto-scaling.
+	var costRangeOutput *costRange
+	var minCostMo, maxCostMo float64
+
+	// Get per-task cost by assuming single task cost = total cost for 1 task.
+	// Subtract fixed infrastructure costs (ALB, NAT Gateway) to get per-task cost.
+	fixedCosts := 35.0 // Approximate: ALB ($20) + NAT Gateway ($15)
+	perTaskCost := estimatedCost - fixedCosts
+	if perTaskCost < 10 {
+		perTaskCost = 10 // Minimum reasonable per-task cost
+	}
+
+	if autoScalingEnabled {
+		minCostMo = fixedCosts + (perTaskCost * float64(minCount))
+		maxCostMo = fixedCosts + (perTaskCost * float64(maxCount))
+		costRangeOutput = &costRange{
+			MinimumCostMo: minCostMo,
+			MaximumCostMo: maxCostMo,
+			Note:          fmt.Sprintf("Range reflects auto scaling from %d to %d tasks", minCount, maxCount),
+		}
+		// Update the single estimate to show range in text.
+		estimatedCost = minCostMo // Use minimum as the base estimate
+	}
+
 	// Check spending limits before creating plan.
+	// WHY: Check against max cost when auto-scaling is enabled to prevent budget overruns.
 	limits, _ := spending.LoadLimits()
-	if estimatedCost > limits.PerDeploymentUSD {
+	costToCheck := estimatedCost
+	if autoScalingEnabled {
+		costToCheck = maxCostMo // Check max cost against limit
+	}
+	if costToCheck > limits.PerDeploymentUSD {
+		if autoScalingEnabled {
+			return nil, planInfraOutput{}, fmt.Errorf("maximum estimated cost $%.2f/mo (at %d tasks) exceeds per-deployment limit of $%.2f", maxCostMo, maxCount, limits.PerDeploymentUSD)
+		}
 		return nil, planInfraOutput{}, fmt.Errorf("estimated cost $%.2f/mo exceeds per-deployment limit of $%.2f", estimatedCost, limits.PerDeploymentUSD)
 	}
 
@@ -443,13 +507,22 @@ func (p *AWSProvider) planInfra(ctx context.Context, _ *mcp.CallToolRequest, in 
 		logging.PlanID(plan.ID),
 		slog.String("app_description", in.AppDescription),
 		logging.Cost(estimatedCost),
-		slog.Bool("using_fallback_pricing", costEstimate.UsingFallback))
+		slog.Bool("using_fallback_pricing", costEstimate.UsingFallback),
+		slog.Bool("auto_scaling_enabled", autoScalingEnabled))
 
 	// Build detailed summary including cost breakdown.
-	summaryBuilder := fmt.Sprintf(
-		"Proposed plan for %q: ECS Fargate in %s, targeting %d users at ≤%dms p99. Estimated cost: $%.2f/mo. Plan ID: %s (expires in 24h).\n\n",
-		in.AppDescription, in.Region, in.ExpectedUsers, in.LatencyMS, estimatedCost, plan.ID,
-	)
+	var summaryBuilder string
+	if autoScalingEnabled {
+		summaryBuilder = fmt.Sprintf(
+			"Proposed plan for %q: ECS Fargate in %s with auto-scaling (%d–%d tasks), targeting %d users at ≤%dms p99. Estimated cost: $%.2f–$%.2f/mo. Plan ID: %s (expires in 24h).\n\n",
+			in.AppDescription, in.Region, minCount, maxCount, in.ExpectedUsers, in.LatencyMS, minCostMo, maxCostMo, plan.ID,
+		)
+	} else {
+		summaryBuilder = fmt.Sprintf(
+			"Proposed plan for %q: ECS Fargate in %s, targeting %d users at ≤%dms p99. Estimated cost: $%.2f/mo. Plan ID: %s (expires in 24h).\n\n",
+			in.AppDescription, in.Region, in.ExpectedUsers, in.LatencyMS, estimatedCost, plan.ID,
+		)
+	}
 	if len(costEstimate.Services) > 0 {
 		summaryBuilder += "Cost breakdown:\n"
 		for _, svc := range costEstimate.Services {
@@ -459,16 +532,28 @@ func (p *AWSProvider) planInfra(ctx context.Context, _ *mcp.CallToolRequest, in 
 		}
 		summaryBuilder += "\n"
 	}
+	if autoScalingEnabled {
+		summaryBuilder += fmt.Sprintf("Auto-scaling range: %d–%d tasks (costs scale with load)\n\n", minCount, maxCount)
+	}
 	if costEstimate.Disclaimer != "" {
 		summaryBuilder += "Note: " + costEstimate.Disclaimer + "\n\n"
 	}
 	summaryBuilder += "⚠️ Review the cost estimate above. Call aws_approve_plan with plan_id and confirmed: true to approve, then aws_create_infra to provision infrastructure."
 
+	// Format estimated cost display.
+	var estimatedCostDisplay string
+	if autoScalingEnabled {
+		estimatedCostDisplay = fmt.Sprintf("$%.2f–$%.2f", minCostMo, maxCostMo)
+	} else {
+		estimatedCostDisplay = fmt.Sprintf("$%.2f", estimatedCost)
+	}
+
 	return nil, planInfraOutput{
 		PlanID:          plan.ID,
 		Services:        services,
-		EstimatedCostMo: fmt.Sprintf("$%.2f", estimatedCost),
+		EstimatedCostMo: estimatedCostDisplay,
 		Summary:         summaryBuilder,
+		CostRange:       costRangeOutput,
 	}, nil
 }
 

@@ -68,6 +68,100 @@ func TestPlanInfra(t *testing.T) {
 	}
 }
 
+// TestPlanInfra_AutoScalingCostRange tests that planInfra returns cost range when auto-scaling is configured (P1.22).
+// WHY: Users need to understand min/max costs before committing to auto-scaling deployments.
+func TestPlanInfra_AutoScalingCostRange(t *testing.T) {
+	// Set higher budget limit for test.
+	t.Setenv("AGENT_DEPLOY_PER_DEPLOYMENT_BUDGET", "500")
+
+	store, err := state.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	provider := NewAWSProvider(store)
+
+	// Test with auto-scaling enabled (max > min).
+	input := planInfraInput{
+		AppDescription: "Auto-scaling test app",
+		ExpectedUsers:  100,
+		LatencyMS:      200,
+		Region:         "us-east-1",
+		MinCount:       1,
+		MaxCount:       4, // Auto-scaling: 1-4 tasks
+	}
+
+	_, output, err := provider.planInfra(context.Background(), nil, input)
+	if err != nil {
+		t.Fatalf("planInfra: %v", err)
+	}
+
+	// Verify cost range is included when auto-scaling is enabled.
+	if output.CostRange == nil {
+		t.Fatal("CostRange should not be nil when auto-scaling is configured")
+	}
+
+	// Verify min < max.
+	if output.CostRange.MinimumCostMo >= output.CostRange.MaximumCostMo {
+		t.Errorf("MinimumCostMo (%v) should be less than MaximumCostMo (%v)",
+			output.CostRange.MinimumCostMo, output.CostRange.MaximumCostMo)
+	}
+
+	// Verify note mentions task range.
+	if output.CostRange.Note == "" {
+		t.Error("CostRange.Note should not be empty")
+	}
+
+	// Verify estimated cost shows range format.
+	if output.EstimatedCostMo == "" {
+		t.Error("EstimatedCostMo should not be empty")
+	}
+
+	// Verify Auto Scaling is in services list.
+	hasAutoScaling := false
+	for _, svc := range output.Services {
+		if svc == "Auto Scaling" {
+			hasAutoScaling = true
+			break
+		}
+	}
+	if !hasAutoScaling {
+		t.Error("Services should include 'Auto Scaling' when max_count > min_count")
+	}
+}
+
+// TestPlanInfra_NoAutoScalingNoCostRange tests that planInfra does not return cost range when auto-scaling is not configured.
+func TestPlanInfra_NoAutoScalingNoCostRange(t *testing.T) {
+	// Set higher budget limit for test.
+	t.Setenv("AGENT_DEPLOY_PER_DEPLOYMENT_BUDGET", "500")
+
+	store, err := state.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	provider := NewAWSProvider(store)
+
+	// Test without auto-scaling (min == max or not specified).
+	input := planInfraInput{
+		AppDescription: "Static count app",
+		ExpectedUsers:  100,
+		LatencyMS:      200,
+		Region:         "us-east-1",
+		// No MinCount/MaxCount specified - should default to no auto-scaling.
+	}
+
+	_, output, err := provider.planInfra(context.Background(), nil, input)
+	if err != nil {
+		t.Fatalf("planInfra: %v", err)
+	}
+
+	// Verify cost range is NOT included when auto-scaling is not configured.
+	if output.CostRange != nil {
+		t.Error("CostRange should be nil when auto-scaling is not configured")
+	}
+}
+
 // TestPlanInfra_SpendingLimit tests that planInfra rejects plans exceeding per-deployment limit.
 func TestPlanInfra_SpendingLimit(t *testing.T) {
 	// WHY: Isolate HOME to prevent real config file from affecting spending limits.

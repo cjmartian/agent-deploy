@@ -2,7 +2,7 @@
 
 **Project Goal:** Natural language deployment of applications via MCP server → Cloud provider. Allow users to end-to-end create applications and make them publicly available while ensuring spend does not cross user-defined boundaries.
 
-**Last Updated:** 2026-03-29  
+**Last Updated:** 2026-03-30  
 **Last Audit:** 2025-07-21 (Comprehensive codebase audit — spec gap analysis, test gap analysis, quality issues verified)
 
 ---
@@ -15,7 +15,6 @@
 | **P1.29** | Custom DNS / Route 53 — **entire spec unimplemented** | `custom-dns.md` | No custom domain support, no Route 53, no ACM auto-provisioning |
 | **P1.9** | VPC CIDR hardcoded to 10.0.0.0/16 | `networking.md` | Cannot customize VPC for peering scenarios |
 | **P1.21** | Per-request spending override missing | `spending-safeguards.md` | Users cannot set deployment-specific budget caps |
-| **P1.22** | Auto-scaling cost range missing in planInfra | `auto-scaling.md` | Cannot predict min/max costs when auto-scaling configured |
 
 ### MEDIUM PRIORITY — Test Gaps (P2)
 | ID | Issue | Impact |
@@ -84,6 +83,12 @@
 - If container fails health check, ECS stops and replaces the task automatically
 - Health check uses same path as ALB health check for consistency
 
+**P1.22 Auto-Scaling Cost Range** | ✅ | `internal/providers/aws.go`
+- Added min_count and max_count parameters to planInfraInput
+- Added CostRange field to planInfraOutput (MinimumCostMo, MaximumCostMo, Note)
+- When max_count > min_count, shows cost range like "$47.23–$188.92"
+- Spending limit check uses max cost when auto-scaling enabled
+
 </details>
 
 ---
@@ -146,16 +151,15 @@
 - [ ] Validate per-request limits do not exceed global limits
 - **Location:** `internal/providers/aws.go` tool inputs
 
-### P1.22 Auto-Scaling Cost Range ❌
+### P1.22 Auto-Scaling Cost Range ✅ COMPLETE
 
-**Spec:** `ralph/specs/auto-scaling.md` section 5  
-**Impact:** Users cannot predict worst-case costs when auto-scaling is configured
+**Status:** Implemented
 
-**Required Work:**
-- [ ] Add `MinEstimatedCostMo` and `MaxEstimatedCostMo` fields to `planInfraOutput`
-- [ ] Calculate min cost = min_count × per-task cost
-- [ ] Calculate max cost = max_count × per-task cost
-- [ ] Show cost range in plan summary when auto-scaling configured
+**Implementation:**
+- [x] Added min_count and max_count parameters to planInfraInput
+- [x] Added CostRange field to planInfraOutput (MinimumCostMo, MaximumCostMo, Note)
+- [x] When max_count > min_count, shows cost range like "$47.23–$188.92"
+- [x] Spending limit check uses max cost when auto-scaling enabled
 - **Location:** `internal/providers/aws.go`
 
 ### P1.28 Container-Level Health Check ✅ COMPLETE
@@ -525,7 +529,7 @@ go tool cover -html=coverage.out          # View coverage report
 | Priority | Count | Items |
 |----------|-------|-------|
 | **P0 Critical** | 0 | *(All P0 issues resolved)* |
-| **P1 Spec Gaps** | 4 | P1.29 (Custom DNS), P1.9 (VPC CIDR), P1.21 (per-request spending), P1.22 (auto-scaling cost range) |
+| **P1 Spec Gaps** | 3 | P1.29 (Custom DNS), P1.9 (VPC CIDR), P1.21 (per-request spending) |
 | **P2 Test Gaps** | 3 | P2.9 (main.go 0%), P2.10 (concurrent access), P2.5 (AWS error scenarios) |
 | **P3 Quality** | 9 | P3.13 (shallow reconciliation), P3.15 (DNS state constants), P3.9 (silent errors), P3.10 (missing error types), P3.11 (non-atomic updates), P3.12 (state transitions), P3.14 (startup handling), P3.16 (missing validations), P3.17 (no Route 53 client) |
 | **P5 Stretch** | 3 | CloudFormation, multi-cloud, secrets |
@@ -577,7 +581,7 @@ go tool cover -html=coverage.out          # View coverage report
 | **spending-safeguards.md** | Per-request spending limit overrides | ❌ NOT IMPLEMENTED — P1.21 |
 | **spending-safeguards.md** | Resource tagging | ✅ Implemented |
 | **auto-scaling.md** | Auto-scaling with target tracking | ✅ IMPLEMENTED — CPU/memory policies, cooldowns, cleanup |
-| **auto-scaling.md** | Cost range in planInfra output (min/max) | ❌ NOT IMPLEMENTED — P1.22 |
+| **auto-scaling.md** | Cost range in planInfra output (min/max) | ✅ IMPLEMENTED |
 | **networking.md** | VPC CIDR configurable | ❌ NOT IMPLEMENTED — hardcoded to 10.0.0.0/16 (P1.9) |
 | **networking.md** | Private subnets with NAT Gateway | ✅ IMPLEMENTED |
 | **ci.md** | CI workflow with lint, test, build jobs | ✅ IMPLEMENTED |
