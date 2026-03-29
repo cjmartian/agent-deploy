@@ -2,7 +2,7 @@
 
 **Project Goal:** Natural language deployment of applications via MCP server → Cloud provider. Allow users to end-to-end create applications and make them publicly available while ensuring spend does not cross user-defined boundaries.
 
-**Last Updated:** 2025-03-29  
+**Last Updated:** 2026-03-29  
 **Last Audit:** 2025-07-21 (Comprehensive codebase audit — spec gap analysis, test gap analysis, quality issues verified)
 
 ---
@@ -16,7 +16,6 @@
 | **P1.9** | VPC CIDR hardcoded to 10.0.0.0/16 | `networking.md` | Cannot customize VPC for peering scenarios |
 | **P1.21** | Per-request spending override missing | `spending-safeguards.md` | Users cannot set deployment-specific budget caps |
 | **P1.22** | Auto-scaling cost range missing in planInfra | `auto-scaling.md` | Cannot predict min/max costs when auto-scaling configured |
-| **P1.28** | Container-level health check missing | — | Unhealthy containers may not be replaced by ECS |
 
 ### MEDIUM PRIORITY — Test Gaps (P2)
 | ID | Issue | Impact |
@@ -75,6 +74,15 @@
 - Added `.goreleaser.yml` and `.github/workflows/release.yml`
 - Updated Makefile, CI workflow, README.md
 - Fixed 2 test isolation bugs in `config_test.go` and `aws_test.go`
+
+**P1.28 Container-Level Health Check** | ✅ | `internal/providers/aws.go`
+- Added container-level health check to ECS task definition
+- Uses curl to check health endpoint (CMD-SHELL healthcheck)
+- Added health_check_grace_period parameter (default: 60s)
+- Container health check interval: 30s, timeout: 5s, retries: 3
+- Health check runs inside ECS container, independent of ALB health checks
+- If container fails health check, ECS stops and replaces the task automatically
+- Health check uses same path as ALB health check for consistency
 
 </details>
 
@@ -150,14 +158,18 @@
 - [ ] Show cost range in plan summary when auto-scaling configured
 - **Location:** `internal/providers/aws.go`
 
-### P1.28 Container-Level Health Check ❌
+### P1.28 Container-Level Health Check ✅ COMPLETE
 
-**Impact:** Unhealthy containers may not be replaced by ECS (only ALB health check exists)
+**Status:** Implemented
 
-**Required Work:**
-- [ ] Add container health check configuration to task definition
-- [ ] Add `health_check_grace_period` parameter
-- [ ] Configure ECS to restart unhealthy containers independent of ALB
+**Implementation:**
+- [x] Added container health check configuration to ECS task definition
+- [x] Added `health_check_grace_period` parameter (default: 60s)
+- [x] Container health check interval: 30s, timeout: 5s, retries: 3
+- [x] Uses CMD-SHELL healthcheck with curl to check health endpoint
+- [x] Health check runs inside ECS container, independent of ALB health checks
+- [x] If container fails health check, ECS stops and replaces the task automatically
+- [x] Health check uses same path as ALB health check for consistency
 - **Location:** `internal/providers/aws.go` task definition
 
 ---
@@ -513,7 +525,7 @@ go tool cover -html=coverage.out          # View coverage report
 | Priority | Count | Items |
 |----------|-------|-------|
 | **P0 Critical** | 0 | *(All P0 issues resolved)* |
-| **P1 Spec Gaps** | 5 | P1.29 (Custom DNS), P1.9 (VPC CIDR), P1.21 (per-request spending), P1.22 (auto-scaling cost range), P1.28 (container health check) |
+| **P1 Spec Gaps** | 4 | P1.29 (Custom DNS), P1.9 (VPC CIDR), P1.21 (per-request spending), P1.22 (auto-scaling cost range) |
 | **P2 Test Gaps** | 3 | P2.9 (main.go 0%), P2.10 (concurrent access), P2.5 (AWS error scenarios) |
 | **P3 Quality** | 9 | P3.13 (shallow reconciliation), P3.15 (DNS state constants), P3.9 (silent errors), P3.10 (missing error types), P3.11 (non-atomic updates), P3.12 (state transitions), P3.14 (startup handling), P3.16 (missing validations), P3.17 (no Route 53 client) |
 | **P5 Stretch** | 3 | CloudFormation, multi-cloud, secrets |

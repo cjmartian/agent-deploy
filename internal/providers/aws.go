@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -161,6 +162,10 @@ type deployInput struct {
 	MaxCount         int `json:"max_count,omitempty"           jsonschema:"maximum task count for auto scaling (default: same as desired_count, no scaling)"`
 	TargetCPUPercent int `json:"target_cpu_percent,omitempty"  jsonschema:"target CPU utilization percentage for scaling (default: 70)"`
 	TargetMemPercent int `json:"target_memory_percent,omitempty" jsonschema:"target memory utilization percentage for scaling (default: 70)"`
+	// Container health check parameters (P1.28).
+	// WHY: ECS container health checks detect unhealthy tasks independently of ALB.
+	// If a container becomes unhealthy, ECS will stop and replace it automatically.
+	HealthCheckGracePeriod int `json:"health_check_grace_period,omitempty" jsonschema:"seconds before ECS starts checking container health (default: 60)"`
 }
 
 type deployOutput struct {
@@ -279,10 +284,10 @@ var validAWSRegions = map[string]bool{
 	"eu-north-1": true, "eu-south-1": true,
 	"ap-northeast-1": true, "ap-northeast-2": true, "ap-northeast-3": true,
 	"ap-southeast-1": true, "ap-southeast-2": true, "ap-south-1": true,
-	"sa-east-1": true,
+	"sa-east-1":    true,
 	"ca-central-1": true,
-	"me-south-1": true,
-	"af-south-1": true,
+	"me-south-1":   true,
+	"af-south-1":   true,
 }
 
 // ValidateAWSRegion checks that the region is a valid AWS region code.
@@ -290,7 +295,7 @@ func ValidateAWSRegion(region string) error {
 	if validAWSRegions[region] {
 		return nil
 	}
-	return fmt.Errorf("invalid AWS region: %q. Use a valid region code like 'us-east-1', 'eu-west-1', etc.", region)
+	return fmt.Errorf("invalid AWS region: %q; use a valid region code like 'us-east-1', 'eu-west-1', etc", region)
 }
 
 // ValidateDesiredCount checks that the desired task count is reasonable.
@@ -741,20 +746,20 @@ func (p *AWSProvider) deploy(ctx context.Context, _ *mcp.CallToolRequest, in dep
 	}
 
 	// Validate all input parameters (per spec ralph/specs/deploy-configuration.md).
-	if err := ValidateContainerPort(containerPort); err != nil {
-		return nil, deployOutput{}, err
+	if valErr := ValidateContainerPort(containerPort); valErr != nil {
+		return nil, deployOutput{}, valErr
 	}
-	if err := ValidateHealthCheckPath(healthCheckPath); err != nil {
-		return nil, deployOutput{}, err
+	if valErr := ValidateHealthCheckPath(healthCheckPath); valErr != nil {
+		return nil, deployOutput{}, valErr
 	}
-	if err := ValidateDesiredCount(desiredCount); err != nil {
-		return nil, deployOutput{}, err
+	if valErr := ValidateDesiredCount(desiredCount); valErr != nil {
+		return nil, deployOutput{}, valErr
 	}
-	if err := ValidateFargateResources(cpu, memory); err != nil {
-		return nil, deployOutput{}, err
+	if valErr := ValidateFargateResources(cpu, memory); valErr != nil {
+		return nil, deployOutput{}, valErr
 	}
-	if err := ValidateEnvironmentVariables(in.Environment); err != nil {
-		return nil, deployOutput{}, err
+	if valErr := ValidateEnvironmentVariables(in.Environment); valErr != nil {
+		return nil, deployOutput{}, valErr
 	}
 
 	// Auto-scaling defaults (per spec ralph/specs/auto-scaling.md).
@@ -776,8 +781,8 @@ func (p *AWSProvider) deploy(ctx context.Context, _ *mcp.CallToolRequest, in dep
 	}
 
 	// Validate auto-scaling parameters.
-	if err := validateAutoScalingParams(minCount, maxCount, targetCPU, targetMem); err != nil {
-		return nil, deployOutput{}, err
+	if valErr := validateAutoScalingParams(minCount, maxCount, targetCPU, targetMem); valErr != nil {
+		return nil, deployOutput{}, valErr
 	}
 
 	// Load AWS config.
@@ -831,7 +836,9 @@ func (p *AWSProvider) deploy(ctx context.Context, _ *mcp.CallToolRequest, in dep
 	}
 
 	// Create ECS task definition.
-	taskDefARN, err := p.createTaskDefinition(ctx, cfg, infra, imageForTask, deployID, containerPort, in.Environment, in.CPU, in.Memory)
+	// WHY (P1.28): Container health check runs inside ECS, independent of ALB health checks.
+	// If a container fails its health check, ECS replaces it even if ALB doesn't detect the issue.
+	taskDefARN, err := p.createTaskDefinition(ctx, cfg, infra, imageForTask, deployID, containerPort, in.Environment, in.CPU, in.Memory, healthCheckPath, in.HealthCheckGracePeriod)
 	if err != nil {
 		if statusErr := p.store.UpdateDeploymentStatus(deployID, state.DeploymentStatusFailed, nil); statusErr != nil {
 			slog.Error("failed to update deployment status", "deployID", deployID, "error", statusErr)
@@ -991,11 +998,7 @@ func (p *AWSProvider) teardown(ctx context.Context, _ *mcp.CallToolRequest, in t
 	clusterName := extractClusterName(infra.Resources[state.ResourceECSCluster])
 	serviceName := extractServiceName(deployment.ServiceARN)
 	if clusterName != "" && serviceName != "" {
-		if err := p.deleteAutoScaling(ctx, cfg, clusterName, serviceName, in.DeploymentID); err != nil {
-			slog.Warn("failed to delete auto-scaling",
-				slog.String("component", "aws_teardown"),
-				logging.Err(err))
-		}
+		p.deleteAutoScaling(ctx, cfg, clusterName, serviceName, in.DeploymentID)
 	}
 
 	// Delete ECS service.
@@ -1147,7 +1150,7 @@ func (p *AWSProvider) provisionVPC(ctx context.Context, cfg aws.Config, infra *s
 		az := *azResp.AvailabilityZones[i].ZoneName
 		cidr := fmt.Sprintf("10.0.%d.0/24", i+1)
 
-		subnetResp, err := ec2Client.CreateSubnet(ctx, &ec2.CreateSubnetInput{
+		subnetResp, subnetErr := ec2Client.CreateSubnet(ctx, &ec2.CreateSubnetInput{
 			VpcId:            aws.String(vpcID),
 			CidrBlock:        aws.String(cidr),
 			AvailabilityZone: aws.String(az),
@@ -1156,18 +1159,18 @@ func (p *AWSProvider) provisionVPC(ctx context.Context, cfg aws.Config, infra *s
 				Tags:         mapToEC2Tags(mergeTags(tags, map[string]string{"Name": fmt.Sprintf("agent-deploy-public-%d", i+1)})),
 			}},
 		})
-		if err != nil {
-			return fmt.Errorf("create public subnet %d: %w", i, err)
+		if subnetErr != nil {
+			return fmt.Errorf("create public subnet %d: %w", i, subnetErr)
 		}
 		publicSubnetIDs = append(publicSubnetIDs, *subnetResp.Subnet.SubnetId)
 
 		// Enable auto-assign public IP for public subnets.
-		_, err = ec2Client.ModifySubnetAttribute(ctx, &ec2.ModifySubnetAttributeInput{
+		_, subnetErr = ec2Client.ModifySubnetAttribute(ctx, &ec2.ModifySubnetAttributeInput{
 			SubnetId:            subnetResp.Subnet.SubnetId,
 			MapPublicIpOnLaunch: &ec2types.AttributeBooleanValue{Value: aws.Bool(true)},
 		})
-		if err != nil {
-			return fmt.Errorf("enable public IP for public subnet %d: %w", i, err)
+		if subnetErr != nil {
+			return fmt.Errorf("enable public IP for public subnet %d: %w", i, subnetErr)
 		}
 	}
 	publicSubnetsStr := publicSubnetIDs[0] + "," + publicSubnetIDs[1]
@@ -1182,7 +1185,7 @@ func (p *AWSProvider) provisionVPC(ctx context.Context, cfg aws.Config, infra *s
 		az := *azResp.AvailabilityZones[i].ZoneName
 		cidr := fmt.Sprintf("10.0.%d.0/24", i+10) // 10.0.10.0/24 and 10.0.11.0/24
 
-		subnetResp, err := ec2Client.CreateSubnet(ctx, &ec2.CreateSubnetInput{
+		subnetResp, subnetErr := ec2Client.CreateSubnet(ctx, &ec2.CreateSubnetInput{
 			VpcId:            aws.String(vpcID),
 			CidrBlock:        aws.String(cidr),
 			AvailabilityZone: aws.String(az),
@@ -1191,8 +1194,8 @@ func (p *AWSProvider) provisionVPC(ctx context.Context, cfg aws.Config, infra *s
 				Tags:         mapToEC2Tags(mergeTags(tags, map[string]string{"Name": fmt.Sprintf("agent-deploy-private-%d", i+1)})),
 			}},
 		})
-		if err != nil {
-			return fmt.Errorf("create private subnet %d: %w", i, err)
+		if subnetErr != nil {
+			return fmt.Errorf("create private subnet %d: %w", i, subnetErr)
 		}
 		privateSubnetIDs = append(privateSubnetIDs, *subnetResp.Subnet.SubnetId)
 		// Private subnets do NOT get auto-assign public IP.
@@ -1746,7 +1749,7 @@ func (p *AWSProvider) ensureECRRepository(ctx context.Context, cfg aws.Config, i
 	return nil
 }
 
-func (p *AWSProvider) createTaskDefinition(ctx context.Context, cfg aws.Config, infra *state.Infrastructure, imageRef, deployID string, containerPort int, environment map[string]string, cpu, memory string) (string, error) {
+func (p *AWSProvider) createTaskDefinition(ctx context.Context, cfg aws.Config, infra *state.Infrastructure, imageRef, deployID string, containerPort int, environment map[string]string, cpu, memory, healthCheckPath string, healthCheckGracePeriod int) (string, error) {
 	clients := p.getClients(cfg)
 	ecsClient := clients.ECS
 
@@ -1783,6 +1786,17 @@ func (p *AWSProvider) createTaskDefinition(ctx context.Context, cfg aws.Config, 
 		memory = "512"
 	}
 
+	// Default health check path if not specified.
+	if healthCheckPath == "" {
+		healthCheckPath = "/"
+	}
+
+	// Default health check grace period if not specified.
+	// WHY: Give containers time to start before health checks begin failing them.
+	if healthCheckGracePeriod <= 0 {
+		healthCheckGracePeriod = 60
+	}
+
 	// Build environment variables for the container.
 	envVars := make([]ecstypes.KeyValuePair, 0, len(environment))
 	for k, v := range environment {
@@ -1790,6 +1804,21 @@ func (p *AWSProvider) createTaskDefinition(ctx context.Context, cfg aws.Config, 
 			Name:  aws.String(k),
 			Value: aws.String(v),
 		})
+	}
+
+	// WHY (P1.28): Container-level health check runs inside the task, independent of ALB.
+	// ECS will mark the container as unhealthy and stop/replace the task if health check fails.
+	// This catches issues that ALB health checks might miss (e.g., internal deadlocks, memory issues).
+	// Using curl to check the health endpoint; wget is an alternative if curl isn't available.
+	containerHealthCheck := &ecstypes.HealthCheck{
+		Command: []string{
+			"CMD-SHELL",
+			fmt.Sprintf("curl -f http://localhost:%d%s || exit 1", containerPort, healthCheckPath),
+		},
+		Interval:    aws.Int32(30),                              // Check every 30 seconds
+		Timeout:     aws.Int32(5),                               // Timeout after 5 seconds
+		Retries:     aws.Int32(3),                               // Mark unhealthy after 3 consecutive failures
+		StartPeriod: aws.Int32(int32(healthCheckGracePeriod)),   // Grace period before checks start
 	}
 
 	resp, err := ecsClient.RegisterTaskDefinition(ctx, &ecs.RegisterTaskDefinitionInput{
@@ -1804,6 +1833,7 @@ func (p *AWSProvider) createTaskDefinition(ctx context.Context, cfg aws.Config, 
 			Image:       aws.String(image),
 			Essential:   aws.Bool(true),
 			Environment: envVars,
+			HealthCheck: containerHealthCheck,
 			PortMappings: []ecstypes.PortMapping{{
 				ContainerPort: aws.Int32(int32(containerPort)),
 				Protocol:      ecstypes.TransportProtocolTcp,
@@ -1826,7 +1856,9 @@ func (p *AWSProvider) createTaskDefinition(ctx context.Context, cfg aws.Config, 
 	slog.Info("task definition created",
 		slog.String("component", "createTaskDefinition"),
 		slog.String("task_def_arn", taskDefARN),
-		slog.String("log_group_name", logGroupName))
+		slog.String("log_group_name", logGroupName),
+		slog.String("health_check_path", healthCheckPath),
+		slog.Int("health_check_grace_period", healthCheckGracePeriod))
 	return taskDefARN, nil
 }
 
@@ -2672,7 +2704,7 @@ func (p *AWSProvider) configureAutoScaling(ctx context.Context, cfg aws.Config, 
 
 // deleteAutoScaling removes scaling policies and deregisters the scalable target.
 // Per spec ralph/specs/auto-scaling.md: must be called BEFORE deleting ECS service.
-func (p *AWSProvider) deleteAutoScaling(ctx context.Context, cfg aws.Config, clusterName, serviceName, deployID string) error {
+func (p *AWSProvider) deleteAutoScaling(ctx context.Context, cfg aws.Config, clusterName, serviceName, deployID string) {
 	clients := p.getClients(cfg)
 	asClient := clients.AutoScaling
 
@@ -2719,8 +2751,6 @@ func (p *AWSProvider) deleteAutoScaling(ctx context.Context, cfg aws.Config, clu
 			slog.String("component", "deleteAutoScaling"),
 			logging.Err(err))
 	}
-
-	return nil
 }
 
 // getScalingInfo retrieves current auto-scaling configuration for status reporting.
@@ -3084,7 +3114,7 @@ func (p *AWSProvider) pushImageToECR(
 	if err != nil {
 		return "", fmt.Errorf("failed to create Docker client - is Docker daemon running? %w", err)
 	}
-	defer dockerCli.Close()
+	defer func() { _ = dockerCli.Close() }()
 
 	// Step 5: Tag the local image with the ECR URI.
 	if err = dockerCli.ImageTag(ctx, imageRef, ecrImageURI); err != nil {
@@ -3115,7 +3145,7 @@ func (p *AWSProvider) pushImageToECR(
 	if err != nil {
 		return "", fmt.Errorf("failed to push image to ECR: %w", err)
 	}
-	defer pushResp.Close()
+	defer func() { _ = pushResp.Close() }()
 
 	// Step 8: Read the push response stream to check for errors.
 	// The Docker API returns JSON messages in the stream.
@@ -3129,7 +3159,7 @@ func (p *AWSProvider) pushImageToECR(
 	for {
 		var msg pushMessage
 		if err = decoder.Decode(&msg); err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			return "", fmt.Errorf("failed to read push response: %w", err)
