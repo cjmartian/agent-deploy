@@ -1,0 +1,44 @@
+P3.21 FIX & P2.9 PARTIAL - Session 2026-03-29
+
+## P3.21 Cleanup Service Race Condition — FIXED
+
+### Problem
+- cleanup.go:78-96 had race condition
+- Lock released between checking 'running' flag and closing 'stopCh'
+- Concurrent Stop() calls could both pass the check before either closes channel
+- Second close would panic
+
+### Solution
+- Added 'stopOnce sync.Once' field to CleanupService struct
+- Modified Stop() to use stopOnce.Do() for channel close
+- Modified Start() to reset stopOnce for new run cycles
+- Captured channel references while holding lock before releasing
+
+### Files Changed
+- internal/state/cleanup.go: Added stopOnce field, modified Start/Stop
+- internal/state/cleanup_test.go: Added TestCleanupService_ConcurrentStop
+
+## P2.9 main.go Tests — PARTIAL
+
+### Challenge
+main() function is difficult to test directly because:
+- Runs forever with signal handling
+- Calls flag.Parse() at global scope
+- Uses os.Exit indirectly
+
+### Solution
+Added tests for all components used by main():
+- TestVersion: Version constant validation
+- TestFlagDefaults: CLI flag defaults verification
+- TestLoggingInitialization: Logging config with various levels/formats
+- TestStateStoreInitialization: State store creation
+- TestCleanupServiceIntegration: Full cleanup service cycle
+- TestProvidersWithStore: Provider creation with store
+- TestAWSProviderRetrieval: GetAWSProvider function
+- TestMCPServerCreation: MCP server with options
+- TestEnvironmentVariableConfiguration: Env var handling
+
+### Coverage Result
+- Total: 50.1% (meets 50% target)
+- main.go: 0% (direct function testing remains challenging)
+- All tests pass with -race flag
