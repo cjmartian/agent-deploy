@@ -1,0 +1,36 @@
+P3.24 FIXED - Exponential Backoff for Certificate Validation
+
+## Problem
+aws.go:3661 polled with fixed 2s/5s delays in loops
+- Could overload API during high latency periods
+- No jitter = thundering herd with multiple certs
+
+## Solution
+Added backoffWithJitter() helper function:
+
+func backoffWithJitter(baseDelay, attempt, maxDelay) time.Duration
+- Exponential growth: delay = baseDelay * 2^attempt
+- Jitter: ±25% randomness
+- Caps at maxDelay
+
+### Certificate Validation Options (Step 2)
+- Base: 1s, Max: 15s, 15 attempts
+- Covers ~2 minutes total
+- Replaces: fixed 2s × 30 attempts
+
+### Certificate Issuance (Step 4)
+- Base: 5s, Max: 30s, 20 attempts
+- Covers ~5 minutes total
+- Replaces: fixed 5s × 60 attempts
+
+## Tests Added
+TestBackoffWithJitter with 4 subtests:
+1. exponential_growth - verifies 2^n growth
+2. respects_max_delay - verifies cap
+3. jitter_provides_variance - verifies randomness
+4. minimum_delay_maintained - verifies floor
+
+## Benefits
+- Reduced API load (fewer calls overall)
+- Better resilience during slow periods
+- Prevents synchronized polling (jitter)
