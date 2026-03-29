@@ -1,0 +1,27 @@
+P1.22 Auto-Scaling Cost Range Implementation Notes:
+
+Implementation completed: 2026-03-29
+
+Changes:
+- internal/providers/aws.go:
+  - Added MinCount and MaxCount to planInfraInput struct
+  - Added costRange struct with MinimumCostMo, MaximumCostMo, Note
+  - Added CostRange field to planInfraOutput (populated when maxCount > minCount)
+  - Cost calculation: fixedCosts + (perTaskCost * taskCount) for min/max
+  - Spending limit check uses max cost when auto-scaling enabled
+  - Summary shows range format: '$X.XX–$Y.YY/mo'
+
+- internal/providers/aws_test.go:
+  - TestPlanInfra_AutoScalingCostRange: verifies cost range with auto-scaling
+  - TestPlanInfra_NoAutoScalingNoCostRange: verifies no range without scaling
+
+Key decisions:
+- Cost range only shown when max_count > min_count (auto-scaling actually enabled)
+- Fixed costs (ALB, NAT) estimated at $35/mo and not scaled
+- Per-task costs scaled by min/max count
+- Spending limit checked against max cost to prevent budget surprises
+
+Integration with existing auto-scaling:
+- Auto-scaling parameters at deploy time (min_count, max_count) are separate
+- Plan-time parameters let users estimate costs before committing
+- Plan can specify different scaling than deploy (deploy overrides)
