@@ -18,6 +18,7 @@ func TestMocksImplementInterfaces(t *testing.T) {
 	var _ CloudWatchLogsAPI = (*mocks.CloudWatchLogsMock)(nil)
 	var _ AutoScalingAPI = (*mocks.AutoScalingMock)(nil)
 	var _ ACMAPI = (*mocks.ACMMock)(nil)
+	var _ Route53API = (*mocks.Route53Mock)(nil)
 }
 
 // TestAWSClientsStruct verifies the AWSClients struct can hold all interfaces.
@@ -31,6 +32,7 @@ func TestAWSClientsStruct(t *testing.T) {
 		CloudWatchLogs: &mocks.CloudWatchLogsMock{},
 		AutoScaling:    &mocks.AutoScalingMock{},
 		ACM:            &mocks.ACMMock{},
+		Route53:        &mocks.Route53Mock{},
 	}
 
 	// Verify all fields are non-nil
@@ -57,5 +59,8 @@ func TestAWSClientsStruct(t *testing.T) {
 	}
 	if clients.ACM == nil {
 		t.Error("ACM client is nil")
+	}
+	if clients.Route53 == nil {
+		t.Error("Route53 client is nil")
 	}
 }

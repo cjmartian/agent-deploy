@@ -98,9 +98,13 @@ func (m *AutoScalingMock) DescribeScalingPolicies(ctx context.Context, params *a
 
 // ACMMock is a mock implementation of awsclient.ACMAPI for testing.
 type ACMMock struct {
-	DescribeCertificateFunc func(ctx context.Context, params *acm.DescribeCertificateInput, optFns ...func(*acm.Options)) (*acm.DescribeCertificateOutput, error)
+	DescribeCertificateFunc  func(ctx context.Context, params *acm.DescribeCertificateInput, optFns ...func(*acm.Options)) (*acm.DescribeCertificateOutput, error)
+	RequestCertificateFunc   func(ctx context.Context, params *acm.RequestCertificateInput, optFns ...func(*acm.Options)) (*acm.RequestCertificateOutput, error)
+	DeleteCertificateFunc    func(ctx context.Context, params *acm.DeleteCertificateInput, optFns ...func(*acm.Options)) (*acm.DeleteCertificateOutput, error)
 
 	DescribeCertificateCalls int
+	RequestCertificateCalls  int
+	DeleteCertificateCalls   int
 }
 
 func (m *ACMMock) DescribeCertificate(ctx context.Context, params *acm.DescribeCertificateInput, optFns ...func(*acm.Options)) (*acm.DescribeCertificateOutput, error) {
@@ -115,4 +119,22 @@ func (m *ACMMock) DescribeCertificate(ctx context.Context, params *acm.DescribeC
 			DomainName:     aws.String("example.com"),
 		},
 	}, nil
+}
+
+func (m *ACMMock) RequestCertificate(ctx context.Context, params *acm.RequestCertificateInput, optFns ...func(*acm.Options)) (*acm.RequestCertificateOutput, error) {
+	m.RequestCertificateCalls++
+	if m.RequestCertificateFunc != nil {
+		return m.RequestCertificateFunc(ctx, params, optFns...)
+	}
+	return &acm.RequestCertificateOutput{
+		CertificateArn: aws.String("arn:aws:acm:us-east-1:123456789012:certificate/mock-cert-id"),
+	}, nil
+}
+
+func (m *ACMMock) DeleteCertificate(ctx context.Context, params *acm.DeleteCertificateInput, optFns ...func(*acm.Options)) (*acm.DeleteCertificateOutput, error) {
+	m.DeleteCertificateCalls++
+	if m.DeleteCertificateFunc != nil {
+		return m.DeleteCertificateFunc(ctx, params, optFns...)
+	}
+	return &acm.DeleteCertificateOutput{}, nil
 }

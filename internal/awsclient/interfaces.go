@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
 	"github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
+	"github.com/aws/aws-sdk-go-v2/service/route53"
 )
 
 // EC2API defines the EC2 API methods used by agent-deploy.
@@ -136,6 +137,15 @@ type AutoScalingAPI interface {
 // ACMAPI defines the ACM API methods used by agent-deploy.
 type ACMAPI interface {
 	DescribeCertificate(ctx context.Context, params *acm.DescribeCertificateInput, optFns ...func(*acm.Options)) (*acm.DescribeCertificateOutput, error)
+	RequestCertificate(ctx context.Context, params *acm.RequestCertificateInput, optFns ...func(*acm.Options)) (*acm.RequestCertificateOutput, error)
+	DeleteCertificate(ctx context.Context, params *acm.DeleteCertificateInput, optFns ...func(*acm.Options)) (*acm.DeleteCertificateOutput, error)
+}
+
+// Route53API defines the Route 53 API methods used by agent-deploy for custom DNS (P1.29).
+type Route53API interface {
+	ListHostedZonesByName(ctx context.Context, params *route53.ListHostedZonesByNameInput, optFns ...func(*route53.Options)) (*route53.ListHostedZonesByNameOutput, error)
+	ChangeResourceRecordSets(ctx context.Context, params *route53.ChangeResourceRecordSetsInput, optFns ...func(*route53.Options)) (*route53.ChangeResourceRecordSetsOutput, error)
+	GetChange(ctx context.Context, params *route53.GetChangeInput, optFns ...func(*route53.Options)) (*route53.GetChangeOutput, error)
 }
 
 // AWSClients holds all AWS service clients used by the provider.
@@ -149,4 +159,5 @@ type AWSClients struct {
 	CloudWatchLogs CloudWatchLogsAPI
 	AutoScaling    AutoScalingAPI
 	ACM            ACMAPI
+	Route53        Route53API
 }

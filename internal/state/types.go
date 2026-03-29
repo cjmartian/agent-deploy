@@ -19,6 +19,9 @@ type Plan struct {
 	// VpcCIDR is the VPC CIDR block to use (P1.9). Empty means use default 10.0.0.0/16.
 	// WHY: Allow custom VPC CIDRs for VPC peering scenarios.
 	VpcCIDR string `json:"vpc_cidr,omitempty"`
+	// DomainName is the custom domain name for the deployment (P1.29). Empty means ALB DNS only.
+	// WHY: Custom domains provide user-friendly URLs instead of ALB-generated names.
+	DomainName string `json:"domain_name,omitempty"`
 }
 
 // PlanStatus constants.
@@ -68,6 +71,11 @@ const (
 	ResourceExecutionRole     = "execution_role"
 	ResourceTLSEnabled        = "tls_enabled"      // "true" or "false" - whether HTTPS is configured
 	ResourceCertificateARN    = "certificate_arn"  // ACM certificate ARN when TLS is enabled
+	// Custom DNS resources (P1.29).
+	ResourceDomainName      = "domain_name"       // Custom domain name (e.g. "app.example.com")
+	ResourceHostedZoneID    = "hosted_zone_id"    // Route 53 hosted zone ID
+	ResourceCertAutoCreated = "cert_auto_created" // "true" if ACM cert was auto-provisioned
+	ResourceDNSRecordName   = "dns_record_name"   // The A record created in Route 53
 )
 
 // Deployment represents an application deployed onto infrastructure.

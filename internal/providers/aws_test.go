@@ -2740,3 +2740,175 @@ func TestPlanInfra_VpcCIDR(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateDomainName tests domain name validation for P1.29.
+func TestValidateDomainName(t *testing.T) {
+	tests := []struct {
+		name    string
+		domain  string
+		wantErr bool
+	}{
+		{
+			name:    "valid_subdomain",
+			domain:  "app.example.com",
+			wantErr: false,
+		},
+		{
+			name:    "valid_deep_subdomain",
+			domain:  "staging.app.example.com",
+			wantErr: false,
+		},
+		{
+			name:    "valid_apex",
+			domain:  "example.com",
+			wantErr: false,
+		},
+		{
+			name:    "valid_with_hyphens",
+			domain:  "my-app.example-domain.com",
+			wantErr: false,
+		},
+		{
+			name:    "empty_allowed",
+			domain:  "",
+			wantErr: false,
+		},
+		{
+			name:    "invalid_single_label",
+			domain:  "localhost",
+			wantErr: true,
+		},
+		{
+			name:    "invalid_starts_with_hyphen",
+			domain:  "-app.example.com",
+			wantErr: true,
+		},
+		{
+			name:    "invalid_ends_with_hyphen",
+			domain:  "app-.example.com",
+			wantErr: true,
+		},
+		{
+			name:    "invalid_special_chars",
+			domain:  "app_test.example.com",
+			wantErr: true,
+		},
+		{
+			name:    "invalid_too_long",
+			domain:  strings.Repeat("a", 260) + ".com",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateDomainName(tt.domain)
+			if tt.wantErr && err == nil {
+				t.Errorf("ValidateDomainName(%q) expected error, got nil", tt.domain)
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("ValidateDomainName(%q) unexpected error: %v", tt.domain, err)
+			}
+		})
+	}
+}
+
+// TestExtractParentDomain tests parent domain extraction for P1.29.
+func TestExtractParentDomain(t *testing.T) {
+	tests := []struct {
+		domain     string
+		wantParent string
+	}{
+		{"app.example.com", "example.com"},
+		{"staging.app.example.com", "app.example.com"},
+		{"example.com", "example.com"},
+		{"a.b.c.d.com", "b.c.d.com"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.domain, func(t *testing.T) {
+			got := extractParentDomain(tt.domain)
+			if got != tt.wantParent {
+				t.Errorf("extractParentDomain(%q) = %q, want %q", tt.domain, got, tt.wantParent)
+			}
+		})
+	}
+}
+
+// TestPlanInfra_DomainName tests custom domain name in plan infra (P1.29).
+func TestPlanInfra_DomainName(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("AGENT_DEPLOY_PER_DEPLOYMENT_BUDGET", "100")
+
+	store, err := state.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	provider := NewAWSProvider(store)
+
+	tests := []struct {
+		name           string
+		domainName     string
+		wantDomainName string
+		wantErr        bool
+		wantErrMatch   string
+	}{
+		{
+			name:           "no_domain_by_default",
+			domainName:     "",
+			wantDomainName: "",
+		},
+		{
+			name:           "custom_domain_stored",
+			domainName:     "app.example.com",
+			wantDomainName: "app.example.com",
+		},
+		{
+			name:         "invalid_domain_rejected",
+			domainName:   "invalid",
+			wantErr:      true,
+			wantErrMatch: "at least a subdomain and TLD",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := planInfraInput{
+				AppDescription: "test app",
+				ExpectedUsers:  100,
+				LatencyMS:      200,
+				Region:         "us-east-1",
+				DomainName:     tt.domainName,
+			}
+
+			_, output, err := provider.planInfra(context.Background(), nil, input)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if tt.wantErrMatch != "" && !strings.Contains(err.Error(), tt.wantErrMatch) {
+					t.Errorf("error %q should contain %q", err.Error(), tt.wantErrMatch)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("planInfra: %v", err)
+			}
+
+			// Verify plan has correct domain name stored.
+			plan, err := store.GetPlan(output.PlanID)
+			if err != nil {
+				t.Fatalf("GetPlan: %v", err)
+			}
+			if plan.DomainName != tt.wantDomainName {
+				t.Errorf("Plan.DomainName = %q, want %q", plan.DomainName, tt.wantDomainName)
+			}
+
+			// Verify output has custom domain if configured.
+			if tt.wantDomainName != "" && output.CustomDomain != tt.wantDomainName {
+				t.Errorf("Output.CustomDomain = %q, want %q", output.CustomDomain, tt.wantDomainName)
+			}
+		})
+	}
+}
