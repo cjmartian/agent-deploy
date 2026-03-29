@@ -1,0 +1,36 @@
+P1.33 FIX SESSION - DNS Deletion
+
+## Problem
+Route 53 alias record deletion was using:
+- Hardcoded placeholder: 'dualstack.placeholder.elb.amazonaws.com'
+- Hardcoded zone ID: 'Z35SXDOTRQ7X7K' (us-east-1 only)
+
+## Root Cause
+ALB DNS name and hosted zone ID were retrieved during DNS record creation
+but never persisted to infrastructure state. Deletion had no way to know
+the actual values needed for Route 53 API call.
+
+## Solution
+1. Added state constants (types.go):
+   - ResourceALBDNSName = 'alb_dns_name'
+   - ResourceALBHostedZoneID = 'alb_hosted_zone_id'
+
+2. Store during creation (aws.go:3783-3792):
+   - Save ALB DNS name to infra.Resources
+   - Save ALB hosted zone ID to infra.Resources
+
+3. Use during deletion (aws.go:3811-3852):
+   - Retrieve stored values instead of placeholder
+   - Added condition: only delete if all 4 values present
+   - Added warning for older deployments missing data
+
+## Region Support
+Now works in all AWS regions. Each region has different ALB hosted zone IDs:
+- us-east-1: Z35SXDOTRQ7X7K
+- us-west-2: Z1H1FL5HABSF5
+- eu-west-1: Z32O12XQLNTSW2
+(etc.)
+
+## Tests Added
+- TestResourceDNSConstants: verifies constant values
+- TestInfraResources_ALBDNSData: verifies storage pattern
