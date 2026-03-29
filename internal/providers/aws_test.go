@@ -2977,3 +2977,215 @@ func TestPlanInfra_DomainName(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateID tests the ID format validation (P1.31).
+func TestValidateID(t *testing.T) {
+	tests := []struct {
+		name   string
+		id     string
+		prefix string
+		want   string // empty = no error
+	}{
+		// Valid ULID format
+		{name: "valid plan ULID", id: "plan-01HX0F2H6GZRFB5SDQVYA5TQGM", prefix: "plan", want: ""},
+		{name: "valid infra ULID", id: "infra-01HX0F2H6GZRFB5SDQVYA5TQGM", prefix: "infra", want: ""},
+		{name: "valid deploy ULID", id: "deploy-01HX0F2H6GZRFB5SDQVYA5TQGM", prefix: "deploy", want: ""},
+		// Legacy format (backwards compatibility)
+		{name: "valid legacy plan", id: "plan-test-001", prefix: "plan", want: ""},
+		{name: "valid legacy infra", id: "infra-test-123", prefix: "infra", want: ""},
+		{name: "valid legacy deploy", id: "deploy-abc-xyz", prefix: "deploy", want: ""},
+		// Invalid cases
+		{name: "empty ID", id: "", prefix: "plan", want: "cannot be empty"},
+		{name: "wrong prefix", id: "infra-01HX0F2H6G", prefix: "plan", want: "Must start with"},
+		{name: "missing prefix", id: "01HX0F2H6GZRFB5SDQVYA5TQGM", prefix: "plan", want: "Must start with"},
+		{name: "special chars in ID", id: "plan-test@#$", prefix: "plan", want: "invalid characters"},
+		{name: "missing ID part", id: "plan-", prefix: "plan", want: "Missing ID portion"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateID(tt.id, tt.prefix)
+			if tt.want == "" {
+				if err != nil {
+					t.Errorf("ValidateID(%q, %q) = %v, want nil", tt.id, tt.prefix, err)
+				}
+			} else {
+				if err == nil {
+					t.Errorf("ValidateID(%q, %q) = nil, want error containing %q", tt.id, tt.prefix, tt.want)
+				} else if !strings.Contains(err.Error(), tt.want) {
+					t.Errorf("ValidateID(%q, %q) = %q, want error containing %q", tt.id, tt.prefix, err.Error(), tt.want)
+				}
+			}
+		})
+	}
+}
+
+// TestValidateImageRef tests the Docker image reference validation (P1.31).
+func TestValidateImageRef(t *testing.T) {
+	tests := []struct {
+		name string
+		ref  string
+		want string // empty = no error
+	}{
+		// Valid image references
+		{name: "simple image", ref: "nginx", want: ""},
+		{name: "image with tag", ref: "nginx:latest", want: ""},
+		{name: "image with version", ref: "nginx:1.21", want: ""},
+		{name: "user/repo", ref: "myuser/myapp", want: ""},
+		{name: "user/repo:tag", ref: "myuser/myapp:v1.0", want: ""},
+		{name: "registry/user/repo", ref: "ghcr.io/myuser/myapp:latest", want: ""},
+		{name: "ECR reference", ref: "123456789012.dkr.ecr.us-east-1.amazonaws.com/myrepo:tag", want: ""},
+		{name: "digest reference", ref: "nginx@sha256:abc123def456", want: ""},
+		{name: "localhost registry", ref: "localhost:5000/myapp:dev", want: ""},
+		// Invalid image references
+		{name: "empty", ref: "", want: "cannot be empty"},
+		{name: "spaces", ref: "my app", want: "invalid"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateImageRef(tt.ref)
+			if tt.want == "" {
+				if err != nil {
+					t.Errorf("ValidateImageRef(%q) = %v, want nil", tt.ref, err)
+				}
+			} else {
+				if err == nil {
+					t.Errorf("ValidateImageRef(%q) = nil, want error containing %q", tt.ref, tt.want)
+				} else if !strings.Contains(err.Error(), tt.want) {
+					t.Errorf("ValidateImageRef(%q) = %q, want error containing %q", tt.ref, err.Error(), tt.want)
+				}
+			}
+		})
+	}
+}
+
+// TestValidateAppDescription tests the app description length validation (P1.31).
+func TestValidateAppDescription(t *testing.T) {
+	tests := []struct {
+		name string
+		desc string
+		want string // empty = no error
+	}{
+		{name: "short description", desc: "My app", want: ""},
+		{name: "1024 chars", desc: strings.Repeat("a", 1024), want: ""},
+		{name: "1025 chars", desc: strings.Repeat("a", 1025), want: "too long"},
+		{name: "very long", desc: strings.Repeat("a", 5000), want: "too long"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateAppDescription(tt.desc)
+			if tt.want == "" {
+				if err != nil {
+					t.Errorf("ValidateAppDescription() = %v, want nil", err)
+				}
+			} else {
+				if err == nil {
+					t.Errorf("ValidateAppDescription() = nil, want error containing %q", tt.want)
+				} else if !strings.Contains(err.Error(), tt.want) {
+					t.Errorf("ValidateAppDescription() = %q, want error containing %q", err.Error(), tt.want)
+				}
+			}
+		})
+	}
+}
+
+// TestValidateExpectedUsers tests the expected users validation (P1.31).
+func TestValidateExpectedUsers(t *testing.T) {
+	tests := []struct {
+		name  string
+		users int
+		want  string // empty = no error
+	}{
+		{name: "valid small", users: 1, want: ""},
+		{name: "valid medium", users: 10000, want: ""},
+		{name: "valid large", users: 1000000, want: ""},
+		{name: "max valid", users: 100000000, want: ""},
+		{name: "zero", users: 0, want: "positive integer"},
+		{name: "negative", users: -1, want: "positive integer"},
+		{name: "too large", users: 100000001, want: "Maximum is"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateExpectedUsers(tt.users)
+			if tt.want == "" {
+				if err != nil {
+					t.Errorf("ValidateExpectedUsers(%d) = %v, want nil", tt.users, err)
+				}
+			} else {
+				if err == nil {
+					t.Errorf("ValidateExpectedUsers(%d) = nil, want error containing %q", tt.users, tt.want)
+				} else if !strings.Contains(err.Error(), tt.want) {
+					t.Errorf("ValidateExpectedUsers(%d) = %q, want error containing %q", tt.users, err.Error(), tt.want)
+				}
+			}
+		})
+	}
+}
+
+// TestValidateLatencyMS tests the latency validation (P1.31).
+func TestValidateLatencyMS(t *testing.T) {
+	tests := []struct {
+		name    string
+		latency int
+		want    string // empty = no error
+	}{
+		{name: "minimum valid", latency: 1, want: ""},
+		{name: "typical", latency: 100, want: ""},
+		{name: "maximum valid", latency: 60000, want: ""},
+		{name: "zero", latency: 0, want: "Minimum is"},
+		{name: "negative", latency: -1, want: "Minimum is"},
+		{name: "too large", latency: 60001, want: "Maximum is"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateLatencyMS(tt.latency)
+			if tt.want == "" {
+				if err != nil {
+					t.Errorf("ValidateLatencyMS(%d) = %v, want nil", tt.latency, err)
+				}
+			} else {
+				if err == nil {
+					t.Errorf("ValidateLatencyMS(%d) = nil, want error containing %q", tt.latency, tt.want)
+				} else if !strings.Contains(err.Error(), tt.want) {
+					t.Errorf("ValidateLatencyMS(%d) = %q, want error containing %q", tt.latency, err.Error(), tt.want)
+				}
+			}
+		})
+	}
+}
+
+// TestValidateCertificateARNRegion tests certificate ARN region validation (P1.31).
+func TestValidateCertificateARNRegion(t *testing.T) {
+	tests := []struct {
+		name     string
+		certARN  string
+		region   string
+		want     string // empty = no error
+	}{
+		{name: "matching regions", certARN: "arn:aws:acm:us-east-1:123456789012:certificate/abc", region: "us-east-1", want: ""},
+		{name: "empty cert ARN", certARN: "", region: "us-east-1", want: ""},
+		{name: "mismatched regions", certARN: "arn:aws:acm:us-west-2:123456789012:certificate/abc", region: "us-east-1", want: "region mismatch"},
+		{name: "invalid ARN format", certARN: "not-an-arn", region: "us-east-1", want: "invalid certificate_arn format"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateCertificateARNRegion(tt.certARN, tt.region)
+			if tt.want == "" {
+				if err != nil {
+					t.Errorf("ValidateCertificateARNRegion(%q, %q) = %v, want nil", tt.certARN, tt.region, err)
+				}
+			} else {
+				if err == nil {
+					t.Errorf("ValidateCertificateARNRegion(%q, %q) = nil, want error containing %q", tt.certARN, tt.region, tt.want)
+				} else if !strings.Contains(err.Error(), tt.want) {
+					t.Errorf("ValidateCertificateARNRegion(%q, %q) = %q, want error containing %q", tt.certARN, tt.region, err.Error(), tt.want)
+				}
+			}
+		})
+	}
+}

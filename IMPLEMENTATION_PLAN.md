@@ -19,7 +19,7 @@
 ### HIGH PRIORITY — Spec Compliance Gaps (P1)
 | ID | Issue | Impact |
 |----|-------|--------|
-| **P1.31** | Missing input validations | Invalid InfraID/PlanID/DeploymentID format accepted; ImageRef not validated; no bounds on AppDescription/ExpectedUsers/LatencyMS |
+| ~~**P1.31**~~ | ~~Missing input validations~~ | ✅ FIXED — Added ValidateID(), ValidateImageRef(), ValidateAppDescription(), ValidateExpectedUsers(), ValidateLatencyMS(), ValidateCertificateARNRegion() |
 
 ### MEDIUM PRIORITY — Test Gaps (P2)
 | ID | Issue | Impact |
@@ -227,6 +227,22 @@
 - [x] Health check uses same path as ALB health check for consistency
 - **Location:** `internal/providers/aws.go` task definition
 
+### P1.31 Missing Input Validations ✅ COMPLETE
+
+**Status:** FIXED  
+**Impact:** Invalid inputs now properly validated; prevents malformed state and security issues
+
+**Implementation:**
+- [x] Added `ValidateID()`: validates ULID format with backwards-compatible legacy ID support
+- [x] Added `ValidateImageRef()`: validates Docker image reference format
+- [x] Added `ValidateAppDescription()`: enforces max length of 1024 chars
+- [x] Added `ValidateExpectedUsers()`: enforces range 1 to 100 million
+- [x] Added `ValidateLatencyMS()`: enforces range 1 to 60000 ms
+- [x] Added `ValidateCertificateARNRegion()`: validates cert ARN region matches deployment region
+- [x] Integrated validations into: `planInfra()`, `approvePlan()`, `createInfra()`, `deploy()`, `status()`, `teardown()`
+- [x] Added comprehensive tests for all new validation functions
+- **Location:** `internal/providers/aws.go`
+
 ---
 
 ## P0 — Critical Production Blockers (Must Fix)
@@ -254,30 +270,6 @@
 - **Location:** `internal/state/store.go`
 
 ---
-
-## P1 — Spec Compliance Gaps (Remaining)
-
-### P1.31 Missing Input Validations ❌
-
-**Status:** NOT IMPLEMENTED  
-**Impact:** Invalid inputs accepted without validation; potential for malformed state or security issues
-
-**Missing Validations:**
-1. **InfraID/PlanID/DeploymentID format** — accepts any string; should validate ULID format
-2. **ImageRef format** — only checks non-empty; should validate Docker image reference format
-3. **AppDescription max length** — no upper bound; could cause display/storage issues
-4. **ExpectedUsers range** — no upper bound validation
-5. **LatencyMS range** — no reasonable bounds (e.g., 1-10000ms)
-6. **CertificateARN region match** — ARN region not validated against deployment region
-
-**Required Work:**
-- [ ] Add ULID format validation for InfraID/PlanID/DeploymentID
-- [ ] Add Docker image reference validation for ImageRef
-- [ ] Add AppDescription max length validation (e.g., 256 chars)
-- [ ] Add ExpectedUsers reasonable upper bound (e.g., 10M)
-- [ ] Add LatencyMS reasonable range validation (1-10000ms)
-- [ ] Add CertificateARN region validation against deployment region
-- **Location:** `internal/providers/aws.go`
 
 ### ~~P1.32 Route53 Client Not Initialized~~ ✅ NOT A BUG
 
@@ -849,23 +841,23 @@ go tool cover -html=coverage.out          # View coverage report
 | Desired count upper limit | `aws.go` | ✅ VALIDATED (P1.27) |
 | Auto-scaling params (minCount, maxCount, targetCPU, targetMem) | `aws.go` | ✅ VALIDATED |
 | ACM certificate validation | `aws.go` | ✅ VALIDATED (via API) |
-| InfraID/PlanID/DeploymentID format | `aws.go` | ❌ NOT VALIDATED — P1.31 |
-| ImageRef format (beyond empty check) | `aws.go` | ❌ NOT VALIDATED — P1.31 |
-| AppDescription max length | `aws.go` | ❌ NOT VALIDATED — P1.31 |
-| ExpectedUsers/LatencyMS range | `aws.go` | ❌ NOT VALIDATED — P1.31 |
-| CertificateARN region match | `aws.go` | ❌ NOT VALIDATED — P1.31 |
+| InfraID/PlanID/DeploymentID format | `aws.go` | ✅ VALIDATED (P1.31) |
+| ImageRef format (beyond empty check) | `aws.go` | ✅ VALIDATED (P1.31) |
+| AppDescription max length | `aws.go` | ✅ VALIDATED (P1.31) |
+| ExpectedUsers/LatencyMS range | `aws.go` | ✅ VALIDATED (P1.31) |
+| CertificateARN region match | `aws.go` | ✅ VALIDATED (P1.31) |
 
 ### Remaining Work by Priority
 
 | Priority | Count | Items |
 |----------|-------|-------|
 | ~~**P0 Critical**~~ | ~~2~~ 0 | ~~P0.1 (non-atomic writes), P0.2 (silent error suppression)~~ ✅ ALL FIXED |
-| **P1 Spec Gaps** | 1 | P1.31 (missing input validations) |
+| ~~**P1 Spec Gaps**~~ | ~~1~~ 0 | ~~P1.31 (missing input validations)~~ ✅ ALL FIXED |
 | **P2 Test Gaps** | 3 | P2.9 (main.go 0%), P2.10 (concurrent access), P2.5 (AWS error scenarios) |
 | **P3 Quality** | 11 | P3.12-P3.14, P3.18-P3.25 (reconciliation, state transitions, error handling, pricing, NAT Gateway, cleanup race, status updates, cert storage, cert backoff, image validation) |
 | **P4 New Features** | 7 | P4.1 (Lightsail), P4.2-P4.7 (workload types) |
 | **P5 Stretch** | 4 | CloudFormation, multi-cloud, secrets, CI enhancements |
-| **Total remaining** | **27** | |
+| **Total remaining** | **26** | |
 
 ---
 

@@ -415,6 +415,114 @@ func ValidateDomainName(domain string) error {
 	return nil
 }
 
+// ValidateID validates a ULID-based identifier format (P1.31).
+// WHY: Invalid IDs can cause lookup failures or security issues; validating format catches bugs early.
+// Valid formats: "plan-{ULID}", "infra-{ULID}", "deploy-{ULID}"
+// For backwards compatibility, also accepts legacy short-form IDs like "plan-test-001".
+func ValidateID(id, expectedPrefix string) error {
+	if id == "" {
+		return fmt.Errorf("invalid %s_id: cannot be empty", expectedPrefix)
+	}
+	// Check prefix
+	if !strings.HasPrefix(id, expectedPrefix+"-") {
+		return fmt.Errorf("invalid %s_id: %q. Must start with %q prefix", expectedPrefix, id, expectedPrefix+"-")
+	}
+	// Extract ID part after prefix
+	idPart := strings.TrimPrefix(id, expectedPrefix+"-")
+	if idPart == "" {
+		return fmt.Errorf("invalid %s_id: %q. Missing ID portion after prefix", expectedPrefix, id)
+	}
+	// ULID is 26 characters (Crockford's Base32)
+	// If it's exactly 26 chars, validate as ULID format
+	if len(idPart) == 26 {
+		ulidRegex := regexp.MustCompile(`^[0-9A-HJKMNP-TV-Z]{26}$`)
+		if !ulidRegex.MatchString(idPart) {
+			return fmt.Errorf("invalid %s_id: %q. ULID contains invalid characters", expectedPrefix, id)
+		}
+	}
+	// For non-ULID IDs (legacy format), just ensure they're alphanumeric with allowed chars
+	idRegex := regexp.MustCompile(`^[a-zA-Z0-9_\-]+$`)
+	if !idRegex.MatchString(idPart) {
+		return fmt.Errorf("invalid %s_id: %q. ID contains invalid characters", expectedPrefix, id)
+	}
+	return nil
+}
+
+// ValidateImageRef validates a Docker image reference (P1.31).
+// WHY: Invalid image refs will cause ECS task failures; validating early provides better UX.
+// Valid formats: "nginx", "nginx:latest", "user/repo:tag", "registry.io/user/repo:tag@sha256:..."
+func ValidateImageRef(imageRef string) error {
+	if imageRef == "" {
+		return fmt.Errorf("invalid image_ref: cannot be empty. Provide a Docker image reference (e.g., nginx:latest, ghcr.io/user/repo:tag)")
+	}
+	// Max length check (Docker has a practical limit around 2048 chars)
+	if len(imageRef) > 2048 {
+		return fmt.Errorf("invalid image_ref: %q... Image reference too long (max 2048 characters)", imageRef[:50])
+	}
+	// Basic structure validation: [registry/][user/]repo[:tag][@digest]
+	// This is a permissive check - AWS/Docker will do final validation
+	imageRefRegex := regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9._\-/:@]*[a-zA-Z0-9])?$`)
+	if !imageRefRegex.MatchString(imageRef) {
+		return fmt.Errorf("invalid image_ref: %q. Must be a valid Docker image reference", imageRef)
+	}
+	return nil
+}
+
+// ValidateAppDescription validates the application description length (P1.31).
+// WHY: Unbounded descriptions could cause display/storage issues; reasonable limit improves UX.
+func ValidateAppDescription(desc string) error {
+	const maxLength = 1024
+	if len(desc) > maxLength {
+		return fmt.Errorf("invalid app_description: too long (%d characters). Maximum is %d characters", len(desc), maxLength)
+	}
+	return nil
+}
+
+// ValidateExpectedUsers validates the expected users count (P1.31).
+// WHY: Unreasonable values could cause cost estimation issues; upper bound ensures sensible input.
+func ValidateExpectedUsers(users int) error {
+	const maxUsers = 100_000_000 // 100 million is reasonable upper bound for planning
+	if users <= 0 {
+		return fmt.Errorf("invalid expected_users: %d. Must be a positive integer", users)
+	}
+	if users > maxUsers {
+		return fmt.Errorf("invalid expected_users: %d. Maximum is %d (100 million)", users, maxUsers)
+	}
+	return nil
+}
+
+// ValidateLatencyMS validates the target latency in milliseconds (P1.31).
+// WHY: Unreasonable latency targets could indicate input errors; bounds ensure sensible values.
+func ValidateLatencyMS(latencyMS int) error {
+	const minLatency = 1
+	const maxLatency = 60000 // 60 seconds is reasonable upper bound
+	if latencyMS < minLatency {
+		return fmt.Errorf("invalid latency_ms: %d. Minimum is %d ms", latencyMS, minLatency)
+	}
+	if latencyMS > maxLatency {
+		return fmt.Errorf("invalid latency_ms: %d. Maximum is %d ms (60 seconds)", latencyMS, maxLatency)
+	}
+	return nil
+}
+
+// ValidateCertificateARNRegion validates that a certificate ARN matches the deployment region (P1.31).
+// WHY: ACM certificates are regional; using a cert from wrong region causes provisioning failure.
+func ValidateCertificateARNRegion(certARN, deploymentRegion string) error {
+	if certARN == "" {
+		return nil // No certificate provided
+	}
+	// ARN format: arn:aws:acm:REGION:ACCOUNT:certificate/ID
+	parts := strings.Split(certARN, ":")
+	if len(parts) < 4 {
+		return fmt.Errorf("invalid certificate_arn format: %q", certARN)
+	}
+	certRegion := parts[3]
+	if certRegion != deploymentRegion {
+		return fmt.Errorf("certificate_arn region mismatch: certificate is in %q but deployment is in %q. ACM certificates must be in the same region as the deployment", certRegion, deploymentRegion)
+	}
+	return nil
+}
+
 // extractParentDomain extracts the parent domain from a subdomain (P1.29).
 // For "app.example.com" returns "example.com".
 // For "example.com" returns "example.com" (apex record).
@@ -493,6 +601,10 @@ func (p *AWSProvider) planInfra(ctx context.Context, _ *mcp.CallToolRequest, in 
 	if strings.TrimSpace(in.AppDescription) == "" {
 		return nil, planInfraOutput{}, fmt.Errorf("app_description is required and cannot be empty")
 	}
+	// Validate app_description length (P1.31).
+	if err := ValidateAppDescription(in.AppDescription); err != nil {
+		return nil, planInfraOutput{}, err
+	}
 	if strings.TrimSpace(in.Region) == "" {
 		return nil, planInfraOutput{}, fmt.Errorf("region is required and cannot be empty")
 	}
@@ -500,11 +612,13 @@ func (p *AWSProvider) planInfra(ctx context.Context, _ *mcp.CallToolRequest, in 
 	if err := ValidateAWSRegion(in.Region); err != nil {
 		return nil, planInfraOutput{}, err
 	}
-	if in.ExpectedUsers <= 0 {
-		return nil, planInfraOutput{}, fmt.Errorf("expected_users must be a positive integer, got %d", in.ExpectedUsers)
+	// Validate expected_users bounds (P1.31).
+	if err := ValidateExpectedUsers(in.ExpectedUsers); err != nil {
+		return nil, planInfraOutput{}, err
 	}
-	if in.LatencyMS <= 0 {
-		return nil, planInfraOutput{}, fmt.Errorf("latency_ms must be a positive integer, got %d", in.LatencyMS)
+	// Validate latency_ms bounds (P1.31).
+	if err := ValidateLatencyMS(in.LatencyMS); err != nil {
+		return nil, planInfraOutput{}, err
 	}
 
 	// Validate VPC CIDR (P1.9).
@@ -743,6 +857,10 @@ func (p *AWSProvider) approvePlan(_ context.Context, _ *mcp.CallToolRequest, in 
 	if strings.TrimSpace(in.PlanID) == "" {
 		return nil, approvePlanOutput{}, fmt.Errorf("plan_id is required and cannot be empty")
 	}
+	// Validate plan_id format (P1.31).
+	if err := ValidateID(in.PlanID, "plan"); err != nil {
+		return nil, approvePlanOutput{}, err
+	}
 
 	// Get plan to verify it exists and include cost info in response.
 	plan, err := p.store.GetPlan(in.PlanID)
@@ -786,6 +904,14 @@ func (p *AWSProvider) approvePlan(_ context.Context, _ *mcp.CallToolRequest, in 
 
 // createInfra provisions AWS infrastructure according to an approved plan.
 func (p *AWSProvider) createInfra(ctx context.Context, _ *mcp.CallToolRequest, in createInfraInput) (*mcp.CallToolResult, createInfraOutput, error) {
+	// Validate plan_id format (P1.31).
+	if strings.TrimSpace(in.PlanID) == "" {
+		return nil, createInfraOutput{}, fmt.Errorf("plan_id is required and cannot be empty")
+	}
+	if err := ValidateID(in.PlanID, "plan"); err != nil {
+		return nil, createInfraOutput{}, err
+	}
+
 	// Validate log retention if provided (P1.20).
 	if in.LogRetentionDays != 0 {
 		if err := ValidateLogRetention(in.LogRetentionDays); err != nil {
@@ -797,6 +923,13 @@ func (p *AWSProvider) createInfra(ctx context.Context, _ *mcp.CallToolRequest, i
 	plan, err := p.store.GetPlan(in.PlanID)
 	if err != nil {
 		return nil, createInfraOutput{}, err
+	}
+
+	// Validate certificate ARN region matches deployment region (P1.31).
+	if in.CertificateARN != "" {
+		if err := ValidateCertificateARNRegion(in.CertificateARN, plan.Region); err != nil {
+			return nil, createInfraOutput{}, err
+		}
 	}
 
 	// Require explicit plan approval — no auto-approval.
@@ -1062,6 +1195,18 @@ func (p *AWSProvider) createInfra(ctx context.Context, _ *mcp.CallToolRequest, i
 
 // deploy deploys an application onto provisioned infrastructure.
 func (p *AWSProvider) deploy(ctx context.Context, _ *mcp.CallToolRequest, in deployInput) (*mcp.CallToolResult, deployOutput, error) {
+	// Validate infra_id format (P1.31).
+	if strings.TrimSpace(in.InfraID) == "" {
+		return nil, deployOutput{}, fmt.Errorf("infra_id is required and cannot be empty")
+	}
+	if err := ValidateID(in.InfraID, "infra"); err != nil {
+		return nil, deployOutput{}, err
+	}
+	// Validate image_ref format (P1.31).
+	if err := ValidateImageRef(in.ImageRef); err != nil {
+		return nil, deployOutput{}, err
+	}
+
 	// Get infrastructure.
 	infra, err := p.store.GetInfra(in.InfraID)
 	if err != nil {
@@ -1270,6 +1415,14 @@ func (p *AWSProvider) deploy(ctx context.Context, _ *mcp.CallToolRequest, in dep
 
 // status gets the current status of a deployment.
 func (p *AWSProvider) status(ctx context.Context, _ *mcp.CallToolRequest, in statusInput) (*mcp.CallToolResult, statusOutput, error) {
+	// Validate deployment_id format (P1.31).
+	if strings.TrimSpace(in.DeploymentID) == "" {
+		return nil, statusOutput{}, fmt.Errorf("deployment_id is required and cannot be empty")
+	}
+	if err := ValidateID(in.DeploymentID, "deploy"); err != nil {
+		return nil, statusOutput{}, err
+	}
+
 	deployment, err := p.store.GetDeployment(in.DeploymentID)
 	if err != nil {
 		return nil, statusOutput{}, err
@@ -1328,6 +1481,14 @@ func (p *AWSProvider) status(ctx context.Context, _ *mcp.CallToolRequest, in sta
 
 // teardown tears down all AWS resources for a deployment.
 func (p *AWSProvider) teardown(ctx context.Context, _ *mcp.CallToolRequest, in teardownInput) (*mcp.CallToolResult, teardownOutput, error) {
+	// Validate deployment_id format (P1.31).
+	if strings.TrimSpace(in.DeploymentID) == "" {
+		return nil, teardownOutput{}, fmt.Errorf("deployment_id is required and cannot be empty")
+	}
+	if err := ValidateID(in.DeploymentID, "deploy"); err != nil {
+		return nil, teardownOutput{}, err
+	}
+
 	deployment, err := p.store.GetDeployment(in.DeploymentID)
 	if err != nil {
 		return nil, teardownOutput{}, err
