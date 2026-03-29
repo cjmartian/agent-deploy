@@ -156,7 +156,7 @@ func (m *ELBV2Mock) DescribeTags(ctx context.Context, params *elbv2.DescribeTags
 		return m.DescribeTagsFunc(ctx, params, optFns...)
 	}
 	// Default: return empty tags for each resource
-	var tagDescriptions []elbv2types.TagDescription
+	tagDescriptions := make([]elbv2types.TagDescription, 0, len(params.ResourceArns))
 	for _, arn := range params.ResourceArns {
 		tagDescriptions = append(tagDescriptions, elbv2types.TagDescription{
 			ResourceArn: aws.String(arn),

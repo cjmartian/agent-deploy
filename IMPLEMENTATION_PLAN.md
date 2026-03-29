@@ -13,7 +13,6 @@
 | ID | Issue | Spec | Impact |
 |----|-------|------|--------|
 | **P1.29** | Custom DNS / Route 53 — **entire spec unimplemented** | `custom-dns.md` | No custom domain support, no Route 53, no ACM auto-provisioning |
-| **P1.9** | VPC CIDR hardcoded to 10.0.0.0/16 | `networking.md` | Cannot customize VPC for peering scenarios |
 
 ### MEDIUM PRIORITY — Test Gaps (P2)
 | ID | Issue | Impact |
@@ -127,17 +126,18 @@
 - [ ] Include Route 53 costs in plan estimation ($0.50/mo hosted zone + query costs)
 - **Location:** `internal/providers/aws.go`, `internal/state/types.go`, `go.mod`
 
-### P1.9 VPC CIDR Not Configurable ❌
+### P1.9 VPC CIDR Configuration ✅ COMPLETE
 
-**Spec:** `ralph/specs/networking.md`  
-**Impact:** Cannot customize VPC for VPC peering scenarios
+**Status:** Implemented
 
-**Required Work:**
-- [ ] Add `vpc_cidr` parameter to `planInfraInput` struct
-- [ ] Remove hardcoded "10.0.0.0/16" at line 1076
-- [ ] Implement `CalculateSubnetLayout()` function for dynamic subnet CIDR calculation
-- [ ] Update subnet CIDRs calculation (lines 1145, 1180) to derive from `vpc_cidr`
-- **Location:** `internal/providers/aws.go`
+**Implementation:**
+- [x] Added VpcCIDR parameter to planInfraInput (default: "10.0.0.0/16")
+- [x] Added VpcCIDR field to state.Plan struct
+- [x] Added ValidateVpcCIDR() function (validates /16 to /24, IPv4 only)
+- [x] Added CalculateSubnetLayout() function to derive subnet CIDRs from VPC CIDR
+- [x] Updated provisionVPC to accept vpcCIDR parameter and use calculated subnet layout
+- [x] Added tests: TestValidateVpcCIDR, TestCalculateSubnetLayout, TestPlanInfra_VpcCIDR
+- **Location:** `internal/providers/aws.go`, `internal/state/types.go`
 
 ### P1.21 Per-Request Spending Override ✅ COMPLETE
 
@@ -489,8 +489,8 @@ go tool cover -html=coverage.out          # View coverage report
 
 | Value | Location | Status |
 |-------|----------|--------|
-| VPC CIDR: `10.0.0.0/16` | `aws.go:1076` | ❌ HARDCODED — No `vpc_cidr` parameter (P1.9) |
-| Subnet CIDRs | `aws.go:1145,1180` | ❌ HARDCODED — CIDRs calculated from fixed VPC CIDR (P1.9) |
+| VPC CIDR: `10.0.0.0/16` | `aws.go` | ✅ IMPLEMENTED — Configurable via vpc_cidr parameter (P1.9) |
+| Subnet CIDRs | `aws.go` | ✅ IMPLEMENTED — Dynamically calculated via CalculateSubnetLayout() (P1.9) |
 | Fargate pricing | `pricing.go` | ✅ **IMPLEMENTED** — parsePricingResponse() extracts prices from AWS Pricing API |
 | ALB pricing | `pricing.go:372-377` | ⚠️ HARDCODED FALLBACK — uses $20/mo when Pricing API unavailable |
 | NAT Gateway pricing | `pricing.go:372-377` | ⚠️ HARDCODED FALLBACK — included in $15 base cost |
@@ -528,7 +528,7 @@ go tool cover -html=coverage.out          # View coverage report
 | Priority | Count | Items |
 |----------|-------|-------|
 | **P0 Critical** | 0 | *(All P0 issues resolved)* |
-| **P1 Spec Gaps** | 2 | P1.29 (Custom DNS), P1.9 (VPC CIDR) |
+| **P1 Spec Gaps** | 1 | P1.29 (Custom DNS) |
 | **P2 Test Gaps** | 3 | P2.9 (main.go 0%), P2.10 (concurrent access), P2.5 (AWS error scenarios) |
 | **P3 Quality** | 9 | P3.13 (shallow reconciliation), P3.15 (DNS state constants), P3.9 (silent errors), P3.10 (missing error types), P3.11 (non-atomic updates), P3.12 (state transitions), P3.14 (startup handling), P3.16 (missing validations), P3.17 (no Route 53 client) |
 | **P5 Stretch** | 3 | CloudFormation, multi-cloud, secrets |
@@ -581,7 +581,7 @@ go tool cover -html=coverage.out          # View coverage report
 | **spending-safeguards.md** | Resource tagging | ✅ Implemented |
 | **auto-scaling.md** | Auto-scaling with target tracking | ✅ IMPLEMENTED — CPU/memory policies, cooldowns, cleanup |
 | **auto-scaling.md** | Cost range in planInfra output (min/max) | ✅ IMPLEMENTED |
-| **networking.md** | VPC CIDR configurable | ❌ NOT IMPLEMENTED — hardcoded to 10.0.0.0/16 (P1.9) |
+| **networking.md** | VPC CIDR configurable | ✅ IMPLEMENTED — vpc_cidr parameter with validation (P1.9) |
 | **networking.md** | Private subnets with NAT Gateway | ✅ IMPLEMENTED |
 | **ci.md** | CI workflow with lint, test, build jobs | ✅ IMPLEMENTED |
 | **testing.md** | 50% code coverage | ✅ **TARGET MET** — 51% overall |

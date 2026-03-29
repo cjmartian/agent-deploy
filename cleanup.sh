@@ -1,9 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
-export AWS_ACCESS_KEY_ID=
-export AWS_SECRET_ACCESS_KEY=
-export AWS_REGION=us-east-1
+export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:?must be set}"
+export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:?must be set}"
+export AWS_REGION="${AWS_REGION:-us-east-1}"
+export AWS_PAGER=""
 
 MODE="${1:-discover}"
 

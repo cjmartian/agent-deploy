@@ -16,6 +16,9 @@ type Plan struct {
 	Status          string    `json:"status"` // created, approved, rejected, expired
 	CreatedAt       time.Time `json:"created_at"`
 	ExpiresAt       time.Time `json:"expires_at"`
+	// VpcCIDR is the VPC CIDR block to use (P1.9). Empty means use default 10.0.0.0/16.
+	// WHY: Allow custom VPC CIDRs for VPC peering scenarios.
+	VpcCIDR string `json:"vpc_cidr,omitempty"`
 }
 
 // PlanStatus constants.

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/url"
 	"regexp"
 	"strings"
@@ -135,6 +136,9 @@ type planInfraInput struct {
 	// Per-request spending override (P1.21): Allow deployment-specific budget caps.
 	// WHY: Users may want different budget limits for different deployments.
 	PerDeploymentBudgetUSD float64 `json:"per_deployment_budget_usd,omitempty" jsonschema:"maximum monthly cost for this deployment (overrides global config)"`
+	// VPC CIDR configuration (P1.9): Allow custom VPC CIDR for VPC peering scenarios.
+	// WHY: Default 10.0.0.0/16 may conflict with existing VPCs in peering scenarios.
+	VpcCIDR string `json:"vpc_cidr,omitempty" jsonschema:"VPC CIDR block (default: 10.0.0.0/16). Must be /16 to /24."`
 }
 
 type planInfraOutput struct {
@@ -357,6 +361,88 @@ func ValidateEnvironmentVariables(env map[string]string) error {
 	return nil
 }
 
+// ValidateVpcCIDR validates a VPC CIDR block (P1.9).
+// WHY: Invalid CIDR blocks will cause AWS API errors; validating early provides better UX.
+func ValidateVpcCIDR(cidr string) error {
+	if cidr == "" {
+		return nil // Empty = use default
+	}
+	// Parse CIDR.
+	_, ipnet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return fmt.Errorf("invalid vpc_cidr: %q. Must be a valid IPv4 CIDR block (e.g., 10.0.0.0/16)", cidr)
+	}
+	// Check it's IPv4.
+	if ipnet.IP.To4() == nil {
+		return fmt.Errorf("invalid vpc_cidr: %q. Must be an IPv4 CIDR block, not IPv6", cidr)
+	}
+	// Check prefix length is between /16 and /24.
+	ones, _ := ipnet.Mask.Size()
+	if ones < 16 || ones > 24 {
+		return fmt.Errorf("invalid vpc_cidr: %q. Prefix length must be between /16 and /24 (got /%d)", cidr, ones)
+	}
+	return nil
+}
+
+// SubnetLayout represents the calculated subnet CIDRs derived from a VPC CIDR.
+// WHY (P1.9): Dynamic subnet calculation allows custom VPC CIDRs for peering scenarios.
+type SubnetLayout struct {
+	VpcCIDR      string   // The VPC CIDR being used
+	PublicCIDRs  []string // 2 public subnet CIDRs
+	PrivateCIDRs []string // 2 private subnet CIDRs
+}
+
+// CalculateSubnetLayout derives 4 subnet CIDRs from a VPC CIDR (P1.9).
+// WHY: When a custom VPC CIDR is provided, subnet CIDRs must be derived dynamically.
+// Layout for /16 CIDR X.Y.0.0/16:
+//   - Public:  X.Y.1.0/24, X.Y.2.0/24
+//   - Private: X.Y.10.0/24, X.Y.11.0/24
+func CalculateSubnetLayout(vpcCIDR string) (*SubnetLayout, error) {
+	if vpcCIDR == "" {
+		vpcCIDR = "10.0.0.0/16"
+	}
+	// Parse VPC CIDR.
+	ip, ipnet, err := net.ParseCIDR(vpcCIDR)
+	if err != nil {
+		return nil, fmt.Errorf("invalid VPC CIDR: %w", err)
+	}
+	// Get base IP as 4 bytes.
+	baseIP := ip.To4()
+	if baseIP == nil {
+		return nil, fmt.Errorf("VPC CIDR must be IPv4")
+	}
+
+	// Calculate subnet CIDRs.
+	// For a /16 like 10.0.0.0/16:
+	//   Public:  10.0.1.0/24, 10.0.2.0/24
+	//   Private: 10.0.10.0/24, 10.0.11.0/24
+	// For other prefix lengths, we adjust the third octet similarly.
+	ones, bits := ipnet.Mask.Size()
+	if ones > 24 || bits != 32 {
+		return nil, fmt.Errorf("VPC CIDR must have prefix length /16 to /24")
+	}
+
+	layout := &SubnetLayout{
+		VpcCIDR:      vpcCIDR,
+		PublicCIDRs:  make([]string, 2),
+		PrivateCIDRs: make([]string, 2),
+	}
+
+	// Public subnets: .1.0/24 and .2.0/24
+	for i := 0; i < 2; i++ {
+		subnetIP := net.IPv4(baseIP[0], baseIP[1], byte(i+1), 0)
+		layout.PublicCIDRs[i] = fmt.Sprintf("%s/24", subnetIP.String())
+	}
+
+	// Private subnets: .10.0/24 and .11.0/24
+	for i := 0; i < 2; i++ {
+		subnetIP := net.IPv4(baseIP[0], baseIP[1], byte(i+10), 0)
+		layout.PrivateCIDRs[i] = fmt.Sprintf("%s/24", subnetIP.String())
+	}
+
+	return layout, nil
+}
+
 // --- tool handlers ---
 
 // planInfra analyzes requirements and creates an infrastructure plan with cost estimate.
@@ -377,6 +463,16 @@ func (p *AWSProvider) planInfra(ctx context.Context, _ *mcp.CallToolRequest, in 
 	}
 	if in.LatencyMS <= 0 {
 		return nil, planInfraOutput{}, fmt.Errorf("latency_ms must be a positive integer, got %d", in.LatencyMS)
+	}
+
+	// Validate VPC CIDR (P1.9).
+	if err := ValidateVpcCIDR(in.VpcCIDR); err != nil {
+		return nil, planInfraOutput{}, err
+	}
+	// Use default if not specified.
+	vpcCIDR := in.VpcCIDR
+	if vpcCIDR == "" {
+		vpcCIDR = "10.0.0.0/16"
 	}
 
 	// Apply auto-scaling defaults (P1.22).
@@ -517,6 +613,7 @@ func (p *AWSProvider) planInfra(ctx context.Context, _ *mcp.CallToolRequest, in 
 		Status:          state.PlanStatusCreated,
 		CreatedAt:       time.Now(),
 		ExpiresAt:       time.Now().Add(24 * time.Hour),
+		VpcCIDR:         vpcCIDR, // P1.9: Store VPC CIDR for use in createInfra
 	}
 
 	if err := p.store.CreatePlan(plan); err != nil {
@@ -527,6 +624,7 @@ func (p *AWSProvider) planInfra(ctx context.Context, _ *mcp.CallToolRequest, in 
 		slog.String("component", "aws_plan_infra"),
 		logging.PlanID(plan.ID),
 		slog.String("app_description", in.AppDescription),
+		slog.String("vpc_cidr", vpcCIDR),
 		logging.Cost(estimatedCost),
 		slog.Bool("using_fallback_pricing", costEstimate.UsingFallback),
 		slog.Bool("auto_scaling_enabled", autoScalingEnabled))
@@ -748,7 +846,7 @@ func (p *AWSProvider) createInfra(ctx context.Context, _ *mcp.CallToolRequest, i
 	// Provision resources in order. On failure, rollback already-created resources.
 	// WHY: Per spec ralph/specs/error-handling.md - partial failures must clean up
 	// to prevent orphaned AWS resources and unexpected costs.
-	if err := p.provisionVPC(ctx, cfg, infra, tags); err != nil {
+	if err := p.provisionVPC(ctx, cfg, infra, tags, plan.VpcCIDR); err != nil {
 		rollbackErr := p.rollbackInfra(ctx, cfg, infra)
 		if rollbackErr != nil {
 			slog.Error("rollback failed after VPC error", logging.Err(rollbackErr), logging.InfraID(infraID))
@@ -1197,14 +1295,21 @@ func (p *AWSProvider) teardown(ctx context.Context, _ *mcp.CallToolRequest, in t
 // AWS Provisioning Helpers
 // ---------------------------------------------------------------------------
 
-func (p *AWSProvider) provisionVPC(ctx context.Context, cfg aws.Config, infra *state.Infrastructure, tags map[string]string) error {
+func (p *AWSProvider) provisionVPC(ctx context.Context, cfg aws.Config, infra *state.Infrastructure, tags map[string]string, vpcCIDR string) error {
 	clients := p.getClients(cfg)
 	ec2Client := clients.EC2
 
+	// Calculate subnet layout from VPC CIDR (P1.9).
+	// WHY: Dynamic subnet calculation allows custom VPC CIDRs for peering scenarios.
+	layout, err := CalculateSubnetLayout(vpcCIDR)
+	if err != nil {
+		return fmt.Errorf("calculate subnet layout: %w", err)
+	}
+
 	// Create VPC.
-	// Per spec ralph/specs/networking.md: Default CIDR 10.0.0.0/16
+	// Per spec ralph/specs/networking.md: Configurable CIDR (default 10.0.0.0/16).
 	vpcResp, err := ec2Client.CreateVpc(ctx, &ec2.CreateVpcInput{
-		CidrBlock: aws.String("10.0.0.0/16"),
+		CidrBlock: aws.String(layout.VpcCIDR),
 		TagSpecifications: []ec2types.TagSpecification{{
 			ResourceType: ec2types.ResourceTypeVpc,
 			Tags:         mapToEC2Tags(tags),
@@ -1263,17 +1368,13 @@ func (p *AWSProvider) provisionVPC(ctx context.Context, cfg aws.Config, infra *s
 	}
 
 	// Per spec ralph/specs/networking.md: Create 4 subnets (2 public, 2 private) across 2 AZs.
-	// Subnet Layout (for default 10.0.0.0/16):
-	//   Public A:  10.0.1.0/24 (AZ-1) - ALB, NAT Gateway
-	//   Public B:  10.0.2.0/24 (AZ-2) - ALB
-	//   Private A: 10.0.10.0/24 (AZ-1) - ECS tasks
-	//   Private B: 10.0.11.0/24 (AZ-2) - ECS tasks
+	// Subnet CIDRs derived from VPC CIDR via CalculateSubnetLayout (P1.9).
 
 	// Create public subnets in 2 AZs (required for ALB).
 	var publicSubnetIDs []string
 	for i := 0; i < 2; i++ {
 		az := *azResp.AvailabilityZones[i].ZoneName
-		cidr := fmt.Sprintf("10.0.%d.0/24", i+1)
+		cidr := layout.PublicCIDRs[i]
 
 		subnetResp, subnetErr := ec2Client.CreateSubnet(ctx, &ec2.CreateSubnetInput{
 			VpcId:            aws.String(vpcID),
@@ -1308,7 +1409,7 @@ func (p *AWSProvider) provisionVPC(ctx context.Context, cfg aws.Config, infra *s
 	var privateSubnetIDs []string
 	for i := 0; i < 2; i++ {
 		az := *azResp.AvailabilityZones[i].ZoneName
-		cidr := fmt.Sprintf("10.0.%d.0/24", i+10) // 10.0.10.0/24 and 10.0.11.0/24
+		cidr := layout.PrivateCIDRs[i]
 
 		subnetResp, subnetErr := ec2Client.CreateSubnet(ctx, &ec2.CreateSubnetInput{
 			VpcId:            aws.String(vpcID),

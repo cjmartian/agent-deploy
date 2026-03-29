@@ -79,7 +79,7 @@ func (m *ECSMock) DescribeClusters(ctx context.Context, params *ecs.DescribeClus
 		return m.DescribeClustersFunc(ctx, params, optFns...)
 	}
 	// Default: return clusters matching requested ARNs
-	var clusters []ecstypes.Cluster
+	clusters := make([]ecstypes.Cluster, 0, len(params.Clusters))
 	for _, clusterARN := range params.Clusters {
 		clusters = append(clusters, ecstypes.Cluster{
 			ClusterArn: aws.String(clusterARN),

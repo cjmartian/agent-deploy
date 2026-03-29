@@ -1823,8 +1823,8 @@ func TestProvisionVPC_WithMocks(t *testing.T) {
 		"agent-deploy:infra-id": infra.ID,
 	}
 
-	// Call provisionVPC
-	err = provider.provisionVPC(context.Background(), aws.Config{Region: "us-east-1"}, infra, tags)
+	// Call provisionVPC with default VPC CIDR
+	err = provider.provisionVPC(context.Background(), aws.Config{Region: "us-east-1"}, infra, tags, "10.0.0.0/16")
 	if err != nil {
 		t.Fatalf("provisionVPC: %v", err)
 	}
@@ -1881,7 +1881,7 @@ func TestProvisionVPC_CreateVPCError(t *testing.T) {
 		Resources: make(map[string]string),
 	}
 
-	err = provider.provisionVPC(context.Background(), aws.Config{Region: "us-east-1"}, infra, map[string]string{})
+	err = provider.provisionVPC(context.Background(), aws.Config{Region: "us-east-1"}, infra, map[string]string{}, "10.0.0.0/16")
 	if err == nil {
 		t.Fatal("expected error when CreateVpc fails")
 	}
@@ -1922,7 +1922,7 @@ func TestProvisionVPC_SubnetError(t *testing.T) {
 		Resources: make(map[string]string),
 	}
 
-	err = provider.provisionVPC(context.Background(), aws.Config{Region: "us-east-1"}, infra, map[string]string{})
+	err = provider.provisionVPC(context.Background(), aws.Config{Region: "us-east-1"}, infra, map[string]string{}, "10.0.0.0/16")
 	if err == nil {
 		t.Fatal("expected error when CreateSubnet fails")
 	}
@@ -2513,6 +2513,229 @@ func TestValidateEnvironmentVariables(t *testing.T) {
 			}
 			if !tt.wantErr && err != nil {
 				t.Errorf("ValidateEnvironmentVariables() unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+// TestValidateVpcCIDR tests VPC CIDR validation for P1.9.
+func TestValidateVpcCIDR(t *testing.T) {
+	tests := []struct {
+		name    string
+		cidr    string
+		wantErr bool
+	}{
+		{
+			name:    "valid_default_cidr",
+			cidr:    "10.0.0.0/16",
+			wantErr: false,
+		},
+		{
+			name:    "valid_class_A_private",
+			cidr:    "10.100.0.0/16",
+			wantErr: false,
+		},
+		{
+			name:    "valid_class_B_private",
+			cidr:    "172.16.0.0/16",
+			wantErr: false,
+		},
+		{
+			name:    "valid_class_C_private",
+			cidr:    "192.168.0.0/24",
+			wantErr: false,
+		},
+		{
+			name:    "valid_minimum_prefix",
+			cidr:    "10.0.0.0/24",
+			wantErr: false,
+		},
+		{
+			name:    "invalid_prefix_too_large",
+			cidr:    "10.0.0.0/8",
+			wantErr: true,
+		},
+		{
+			name:    "invalid_prefix_too_small",
+			cidr:    "10.0.0.0/28",
+			wantErr: true,
+		},
+		{
+			name:    "invalid_not_cidr",
+			cidr:    "10.0.0.0",
+			wantErr: true,
+		},
+		{
+			name:    "invalid_ipv6",
+			cidr:    "2001:db8::/32",
+			wantErr: true,
+		},
+		{
+			name:    "invalid_malformed",
+			cidr:    "not-a-cidr",
+			wantErr: true,
+		},
+		{
+			name:    "valid_different_base",
+			cidr:    "10.50.0.0/20",
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateVpcCIDR(tt.cidr)
+			if tt.wantErr && err == nil {
+				t.Errorf("ValidateVpcCIDR(%q) expected error, got nil", tt.cidr)
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("ValidateVpcCIDR(%q) unexpected error: %v", tt.cidr, err)
+			}
+		})
+	}
+}
+
+// TestCalculateSubnetLayout tests subnet CIDR derivation from VPC CIDR for P1.9.
+func TestCalculateSubnetLayout(t *testing.T) {
+	tests := []struct {
+		name            string
+		vpcCIDR         string
+		wantPublicCIDRs []string
+		wantPrivCIDRs   []string
+		wantErr         bool
+	}{
+		{
+			name:            "default_10.0.0.0/16",
+			vpcCIDR:         "10.0.0.0/16",
+			wantPublicCIDRs: []string{"10.0.1.0/24", "10.0.2.0/24"},
+			wantPrivCIDRs:   []string{"10.0.10.0/24", "10.0.11.0/24"},
+			wantErr:         false,
+		},
+		{
+			name:            "custom_172.16.0.0/16",
+			vpcCIDR:         "172.16.0.0/16",
+			wantPublicCIDRs: []string{"172.16.1.0/24", "172.16.2.0/24"},
+			wantPrivCIDRs:   []string{"172.16.10.0/24", "172.16.11.0/24"},
+			wantErr:         false,
+		},
+		{
+			name:            "different_base_10.50.0.0/16",
+			vpcCIDR:         "10.50.0.0/16",
+			wantPublicCIDRs: []string{"10.50.1.0/24", "10.50.2.0/24"},
+			wantPrivCIDRs:   []string{"10.50.10.0/24", "10.50.11.0/24"},
+			wantErr:         false,
+		},
+		{
+			name:    "invalid_cidr",
+			vpcCIDR: "not-valid",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			layout, err := CalculateSubnetLayout(tt.vpcCIDR)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("CalculateSubnetLayout(%q) expected error", tt.vpcCIDR)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("CalculateSubnetLayout(%q) error: %v", tt.vpcCIDR, err)
+			}
+
+			if layout.VpcCIDR != tt.vpcCIDR {
+				t.Errorf("VpcCIDR = %q, want %q", layout.VpcCIDR, tt.vpcCIDR)
+			}
+			if len(layout.PublicCIDRs) != 2 {
+				t.Fatalf("PublicCIDRs len = %d, want 2", len(layout.PublicCIDRs))
+			}
+			if len(layout.PrivateCIDRs) != 2 {
+				t.Fatalf("PrivateCIDRs len = %d, want 2", len(layout.PrivateCIDRs))
+			}
+			for i, want := range tt.wantPublicCIDRs {
+				if layout.PublicCIDRs[i] != want {
+					t.Errorf("PublicCIDRs[%d] = %q, want %q", i, layout.PublicCIDRs[i], want)
+				}
+			}
+			for i, want := range tt.wantPrivCIDRs {
+				if layout.PrivateCIDRs[i] != want {
+					t.Errorf("PrivateCIDRs[%d] = %q, want %q", i, layout.PrivateCIDRs[i], want)
+				}
+			}
+		})
+	}
+}
+
+// TestPlanInfra_VpcCIDR tests custom VPC CIDR in plan infra (P1.9).
+func TestPlanInfra_VpcCIDR(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("AGENT_DEPLOY_PER_DEPLOYMENT_BUDGET", "100")
+
+	store, err := state.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	provider := NewAWSProvider(store)
+
+	tests := []struct {
+		name         string
+		vpcCIDR      string
+		wantVpcCIDR  string
+		wantErr      bool
+		wantErrMatch string
+	}{
+		{
+			name:        "default_when_empty",
+			vpcCIDR:     "",
+			wantVpcCIDR: "10.0.0.0/16",
+		},
+		{
+			name:        "custom_valid_cidr",
+			vpcCIDR:     "172.16.0.0/16",
+			wantVpcCIDR: "172.16.0.0/16",
+		},
+		{
+			name:         "invalid_cidr_rejected",
+			vpcCIDR:      "10.0.0.0/8",
+			wantErr:      true,
+			wantErrMatch: "Prefix length must be between",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := planInfraInput{
+				AppDescription: "test app",
+				ExpectedUsers:  100,
+				LatencyMS:      200,
+				Region:         "us-east-1",
+				VpcCIDR:        tt.vpcCIDR,
+			}
+
+			_, output, err := provider.planInfra(context.Background(), nil, input)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if tt.wantErrMatch != "" && !strings.Contains(err.Error(), tt.wantErrMatch) {
+					t.Errorf("error %q should contain %q", err.Error(), tt.wantErrMatch)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("planInfra: %v", err)
+			}
+
+			// Verify plan has correct VPC CIDR stored.
+			plan, err := store.GetPlan(output.PlanID)
+			if err != nil {
+				t.Fatalf("GetPlan: %v", err)
+			}
+			if plan.VpcCIDR != tt.wantVpcCIDR {
+				t.Errorf("Plan.VpcCIDR = %q, want %q", plan.VpcCIDR, tt.wantVpcCIDR)
 			}
 		})
 	}

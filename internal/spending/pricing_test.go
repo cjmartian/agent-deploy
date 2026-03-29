@@ -6,11 +6,11 @@ import (
 
 func TestGetFargateFallbackPrices(t *testing.T) {
 	tests := []struct {
-		region        string
-		wantVCPUMin   float64
-		wantVCPUMax   float64
-		wantMemMin    float64
-		wantMemMax    float64
+		region      string
+		wantVCPUMin float64
+		wantVCPUMax float64
+		wantMemMin  float64
+		wantMemMax  float64
 	}{
 		{
 			region:      "us-east-1",
@@ -60,9 +60,9 @@ func TestGetFargateFallbackPrices(t *testing.T) {
 
 func TestGetALBFallbackPrice(t *testing.T) {
 	tests := []struct {
-		region   string
-		wantMin  float64
-		wantMax  float64
+		region  string
+		wantMin float64
+		wantMax float64
 	}{
 		{"us-east-1", 0.02, 0.03},
 		{"eu-west-1", 0.02, 0.03},
@@ -110,6 +110,13 @@ func TestCostEstimate_Defaults(t *testing.T) {
 		ExpectedUsers: 100,
 	}
 
+	if params.Region != "us-east-1" {
+		t.Errorf("Region = %q, want %q", params.Region, "us-east-1")
+	}
+	if params.ExpectedUsers != 100 {
+		t.Errorf("ExpectedUsers = %d, want 100", params.ExpectedUsers)
+	}
+
 	// Without a real pricing client, we can't call EstimateCosts.
 	// But we can verify the struct works correctly.
 	if params.CPUUnits != 0 {
@@ -135,6 +142,9 @@ func TestServiceCost_Structure(t *testing.T) {
 	}
 	if cost.MonthlyCost != 14.26 {
 		t.Errorf("MonthlyCost = %f, want %f", cost.MonthlyCost, 14.26)
+	}
+	if cost.Description != "0.25 vCPU, 512 MB × 1 tasks" {
+		t.Errorf("Description = %q, want %q", cost.Description, "0.25 vCPU, 512 MB × 1 tasks")
 	}
 }
 
@@ -162,6 +172,12 @@ func TestCostEstimate_Structure(t *testing.T) {
 	}
 	if len(estimate.Services) != 2 {
 		t.Errorf("len(Services) = %d, want 2", len(estimate.Services))
+	}
+	if estimate.Disclaimer != "Test disclaimer" {
+		t.Errorf("Disclaimer = %q, want %q", estimate.Disclaimer, "Test disclaimer")
+	}
+	if len(estimate.Assumptions) != 1 || estimate.Assumptions[0] != "730 hours/month" {
+		t.Errorf("Assumptions = %v, want [730 hours/month]", estimate.Assumptions)
 	}
 }
 

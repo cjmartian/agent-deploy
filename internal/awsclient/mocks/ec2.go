@@ -29,17 +29,17 @@ type EC2Mock struct {
 	DescribeAvailabilityZonesFunc func(ctx context.Context, params *ec2.DescribeAvailabilityZonesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeAvailabilityZonesOutput, error)
 
 	// Subnet operations
-	CreateSubnetFunc         func(ctx context.Context, params *ec2.CreateSubnetInput, optFns ...func(*ec2.Options)) (*ec2.CreateSubnetOutput, error)
+	CreateSubnetFunc          func(ctx context.Context, params *ec2.CreateSubnetInput, optFns ...func(*ec2.Options)) (*ec2.CreateSubnetOutput, error)
 	ModifySubnetAttributeFunc func(ctx context.Context, params *ec2.ModifySubnetAttributeInput, optFns ...func(*ec2.Options)) (*ec2.ModifySubnetAttributeOutput, error)
-	DeleteSubnetFunc         func(ctx context.Context, params *ec2.DeleteSubnetInput, optFns ...func(*ec2.Options)) (*ec2.DeleteSubnetOutput, error)
+	DeleteSubnetFunc          func(ctx context.Context, params *ec2.DeleteSubnetInput, optFns ...func(*ec2.Options)) (*ec2.DeleteSubnetOutput, error)
 
 	// Route Table operations
-	CreateRouteTableFunc     func(ctx context.Context, params *ec2.CreateRouteTableInput, optFns ...func(*ec2.Options)) (*ec2.CreateRouteTableOutput, error)
-	CreateRouteFunc          func(ctx context.Context, params *ec2.CreateRouteInput, optFns ...func(*ec2.Options)) (*ec2.CreateRouteOutput, error)
-	AssociateRouteTableFunc  func(ctx context.Context, params *ec2.AssociateRouteTableInput, optFns ...func(*ec2.Options)) (*ec2.AssociateRouteTableOutput, error)
+	CreateRouteTableFunc       func(ctx context.Context, params *ec2.CreateRouteTableInput, optFns ...func(*ec2.Options)) (*ec2.CreateRouteTableOutput, error)
+	CreateRouteFunc            func(ctx context.Context, params *ec2.CreateRouteInput, optFns ...func(*ec2.Options)) (*ec2.CreateRouteOutput, error)
+	AssociateRouteTableFunc    func(ctx context.Context, params *ec2.AssociateRouteTableInput, optFns ...func(*ec2.Options)) (*ec2.AssociateRouteTableOutput, error)
 	DisassociateRouteTableFunc func(ctx context.Context, params *ec2.DisassociateRouteTableInput, optFns ...func(*ec2.Options)) (*ec2.DisassociateRouteTableOutput, error)
-	DescribeRouteTablesFunc  func(ctx context.Context, params *ec2.DescribeRouteTablesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeRouteTablesOutput, error)
-	DeleteRouteTableFunc     func(ctx context.Context, params *ec2.DeleteRouteTableInput, optFns ...func(*ec2.Options)) (*ec2.DeleteRouteTableOutput, error)
+	DescribeRouteTablesFunc    func(ctx context.Context, params *ec2.DescribeRouteTablesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeRouteTablesOutput, error)
+	DeleteRouteTableFunc       func(ctx context.Context, params *ec2.DeleteRouteTableInput, optFns ...func(*ec2.Options)) (*ec2.DeleteRouteTableOutput, error)
 
 	// NAT Gateway operations
 	CreateNatGatewayFunc    func(ctx context.Context, params *ec2.CreateNatGatewayInput, optFns ...func(*ec2.Options)) (*ec2.CreateNatGatewayOutput, error)
@@ -51,16 +51,16 @@ type EC2Mock struct {
 	ReleaseAddressFunc  func(ctx context.Context, params *ec2.ReleaseAddressInput, optFns ...func(*ec2.Options)) (*ec2.ReleaseAddressOutput, error)
 
 	// Security Group operations
-	CreateSecurityGroupFunc          func(ctx context.Context, params *ec2.CreateSecurityGroupInput, optFns ...func(*ec2.Options)) (*ec2.CreateSecurityGroupOutput, error)
+	CreateSecurityGroupFunc           func(ctx context.Context, params *ec2.CreateSecurityGroupInput, optFns ...func(*ec2.Options)) (*ec2.CreateSecurityGroupOutput, error)
 	AuthorizeSecurityGroupIngressFunc func(ctx context.Context, params *ec2.AuthorizeSecurityGroupIngressInput, optFns ...func(*ec2.Options)) (*ec2.AuthorizeSecurityGroupIngressOutput, error)
-	DeleteSecurityGroupFunc          func(ctx context.Context, params *ec2.DeleteSecurityGroupInput, optFns ...func(*ec2.Options)) (*ec2.DeleteSecurityGroupOutput, error)
+	DeleteSecurityGroupFunc           func(ctx context.Context, params *ec2.DeleteSecurityGroupInput, optFns ...func(*ec2.Options)) (*ec2.DeleteSecurityGroupOutput, error)
 
 	// Tracking fields for verification
-	CreateVpcCalls     int
-	DescribeVpcsCalls  int
-	DeleteVpcCalls     int
-	CreateSubnetCalls  int
-	DeleteSubnetCalls  int
+	CreateVpcCalls    int
+	DescribeVpcsCalls int
+	DeleteVpcCalls    int
+	CreateSubnetCalls int
+	DeleteSubnetCalls int
 }
 
 // VPC operations
@@ -84,7 +84,7 @@ func (m *EC2Mock) DescribeVpcs(ctx context.Context, params *ec2.DescribeVpcsInpu
 		return m.DescribeVpcsFunc(ctx, params, optFns...)
 	}
 	// Default: return VPCs matching requested IDs
-	var vpcs []ec2types.Vpc
+	vpcs := make([]ec2types.Vpc, 0, len(params.VpcIds))
 	for _, vpcID := range params.VpcIds {
 		vpcs = append(vpcs, ec2types.Vpc{
 			VpcId:     aws.String(vpcID),

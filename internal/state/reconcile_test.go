@@ -806,8 +806,8 @@ func TestReconciler_SyncedResources(t *testing.T) {
 		Status:    InfraStatusReady,
 		CreatedAt: time.Now(),
 	}
-	if err := store.CreateInfra(infra); err != nil {
-		t.Fatalf("Failed to create infra: %v", err)
+	if createErr := store.CreateInfra(infra); createErr != nil {
+		t.Fatalf("Failed to create infra: %v", createErr)
 	}
 
 	// Mock AWS to return the same VPC (tagged with matching infra ID)
@@ -925,8 +925,8 @@ func TestReconciler_StaleInfra(t *testing.T) {
 		Status:    InfraStatusReady,
 		CreatedAt: time.Now(),
 	}
-	if err := store.CreateInfra(infra); err != nil {
-		t.Fatalf("Failed to create infra: %v", err)
+	if createErr := store.CreateInfra(infra); createErr != nil {
+		t.Fatalf("Failed to create infra: %v", createErr)
 	}
 
 	// Mock EC2 to return "not found" for the VPC
@@ -984,8 +984,8 @@ func TestReconciler_StaleDeployment(t *testing.T) {
 		CreatedAt:   time.Now(),
 		LastUpdated: time.Now(),
 	}
-	if err := store.CreateDeployment(deploy); err != nil {
-		t.Fatalf("Failed to create deployment: %v", err)
+	if createErr := store.CreateDeployment(deploy); createErr != nil {
+		t.Fatalf("Failed to create deployment: %v", createErr)
 	}
 
 	ec2Mock := &mockEC2Client{}
@@ -1031,8 +1031,8 @@ func TestReconciler_CleanupStaleEntries(t *testing.T) {
 		Status:    InfraStatusReady,
 		CreatedAt: time.Now(),
 	}
-	if err := store.CreateInfra(infra); err != nil {
-		t.Fatalf("Failed to create infra: %v", err)
+	if createErr := store.CreateInfra(infra); createErr != nil {
+		t.Fatalf("Failed to create infra: %v", createErr)
 	}
 
 	deploy := &Deployment{
@@ -1042,8 +1042,8 @@ func TestReconciler_CleanupStaleEntries(t *testing.T) {
 		CreatedAt:   time.Now(),
 		LastUpdated: time.Now(),
 	}
-	if err := store.CreateDeployment(deploy); err != nil {
-		t.Fatalf("Failed to create deployment: %v", err)
+	if createErr := store.CreateDeployment(deploy); createErr != nil {
+		t.Fatalf("Failed to create deployment: %v", createErr)
 	}
 
 	ec2Mock := &mockEC2Client{}
@@ -1095,11 +1095,11 @@ func TestReconciler_VpcExists(t *testing.T) {
 	}
 
 	tests := []struct {
-		name        string
-		vpcID       string
-		mockResp    func(ctx context.Context, params *ec2.DescribeVpcsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeVpcsOutput, error)
-		wantExists  bool
-		wantErr     bool
+		name       string
+		vpcID      string
+		mockResp   func(ctx context.Context, params *ec2.DescribeVpcsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeVpcsOutput, error)
+		wantExists bool
+		wantErr    bool
 	}{
 		{
 			name:  "VPC exists",
@@ -1162,11 +1162,11 @@ func TestReconciler_EcsClusterExists(t *testing.T) {
 	}
 
 	tests := []struct {
-		name        string
-		clusterARN  string
-		mockResp    func(ctx context.Context, params *ecs.DescribeClustersInput, optFns ...func(*ecs.Options)) (*ecs.DescribeClustersOutput, error)
-		wantExists  bool
-		wantErr     bool
+		name       string
+		clusterARN string
+		mockResp   func(ctx context.Context, params *ecs.DescribeClustersInput, optFns ...func(*ecs.Options)) (*ecs.DescribeClustersOutput, error)
+		wantExists bool
+		wantErr    bool
 	}{
 		{
 			name:       "Cluster exists and active",
@@ -1476,10 +1476,10 @@ func TestReconciler_BatchTagFetching(t *testing.T) {
 // TestGetTagValue tests the getTagValue helper function.
 func TestGetTagValue(t *testing.T) {
 	tests := []struct {
-		name   string
-		tags   []ec2types.Tag
-		key    string
-		want   string
+		name string
+		tags []ec2types.Tag
+		key  string
+		want string
 	}{
 		{
 			name: "Key exists",
