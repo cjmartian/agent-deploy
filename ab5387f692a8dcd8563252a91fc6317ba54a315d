@@ -1,0 +1,31 @@
+P1.21 Per-Request Spending Override Implementation Notes:
+
+Implementation completed: 2026-03-29
+
+Changes:
+- internal/providers/aws.go:
+  - Added PerDeploymentBudgetUSD to planInfraInput struct
+  - Added PerDeploymentBudgetUSD to createInfraInput struct
+  - planInfra: Uses override when provided, validates <= global limit
+  - createInfra: Uses override when provided, validates <= global limit
+  - Logs when per-request override is used
+
+- internal/providers/aws_test.go:
+  - TestPlanInfra_PerRequestSpendingOverride with 3 subtests:
+    - override_allows_lower_budget: tight budget blocks expensive plan
+    - override_cannot_exceed_global: validation prevents bypass
+    - valid_override_works: proper override succeeds
+
+Key decisions:
+- Override must be positive to be used (0 or negative = use global)
+- Override cannot exceed global limit (security measure)
+- Both planInfra and createInfra support override for consistency
+- Override applies to per-deployment limit only, not monthly budget
+
+Usage example:
+{
+  "app_description": "staging app",
+  "expected_users": 100,
+  "region": "us-east-1",
+  "per_deployment_budget_usd": 50.00
+}
