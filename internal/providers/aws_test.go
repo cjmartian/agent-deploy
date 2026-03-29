@@ -2272,6 +2272,41 @@ func TestIsLocalImage(t *testing.T) {
 			imageRef: "",
 			want:     false,
 		},
+		{
+			name:     "digest only local",
+			imageRef: "myapp@sha256:abc123def456",
+			want:     true,
+		},
+		{
+			name:     "digest with registry",
+			imageRef: "docker.io/nginx@sha256:abc123def456",
+			want:     false,
+		},
+		{
+			name:     "deeply nested path local",
+			imageRef: "org/team/project/myapp:v1",
+			want:     true,
+		},
+		{
+			name:     "deeply nested path with registry",
+			imageRef: "ghcr.io/org/team/project/myapp:v1",
+			want:     false,
+		},
+		{
+			name:     "uppercase local",
+			imageRef: "MyApp:Latest",
+			want:     true,
+		},
+		{
+			name:     "tag with special chars",
+			imageRef: "myapp:v1.0.0-rc.1+build.123",
+			want:     true,
+		},
+		{
+			name:     "registry hub docker com",
+			imageRef: "registry.hub.docker.com/library/nginx:latest",
+			want:     false,
+		},
 	}
 
 	for _, tt := range tests {

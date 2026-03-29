@@ -40,7 +40,7 @@
 | ~~**P3.21**~~ | ~~Cleanup service race condition~~ | ✅ FIXED — Added sync.Once protection around channel close |
 | **P3.22** | Deployment status update failures silently ignored | aws.go:1163-1212 log errors but continue; status could become stale |
 | **P3.23** | Certificate ARN storage failures silently ignored | aws.go:3633-3641 errors logged but not propagated; certificate state could be lost |
-| **P3.24** | No exponential backoff in certificate validation | aws.go:3661 polls with fixed 2s delay; could overload API |
+| ~~**P3.24**~~ | ~~No exponential backoff in certificate validation~~ | ✅ FIXED — Added backoffWithJitter() with exponential backoff (1s→15s for validation, 5s→30s for issuance) |
 | **P3.25** | isLocalImage() validation incomplete | Only checks for localhost/registry prefixes; may miss edge cases |
 | ~~**P3.26**~~ | ~~Race condition in monitor_test.go~~ | ✅ FIXED — Added mutex synchronization for callCount |
 
@@ -587,21 +587,24 @@ All tests pass with `-race` flag, verifying the RWMutex locking is correct.
 - [ ] Or implement retry logic for state updates
 - **Location:** `internal/providers/aws.go:3633-3641`
 
-### P3.24 No Exponential Backoff in Certificate Validation ⚠️ NEW
+### ~~P3.24 No Exponential Backoff in Certificate Validation~~ ✅ FIXED
 
-**Status:** NOT ADDRESSED  
-**Impact:** Could overload API during high latency periods; inefficient polling
+**Status:** COMPLETE  
+**Impact:** ~~Could overload API during high latency periods; inefficient polling~~
 
-**Evidence:**
-- `internal/providers/aws.go:3661` — polls with fixed 2s delay in a loop
-- No exponential backoff implemented
-- Fixed wait between polls regardless of conditions
+**Fix Applied:**
+1. Added `backoffWithJitter()` helper function that implements exponential backoff with ±25% jitter
+2. Updated certificate validation options polling (Step 2) to use exponential backoff: 1s, 2s, 4s, ... up to 15s max
+3. Updated certificate issuance polling (Step 4) to use exponential backoff: 5s, 10s, 20s, ... up to 30s max
+4. Added `TestBackoffWithJitter` test verifying exponential growth, max delay cap, jitter variance, and minimum delay
+5. Added `math/rand` import for jitter calculation
 
-**Required Work:**
-- [ ] Implement exponential backoff (e.g., 2s, 4s, 8s, ...)
-- [ ] Add jitter to prevent thundering herd
-- [ ] Consider configurable timeout
-- **Location:** `internal/providers/aws.go:3661`
+**Benefits:**
+- Reduces API load during certificate validation
+- Prevents thundering herd when multiple certificates being validated
+- More resilient during high latency periods
+
+**Location:** `internal/providers/aws.go`
 
 ### P3.25 isLocalImage() Validation Incomplete ⚠️ NEW
 
