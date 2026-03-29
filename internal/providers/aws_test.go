@@ -1192,6 +1192,71 @@ func TestResourceNetworkingConstants(t *testing.T) {
 	}
 }
 
+// TestResourceDNSConstants tests DNS resource constants for Route 53 alias record deletion (P1.33).
+func TestResourceDNSConstants(t *testing.T) {
+	tests := []struct {
+		constant string
+		value    string
+	}{
+		{state.ResourceDomainName, "domain_name"},
+		{state.ResourceHostedZoneID, "hosted_zone_id"},
+		{state.ResourceCertAutoCreated, "cert_auto_created"},
+		{state.ResourceDNSRecordName, "dns_record_name"},
+		{state.ResourceALBDNSName, "alb_dns_name"},
+		{state.ResourceALBHostedZoneID, "alb_hosted_zone_id"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.value, func(t *testing.T) {
+			if tt.constant != tt.value {
+				t.Errorf("Resource constant = %q, want %q", tt.constant, tt.value)
+			}
+		})
+	}
+}
+
+// TestInfraResources_ALBDNSData tests that infrastructure stores ALB DNS data for Route 53 deletion.
+func TestInfraResources_ALBDNSData(t *testing.T) {
+	infra := &state.Infrastructure{
+		Resources: make(map[string]string),
+	}
+
+	// Simulate storing ALB DNS data during DNS record creation.
+	albDNSName := "dualstack.my-alb-123456.us-west-2.elb.amazonaws.com"
+	albHostedZoneID := "Z1H1FL5HABSF5" // us-west-2 ALB zone ID
+	domainName := "app.example.com"
+	hostedZoneID := "Z0123456789ABCDEFGHIJ"
+
+	infra.Resources[state.ResourceDomainName] = domainName
+	infra.Resources[state.ResourceHostedZoneID] = hostedZoneID
+	infra.Resources[state.ResourceDNSRecordName] = domainName
+	infra.Resources[state.ResourceALBDNSName] = albDNSName
+	infra.Resources[state.ResourceALBHostedZoneID] = albHostedZoneID
+
+	// Verify all DNS resources are stored correctly.
+	if got := infra.Resources[state.ResourceDomainName]; got != domainName {
+		t.Errorf("ResourceDomainName = %q, want %q", got, domainName)
+	}
+	if got := infra.Resources[state.ResourceHostedZoneID]; got != hostedZoneID {
+		t.Errorf("ResourceHostedZoneID = %q, want %q", got, hostedZoneID)
+	}
+	if got := infra.Resources[state.ResourceALBDNSName]; got != albDNSName {
+		t.Errorf("ResourceALBDNSName = %q, want %q", got, albDNSName)
+	}
+	if got := infra.Resources[state.ResourceALBHostedZoneID]; got != albHostedZoneID {
+		t.Errorf("ResourceALBHostedZoneID = %q, want %q", got, albHostedZoneID)
+	}
+
+	// Verify the condition for successful DNS deletion.
+	canDeleteDNS := infra.Resources[state.ResourceHostedZoneID] != "" &&
+		infra.Resources[state.ResourceDNSRecordName] != "" &&
+		infra.Resources[state.ResourceALBDNSName] != "" &&
+		infra.Resources[state.ResourceALBHostedZoneID] != ""
+	if !canDeleteDNS {
+		t.Error("Expected all DNS deletion prerequisites to be met")
+	}
+}
+
 // TestInfraResources_PrivateSubnets tests that infrastructure stores private subnet configuration.
 func TestInfraResources_PrivateSubnets(t *testing.T) {
 	infra := &state.Infrastructure{

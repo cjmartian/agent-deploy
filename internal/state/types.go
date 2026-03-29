@@ -76,6 +76,9 @@ const (
 	ResourceHostedZoneID    = "hosted_zone_id"    // Route 53 hosted zone ID
 	ResourceCertAutoCreated = "cert_auto_created" // "true" if ACM cert was auto-provisioned
 	ResourceDNSRecordName   = "dns_record_name"   // The A record created in Route 53
+	// ALB DNS resources for Route 53 alias record deletion (P1.33).
+	ResourceALBDNSName      = "alb_dns_name"       // ALB DNS name (e.g., "dualstack-alb-123.elb.amazonaws.com")
+	ResourceALBHostedZoneID = "alb_hosted_zone_id" // ALB's canonical hosted zone ID (region-specific)
 )
 
 // Deployment represents an application deployed onto infrastructure.

@@ -3773,6 +3773,15 @@ func (p *AWSProvider) createDNSRecord(
 		slog.Error("failed to store DNS record name", logging.InfraID(infra.ID), logging.Err(storeErr))
 	}
 	infra.Resources[state.ResourceDNSRecordName] = domainName
+	// Store ALB DNS data for Route 53 alias record deletion (P1.33).
+	if storeErr := p.store.UpdateInfraResource(infra.ID, state.ResourceALBDNSName, albDNSName); storeErr != nil {
+		slog.Error("failed to store ALB DNS name", logging.InfraID(infra.ID), logging.Err(storeErr))
+	}
+	infra.Resources[state.ResourceALBDNSName] = albDNSName
+	if storeErr := p.store.UpdateInfraResource(infra.ID, state.ResourceALBHostedZoneID, albHostedZoneID); storeErr != nil {
+		slog.Error("failed to store ALB hosted zone ID", logging.InfraID(infra.ID), logging.Err(storeErr))
+	}
+	infra.Resources[state.ResourceALBHostedZoneID] = albHostedZoneID
 
 	slog.Info("Route 53 alias record created",
 		slog.String("component", "createDNSRecord"),
@@ -3797,12 +3806,16 @@ func (p *AWSProvider) deleteDNSResources(ctx context.Context, cfg aws.Config, in
 	domainName := infra.Resources[state.ResourceDNSRecordName]
 	certARN := infra.Resources[state.ResourceCertificateARN]
 	certAutoCreated := infra.Resources[state.ResourceCertAutoCreated] == "true"
+	// Retrieve stored ALB DNS data for Route 53 alias record deletion (P1.33 fix).
+	albDNSName := infra.Resources[state.ResourceALBDNSName]
+	albHostedZoneID := infra.Resources[state.ResourceALBHostedZoneID]
 
 	// Step 1: Delete the A alias record.
-	if hostedZoneID != "" && domainName != "" {
+	if hostedZoneID != "" && domainName != "" && albDNSName != "" && albHostedZoneID != "" {
 		slog.Info("deleting Route 53 alias record",
 			slog.String("component", "deleteDNSResources"),
-			slog.String("domain", domainName))
+			slog.String("domain", domainName),
+			slog.String("alb_dns", albDNSName))
 
 		_, err := r53Client.ChangeResourceRecordSets(ctx, &route53.ChangeResourceRecordSetsInput{
 			HostedZoneId: aws.String(hostedZoneID),
@@ -3813,11 +3826,9 @@ func (p *AWSProvider) deleteDNSResources(ctx context.Context, cfg aws.Config, in
 						Name: aws.String(domainName),
 						Type: route53types.RRTypeA,
 						AliasTarget: &route53types.AliasTarget{
-							// We need the ALB DNS to delete, but may not have it.
-							// For now, use a placeholder that Route 53 will reject if wrong.
-							// In practice, we'd need to describe the ALB first.
-							DNSName:              aws.String("dualstack.placeholder.elb.amazonaws.com"),
-							HostedZoneId:         aws.String("Z35SXDOTRQ7X7K"), // us-east-1 ALB zone
+							// Use stored ALB DNS data instead of placeholder (P1.33 fix).
+							DNSName:              aws.String(albDNSName),
+							HostedZoneId:         aws.String(albHostedZoneID),
 							EvaluateTargetHealth: true,
 						},
 					},
@@ -3830,6 +3841,12 @@ func (p *AWSProvider) deleteDNSResources(ctx context.Context, cfg aws.Config, in
 				slog.String("domain", domainName),
 				logging.Err(err))
 		}
+	} else if hostedZoneID != "" && domainName != "" {
+		// Log warning if ALB DNS data is missing (older deployments before P1.33 fix).
+		slog.Warn("skipping Route 53 alias record deletion - ALB DNS data not found in state",
+			slog.String("component", "deleteDNSResources"),
+			slog.String("domain", domainName),
+			slog.String("hint", "delete manually via AWS Console or re-deploy to populate state"))
 	}
 
 	// Step 2: Delete the ACM certificate (only if auto-created).

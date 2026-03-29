@@ -20,7 +20,6 @@
 | ID | Issue | Impact |
 |----|-------|--------|
 | **P1.31** | Missing input validations | Invalid InfraID/PlanID/DeploymentID format accepted; ImageRef not validated; no bounds on AppDescription/ExpectedUsers/LatencyMS |
-| **P1.33** | DNS deletion placeholder | Uses placeholder ALB DNS name for Route 53 record deletion; hardcoded zone ID only valid for us-east-1; should retrieve actual ALB DNS/zone from infrastructure state |
 
 ### MEDIUM PRIORITY — Test Gaps (P2)
 | ID | Issue | Impact |
@@ -293,21 +292,19 @@
 
 **No work required** — this was a false positive in the original audit.
 
-### P1.33 DNS Deletion Placeholder ❌
+### P1.33 DNS Deletion Placeholder ✅ COMPLETE
 
-**Status:** NOT ADDRESSED  
-**Impact:** DNS deletion uses placeholder values instead of actual infrastructure state; will fail in production
+**Status:** FIXED  
+**Impact:** DNS deletion now uses actual infrastructure state; works in all AWS regions
 
-**Evidence:**
-- `internal/providers/aws.go:3819-3820` — Uses placeholder ALB DNS name for Route 53 record deletion
-- Hardcoded hosted zone ID "Z35SXDOTRQ7X7K" only valid for us-east-1 ALBs
-- Should retrieve actual ALB DNS name and hosted zone ID from infrastructure state
-
-**Required Work:**
-- [ ] Retrieve actual ALB DNS name from infrastructure state (ResourceALBDNSName)
-- [ ] Retrieve actual ALB hosted zone ID from infrastructure state or ALB describe call
-- [ ] Remove hardcoded placeholder values
-- **Location:** `internal/providers/aws.go:3819-3820`
+**Implementation:**
+- [x] Added state constants: `ResourceALBDNSName` and `ResourceALBHostedZoneID`
+- [x] Modified `createDNSRecord()` to store ALB DNS name and hosted zone ID during creation
+- [x] Modified `deleteDNSResources()` to use stored values instead of hardcoded placeholder
+- [x] Now works in all AWS regions (not just us-east-1)
+- [x] Added graceful fallback with warning for older deployments missing ALB DNS data
+- [x] Added tests: `TestResourceDNSConstants`, `TestInfraResources_ALBDNSData`
+- **Location:** `internal/providers/aws.go`, `internal/state/types.go`
 
 ---
 
@@ -863,7 +860,7 @@ go tool cover -html=coverage.out          # View coverage report
 | Priority | Count | Items |
 |----------|-------|-------|
 | ~~**P0 Critical**~~ | ~~2~~ 0 | ~~P0.1 (non-atomic writes), P0.2 (silent error suppression)~~ ✅ ALL FIXED |
-| **P1 Spec Gaps** | 2 | P1.31 (missing input validations), P1.33 (DNS deletion placeholder) |
+| **P1 Spec Gaps** | 1 | P1.31 (missing input validations) |
 | **P2 Test Gaps** | 3 | P2.9 (main.go 0%), P2.10 (concurrent access), P2.5 (AWS error scenarios) |
 | **P3 Quality** | 11 | P3.12-P3.14, P3.18-P3.25 (reconciliation, state transitions, error handling, pricing, NAT Gateway, cleanup race, status updates, cert storage, cert backoff, image validation) |
 | **P4 New Features** | 7 | P4.1 (Lightsail), P4.2-P4.7 (workload types) |
