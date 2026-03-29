@@ -132,6 +132,9 @@ type planInfraInput struct {
 	// WHY: Users need to understand min/max cost impact before committing to auto-scaling.
 	MinCount int `json:"min_count,omitempty" jsonschema:"minimum task count for auto scaling (default: 1)"`
 	MaxCount int `json:"max_count,omitempty" jsonschema:"maximum task count for auto scaling (default: same as min_count, no scaling)"`
+	// Per-request spending override (P1.21): Allow deployment-specific budget caps.
+	// WHY: Users may want different budget limits for different deployments.
+	PerDeploymentBudgetUSD float64 `json:"per_deployment_budget_usd,omitempty" jsonschema:"maximum monthly cost for this deployment (overrides global config)"`
 }
 
 type planInfraOutput struct {
@@ -156,6 +159,9 @@ type createInfraInput struct {
 	PlanID           string `json:"plan_id"             jsonschema:"the plan ID returned by aws_plan_infra"`
 	LogRetentionDays int    `json:"log_retention_days,omitempty" jsonschema:"CloudWatch log retention in days (default: 7). Valid: 1,3,5,7,14,30,60,90,120,150,180,365,400,545,731,1096,1827,2192,2557,2922,3288,3653"`
 	CertificateARN   string `json:"certificate_arn,omitempty" jsonschema:"ACM certificate ARN for HTTPS (optional). When provided, creates HTTPS listener on port 443 and redirects HTTP to HTTPS"`
+	// Per-request spending override (P1.21): Allow deployment-specific budget cap at create time.
+	// WHY: User may want to enforce a tighter budget than the global config for specific infrastructure.
+	PerDeploymentBudgetUSD float64 `json:"per_deployment_budget_usd,omitempty" jsonschema:"maximum monthly cost for this deployment (overrides global config)"`
 }
 
 type createInfraOutput struct {
@@ -473,15 +479,30 @@ func (p *AWSProvider) planInfra(ctx context.Context, _ *mcp.CallToolRequest, in 
 	// Check spending limits before creating plan.
 	// WHY: Check against max cost when auto-scaling is enabled to prevent budget overruns.
 	limits, _ := spending.LoadLimits()
+
+	// Per-request spending override (P1.21): Use provided limit if valid.
+	// WHY: Allow deployment-specific budget caps that may be tighter than global limits.
+	perDeploymentLimit := limits.PerDeploymentUSD
+	if in.PerDeploymentBudgetUSD > 0 {
+		// Validate override doesn't exceed global limit.
+		if in.PerDeploymentBudgetUSD > limits.PerDeploymentUSD {
+			return nil, planInfraOutput{}, fmt.Errorf("per_deployment_budget_usd ($%.2f) exceeds global per-deployment limit ($%.2f)", in.PerDeploymentBudgetUSD, limits.PerDeploymentUSD)
+		}
+		perDeploymentLimit = in.PerDeploymentBudgetUSD
+		slog.Info("using per-request spending override",
+			slog.String("component", "aws_plan_infra"),
+			logging.Cost(perDeploymentLimit))
+	}
+
 	costToCheck := estimatedCost
 	if autoScalingEnabled {
 		costToCheck = maxCostMo // Check max cost against limit
 	}
-	if costToCheck > limits.PerDeploymentUSD {
+	if costToCheck > perDeploymentLimit {
 		if autoScalingEnabled {
-			return nil, planInfraOutput{}, fmt.Errorf("maximum estimated cost $%.2f/mo (at %d tasks) exceeds per-deployment limit of $%.2f", maxCostMo, maxCount, limits.PerDeploymentUSD)
+			return nil, planInfraOutput{}, fmt.Errorf("maximum estimated cost $%.2f/mo (at %d tasks) exceeds per-deployment limit of $%.2f", maxCostMo, maxCount, perDeploymentLimit)
 		}
-		return nil, planInfraOutput{}, fmt.Errorf("estimated cost $%.2f/mo exceeds per-deployment limit of $%.2f", estimatedCost, limits.PerDeploymentUSD)
+		return nil, planInfraOutput{}, fmt.Errorf("estimated cost $%.2f/mo exceeds per-deployment limit of $%.2f", estimatedCost, perDeploymentLimit)
 	}
 
 	// Create and persist plan.
@@ -684,7 +705,26 @@ func (p *AWSProvider) createInfra(ctx context.Context, _ *mcp.CallToolRequest, i
 			slog.Float64("projected_month_usd", actualSpend.ProjectedMonthUSD))
 	}
 
-	check := spending.CheckBudget(plan.EstimatedCostMo, limits, currentSpend)
+	// Per-request spending override (P1.21): Use provided limit if valid.
+	// WHY: Allow deployment-specific budget caps at create time.
+	effectiveLimits := limits
+	if in.PerDeploymentBudgetUSD > 0 {
+		// Validate override doesn't exceed global limit.
+		if in.PerDeploymentBudgetUSD > limits.PerDeploymentUSD {
+			return nil, createInfraOutput{}, fmt.Errorf("per_deployment_budget_usd ($%.2f) exceeds global per-deployment limit ($%.2f)", in.PerDeploymentBudgetUSD, limits.PerDeploymentUSD)
+		}
+		// Create a copy of limits with the override.
+		effectiveLimits = spending.Limits{
+			MonthlyBudgetUSD:      limits.MonthlyBudgetUSD,
+			PerDeploymentUSD:      in.PerDeploymentBudgetUSD,
+			AlertThresholdPercent: limits.AlertThresholdPercent,
+		}
+		slog.Info("using per-request spending override",
+			slog.String("component", "aws_create_infra"),
+			logging.Cost(in.PerDeploymentBudgetUSD))
+	}
+
+	check := spending.CheckBudget(plan.EstimatedCostMo, effectiveLimits, currentSpend)
 	if !check.Allowed {
 		return nil, createInfraOutput{}, fmt.Errorf("%w: %s", apperrors.ErrBudgetExceeded, check.Reason)
 	}

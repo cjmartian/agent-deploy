@@ -14,7 +14,6 @@
 |----|-------|------|--------|
 | **P1.29** | Custom DNS / Route 53 — **entire spec unimplemented** | `custom-dns.md` | No custom domain support, no Route 53, no ACM auto-provisioning |
 | **P1.9** | VPC CIDR hardcoded to 10.0.0.0/16 | `networking.md` | Cannot customize VPC for peering scenarios |
-| **P1.21** | Per-request spending override missing | `spending-safeguards.md` | Users cannot set deployment-specific budget caps |
 
 ### MEDIUM PRIORITY — Test Gaps (P2)
 | ID | Issue | Impact |
@@ -140,16 +139,16 @@
 - [ ] Update subnet CIDRs calculation (lines 1145, 1180) to derive from `vpc_cidr`
 - **Location:** `internal/providers/aws.go`
 
-### P1.21 Per-Request Spending Override ❌
+### P1.21 Per-Request Spending Override ✅ COMPLETE
 
-**Spec:** `ralph/specs/spending-safeguards.md`  
-**Impact:** Users cannot set deployment-specific budget caps; global config only
+**Status:** Implemented
 
-**Required Work:**
-- [ ] Add optional `monthly_budget_usd` and `per_deployment_usd` parameters to tool inputs
-- [ ] Override global limits when per-request limits are provided
-- [ ] Validate per-request limits do not exceed global limits
-- **Location:** `internal/providers/aws.go` tool inputs
+**Implementation:**
+- [x] Added per_deployment_budget_usd parameter to planInfraInput and createInfraInput
+- [x] Override is validated to not exceed global per-deployment limit
+- [x] When override is provided, uses it instead of global config
+- [x] Logs when using per-request override
+- **Location:** `internal/providers/aws.go`
 
 ### P1.22 Auto-Scaling Cost Range ✅ COMPLETE
 
@@ -529,7 +528,7 @@ go tool cover -html=coverage.out          # View coverage report
 | Priority | Count | Items |
 |----------|-------|-------|
 | **P0 Critical** | 0 | *(All P0 issues resolved)* |
-| **P1 Spec Gaps** | 3 | P1.29 (Custom DNS), P1.9 (VPC CIDR), P1.21 (per-request spending) |
+| **P1 Spec Gaps** | 2 | P1.29 (Custom DNS), P1.9 (VPC CIDR) |
 | **P2 Test Gaps** | 3 | P2.9 (main.go 0%), P2.10 (concurrent access), P2.5 (AWS error scenarios) |
 | **P3 Quality** | 9 | P3.13 (shallow reconciliation), P3.15 (DNS state constants), P3.9 (silent errors), P3.10 (missing error types), P3.11 (non-atomic updates), P3.12 (state transitions), P3.14 (startup handling), P3.16 (missing validations), P3.17 (no Route 53 client) |
 | **P5 Stretch** | 3 | CloudFormation, multi-cloud, secrets |
@@ -578,7 +577,7 @@ go tool cover -html=coverage.out          # View coverage report
 | **spending-safeguards.md** | Pre-provisioning budget check | ⚠️ PARTIAL — Cost Explorer works, but ALB/NAT/CW pricing uses hardcoded fallback |
 | **spending-safeguards.md** | Runtime cost monitoring with Cost Explorer | ✅ Implemented |
 | **spending-safeguards.md** | Auto-teardown when budget exceeded | ✅ IMPLEMENTED |
-| **spending-safeguards.md** | Per-request spending limit overrides | ❌ NOT IMPLEMENTED — P1.21 |
+| **spending-safeguards.md** | Per-request spending limit overrides | ✅ IMPLEMENTED |
 | **spending-safeguards.md** | Resource tagging | ✅ Implemented |
 | **auto-scaling.md** | Auto-scaling with target tracking | ✅ IMPLEMENTED — CPU/memory policies, cooldowns, cleanup |
 | **auto-scaling.md** | Cost range in planInfra output (min/max) | ✅ IMPLEMENTED |

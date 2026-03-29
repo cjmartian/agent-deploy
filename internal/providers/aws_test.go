@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -184,6 +185,74 @@ func TestPlanInfra_SpendingLimit(t *testing.T) {
 	if err == nil {
 		t.Error("Expected error for plan exceeding spending limit")
 	}
+}
+
+// TestPlanInfra_PerRequestSpendingOverride tests per-request spending limit overrides (P1.21).
+// WHY: Users may want different budget limits for different deployments.
+func TestPlanInfra_PerRequestSpendingOverride(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	store, _ := state.NewStore(t.TempDir())
+	provider := NewAWSProvider(store)
+
+	t.Run("override_allows_lower_budget", func(t *testing.T) {
+		// Create a plan with low cost that would normally pass.
+		input := planInfraInput{
+			AppDescription:         "Small app",
+			ExpectedUsers:          10,
+			LatencyMS:              200,
+			Region:                 "us-east-1",
+			PerDeploymentBudgetUSD: 10.0, // Very tight budget
+		}
+
+		_, _, err := provider.planInfra(context.Background(), nil, input)
+		// Should fail because even a small app costs more than $10/mo.
+		if err == nil {
+			t.Error("Expected error for plan exceeding per-request spending limit")
+		}
+	})
+
+	t.Run("override_cannot_exceed_global", func(t *testing.T) {
+		// Try to set override higher than global limit ($25 default).
+		input := planInfraInput{
+			AppDescription:         "Small app",
+			ExpectedUsers:          10,
+			LatencyMS:              200,
+			Region:                 "us-east-1",
+			PerDeploymentBudgetUSD: 1000.0, // Way higher than global $25 limit
+		}
+
+		_, _, err := provider.planInfra(context.Background(), nil, input)
+		if err == nil {
+			t.Error("Expected error for override exceeding global limit")
+		}
+		if err != nil && !strings.Contains(err.Error(), "exceeds global per-deployment limit") {
+			t.Errorf("Expected 'exceeds global' error, got: %v", err)
+		}
+	})
+
+	t.Run("valid_override_works", func(t *testing.T) {
+		// Set higher global limit first.
+		t.Setenv("AGENT_DEPLOY_PER_DEPLOYMENT_BUDGET", "200")
+
+		// Now use a valid override.
+		input := planInfraInput{
+			AppDescription:         "Small app",
+			ExpectedUsers:          10,
+			LatencyMS:              200,
+			Region:                 "us-east-1",
+			PerDeploymentBudgetUSD: 100.0, // Within global limit of $200
+		}
+
+		_, output, err := provider.planInfra(context.Background(), nil, input)
+		if err != nil {
+			t.Fatalf("Expected success with valid override, got: %v", err)
+		}
+		if output.PlanID == "" {
+			t.Error("Expected valid plan ID")
+		}
+	})
 }
 
 // TestDeploymentsResource tests the aws:deployments resource.
