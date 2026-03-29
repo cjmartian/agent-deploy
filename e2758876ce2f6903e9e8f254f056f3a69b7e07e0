@@ -1,0 +1,12 @@
+P1.29 Custom DNS / Route 53 implementation:
+- domain_name parameter in planInfraInput
+- DomainName in state.Plan
+- findHostedZone() with walk-up algorithm
+- provisionCertificate() for ACM with DNS validation
+- createDNSRecord() for Route 53 alias A record
+- deleteDNSResources() for teardown cleanup
+- ValidateDomainName(), extractParentDomain()
+- Route53API interface and Route53Mock
+- State constants for DNS resources
+
+ALL P1 ITEMS NOW COMPLETE!
