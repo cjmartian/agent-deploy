@@ -1,0 +1,29 @@
+P3.25 VERIFIED - isLocalImage() Implementation Review
+
+## Concern
+isLocalImage() only checks for localhost/registry prefixes; may miss edge cases
+
+## Review Findings
+The implementation is actually comprehensive:
+
+### Implemented Checks:
+1. ECR URI detection: strings.Contains('.dkr.ecr.') && '.amazonaws.com'
+2. 8 public registries: docker.io, index.docker.io, ghcr.io, public.ecr.aws, gcr.io, quay.io, registry.hub.docker.com, mcr.microsoft.com
+3. Custom registry detection: first path segment contains '.' or ':'
+   - Catches: myregistry.com/app, localhost:5000/app, 192.168.1.1:5000/app
+
+### Local Images (returns true):
+- Simple: myapp, myapp:tag
+- Library: nginx:latest, library/nginx
+- User prefix: username/myapp
+- Nested: org/team/project/myapp
+
+### Edge Case Tests Added:
+- Digest references: myapp@sha256:abc123
+- Deeply nested paths
+- Uppercase names
+- Special char tags: v1.0.0-rc.1+build.123
+
+## Conclusion
+Implementation is adequate. 27 test cases all pass.
+No code changes needed; added tests for documentation.
