@@ -1,0 +1,31 @@
+P3.12: State Transition Validation
+
+Implementation Details:
+- Added validateInfraTransition() helper function for Infrastructure state machine
+- Added validateDeploymentTransition() helper function for Deployment state machine
+- Modified SetInfraStatus() to validate transitions before applying
+- Modified UpdateDeploymentStatus() to validate transitions before applying
+
+State Machines Implemented:
+Infrastructure: provisioning→ready/failed, failed→provisioning/destroyed, ready→destroyed
+Deployment: deploying→running/failed/stopped, running→deploying/failed/stopped, failed→deploying/stopped
+
+Key Design Decisions:
+1. Idempotent: Same-state transitions succeed (no-op for convenience)
+2. Terminal states: destroyed/stopped cannot transition to any other state
+3. Retry support: failed→provisioning for infra, failed→deploying for deployment
+4. Update support: running→deploying for deployment updates
+
+Test Coverage:
+- TestInfraStateTransitions_ValidTransitions (17 test cases)
+- TestInfraStateTransitions_UnknownStatus
+- TestInfraStateTransitions_NotFound
+- TestDeploymentStateTransitions_ValidTransitions (16 test cases)
+- TestDeploymentStateTransitions_UnknownStatus
+- TestDeploymentStateTransitions_NotFound
+- TestDeploymentStateTransitions_PreservesURLs
+- TestDeploymentStateTransitions_UpdatesLastUpdated
+
+Files Modified:
+- internal/state/store.go: Added validation logic
+- internal/state/store_test.go: Added 8 test functions
