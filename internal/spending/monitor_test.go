@@ -568,10 +568,13 @@ func TestCostMonitor_StartTwice(t *testing.T) {
 }
 
 func TestCostMonitor_CheckNow(t *testing.T) {
+	var mu sync.Mutex
 	callCount := 0
 	mockClient := &mockCostExplorerClient{
 		GetCostAndUsageFunc: func(ctx context.Context, params *costexplorer.GetCostAndUsageInput, optFns ...func(*costexplorer.Options)) (*costexplorer.GetCostAndUsageOutput, error) {
+			mu.Lock()
 			callCount++
+			mu.Unlock()
 			return &costexplorer.GetCostAndUsageOutput{
 				ResultsByTime: []cetypes.ResultByTime{
 					{
@@ -610,7 +613,10 @@ func TestCostMonitor_CheckNow(t *testing.T) {
 	wg.Wait()
 
 	// Should have made at least one check
-	if callCount == 0 {
+	mu.Lock()
+	count := callCount
+	mu.Unlock()
+	if count == 0 {
 		t.Error("Expected at least one Cost Explorer call from CheckNow")
 	}
 

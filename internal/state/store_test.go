@@ -2,6 +2,7 @@ package state
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -342,6 +343,128 @@ func TestStoreDirectoryCreation(t *testing.T) {
 		}
 	}
 	_ = store
+}
+
+// TestAtomicWrites verifies that writeJSON uses atomic file operations.
+// This test ensures that:
+// 1. The final file exists after write
+// 2. No temp files are left behind on success
+// 3. The file content is correct
+func TestAtomicWrites(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStore(dir)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	// Create multiple plans to exercise atomic writes
+	for i := 0; i < 10; i++ {
+		plan := &Plan{
+			ID:              fmt.Sprintf("plan-atomic-%03d", i),
+			AppDescription:  fmt.Sprintf("Atomic test app %d", i),
+			ExpectedUsers:   100 + i,
+			LatencyMS:       50,
+			Region:          "us-east-1",
+			Services:        []string{"ECS", "ALB"},
+			EstimatedCostMo: 25.50,
+			Status:          PlanStatusCreated,
+			CreatedAt:       time.Now(),
+			ExpiresAt:       time.Now().Add(24 * time.Hour),
+		}
+
+		if err := store.CreatePlan(plan); err != nil {
+			t.Fatalf("CreatePlan: %v", err)
+		}
+
+		// Verify file exists and content is correct
+		got, err := store.GetPlan(plan.ID)
+		if err != nil {
+			t.Fatalf("GetPlan: %v", err)
+		}
+		if got.AppDescription != plan.AppDescription {
+			t.Errorf("AppDescription = %q, want %q", got.AppDescription, plan.AppDescription)
+		}
+	}
+
+	// Verify no temp files were left behind
+	entries, err := os.ReadDir(filepath.Join(dir, "plans"))
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	for _, entry := range entries {
+		if filepath.Ext(entry.Name()) != ".json" {
+			t.Errorf("unexpected file found: %s (should only have .json files)", entry.Name())
+		}
+	}
+}
+
+// TestConcurrentWrites verifies that concurrent writes don't corrupt state.
+func TestConcurrentWrites(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStore(dir)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	// Create initial plan
+	plan := &Plan{
+		ID:              "plan-concurrent",
+		AppDescription:  "Concurrent test",
+		ExpectedUsers:   100,
+		LatencyMS:       50,
+		Region:          "us-east-1",
+		Services:        []string{"ECS"},
+		EstimatedCostMo: 10.0,
+		Status:          PlanStatusCreated,
+		CreatedAt:       time.Now(),
+		ExpiresAt:       time.Now().Add(24 * time.Hour),
+	}
+	if err := store.CreatePlan(plan); err != nil {
+		t.Fatalf("CreatePlan: %v", err)
+	}
+
+	// Create infrastructure with concurrent updates
+	infra := &Infrastructure{
+		ID:        "infra-concurrent",
+		PlanID:    plan.ID,
+		Region:    "us-east-1",
+		Status:    "provisioning",
+		Resources: make(map[string]string),
+		CreatedAt: time.Now(),
+	}
+	if err := store.CreateInfra(infra); err != nil {
+		t.Fatalf("CreateInfra: %v", err)
+	}
+
+	// Run concurrent resource updates
+	done := make(chan bool)
+	for i := 0; i < 10; i++ {
+		go func(n int) {
+			resourceType := fmt.Sprintf("resource-%d", n)
+			resourceARN := fmt.Sprintf("arn:aws:test:%d", n)
+			err := store.UpdateInfraResource(infra.ID, resourceType, resourceARN)
+			if err != nil {
+				t.Errorf("UpdateInfraResource failed: %v", err)
+			}
+			done <- true
+		}(i)
+	}
+
+	// Wait for all goroutines
+	for i := 0; i < 10; i++ {
+		<-done
+	}
+
+	// Verify final state is consistent
+	got, err := store.GetInfra(infra.ID)
+	if err != nil {
+		t.Fatalf("GetInfra: %v", err)
+	}
+
+	// Should have all 10 resources (RWMutex ensures no lost updates)
+	if len(got.Resources) != 10 {
+		t.Errorf("Expected 10 resources, got %d", len(got.Resources))
+	}
 }
 
 func dirExists(path string) bool {

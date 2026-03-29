@@ -83,7 +83,11 @@ func (s *Store) ApprovePlan(id string) error {
 	// Check for expiration first.
 	if time.Now().After(plan.ExpiresAt) {
 		plan.Status = PlanStatusExpired
-		_ = s.writeJSON(s.planPath(id), plan)
+		if writeErr := s.writeJSON(s.planPath(id), plan); writeErr != nil {
+			slog.Error("failed to persist expired plan status",
+				slog.String("plan_id", id),
+				slog.Any("error", writeErr))
+		}
 		return apperrors.ErrPlanExpired
 	}
 
@@ -120,7 +124,11 @@ func (s *Store) RejectPlan(id string) error {
 	// Check for expiration first.
 	if time.Now().After(plan.ExpiresAt) {
 		plan.Status = PlanStatusExpired
-		_ = s.writeJSON(s.planPath(id), plan)
+		if writeErr := s.writeJSON(s.planPath(id), plan); writeErr != nil {
+			slog.Error("failed to persist expired plan status",
+				slog.String("plan_id", id),
+				slog.Any("error", writeErr))
+		}
 		return apperrors.ErrPlanExpired
 	}
 
@@ -216,7 +224,9 @@ func (s *Store) DeleteExpiredPlans() (int, error) {
 	for _, plan := range plans {
 		if now.After(plan.ExpiresAt) {
 			if err := s.DeletePlan(plan.ID); err != nil {
-				// Log but continue
+				slog.Warn("failed to delete expired plan",
+					slog.String("plan_id", plan.ID),
+					slog.Any("error", err))
 				continue
 			}
 			deleted++
@@ -437,14 +447,58 @@ func (s *Store) getDeployLocked(id string) (*Deployment, error) {
 
 // --- Helper methods ---
 
+// writeJSON atomically writes JSON data to a file using a temp file + rename pattern.
+// This prevents data corruption if the process is interrupted during write.
 func (s *Store) writeJSON(path string, v any) error {
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		return fmt.Errorf("write file: %w", err)
+
+	// Write to temp file in the same directory to ensure atomic rename works
+	// (temp file must be on the same filesystem as the target).
+	dir := filepath.Dir(path)
+	tmpFile, err := os.CreateTemp(dir, ".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
 	}
+	tmpPath := tmpFile.Name()
+
+	// Clean up temp file on any error
+	defer func() {
+		if tmpPath != "" {
+			os.Remove(tmpPath) // Best-effort cleanup; ignore errors
+		}
+	}()
+
+	// Write data to temp file
+	if _, err := tmpFile.Write(data); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("write temp file: %w", err)
+	}
+
+	// Sync to ensure data is flushed to disk before rename
+	if err := tmpFile.Sync(); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("sync temp file: %w", err)
+	}
+
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("close temp file: %w", err)
+	}
+
+	// Set correct permissions before rename
+	if err := os.Chmod(tmpPath, 0644); err != nil {
+		return fmt.Errorf("chmod temp file: %w", err)
+	}
+
+	// Atomic rename - this is the key to preventing corruption
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("rename temp file: %w", err)
+	}
+
+	// Clear tmpPath so deferred cleanup doesn't try to remove the final file
+	tmpPath = ""
 	return nil
 }
 
