@@ -20,7 +20,7 @@ import (
 
 // Version is the application version. It can be overridden at build time via ldflags:
 //
-//	go build -ldflags "-X main.Version=v1.2.3" ./internal
+//	go build -ldflags "-X main.Version=v1.2.3" ./cmd/agent-deploy
 var Version = "v0.1.0"
 
 var (

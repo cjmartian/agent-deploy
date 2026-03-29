@@ -1,3 +1,4 @@
 .vscode/mcp.json
 .vscode/settings.json
-agent-deploy
+# Ignore the compiled binary, not the source directory
+/agent-deploy

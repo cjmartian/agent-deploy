@@ -97,6 +97,11 @@ func TestLoadLimits_NoEnvVars(t *testing.T) {
 
 // TestLoadLimits_PartialEnvVars tests that only specified env vars override defaults.
 func TestLoadLimits_PartialEnvVars(t *testing.T) {
+	// WHY: Isolate HOME to prevent real config file from affecting test.
+	// Without this, ~/.agent-deploy/config.json may override defaults.
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
 	t.Setenv("AGENT_DEPLOY_MONTHLY_BUDGET", "")
 	t.Setenv("AGENT_DEPLOY_PER_DEPLOYMENT_BUDGET", "75.00")
 	t.Setenv("AGENT_DEPLOY_ALERT_THRESHOLD", "")

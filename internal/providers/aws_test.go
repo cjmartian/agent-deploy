@@ -70,6 +70,11 @@ func TestPlanInfra(t *testing.T) {
 
 // TestPlanInfra_SpendingLimit tests that planInfra rejects plans exceeding per-deployment limit.
 func TestPlanInfra_SpendingLimit(t *testing.T) {
+	// WHY: Isolate HOME to prevent real config file from affecting spending limits.
+	// Without this, ~/.agent-deploy/config.json may have higher limits than the test expects.
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
 	store, _ := state.NewStore(t.TempDir())
 	provider := NewAWSProvider(store)
 
@@ -733,11 +738,6 @@ func TestExtractServiceName(t *testing.T) {
 func TestDeployInput_AutoScalingDefaults(t *testing.T) {
 	// This test verifies that the deployInput struct has the new scaling fields.
 	input := deployInput{
-		InfraID:          "infra-123",
-		ImageRef:         "nginx:latest",
-		ContainerPort:    8080,
-		HealthCheckPath:  "/health",
-		DesiredCount:     2,
 		MinCount:         1,
 		MaxCount:         5,
 		TargetCPUPercent: 60,
@@ -973,7 +973,6 @@ func TestInfraResources_TLSEnabled(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			infra := &state.Infrastructure{
-				ID:        "infra-test",
 				Resources: make(map[string]string),
 			}
 
@@ -1033,7 +1032,6 @@ func TestResourceNetworkingConstants(t *testing.T) {
 // TestInfraResources_PrivateSubnets tests that infrastructure stores private subnet configuration.
 func TestInfraResources_PrivateSubnets(t *testing.T) {
 	infra := &state.Infrastructure{
-		ID:        "infra-test",
 		Resources: make(map[string]string),
 	}
 
@@ -1139,7 +1137,6 @@ func TestECSServiceUsesPrivateSubnets(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			infra := &state.Infrastructure{
-				ID:        "infra-test",
 				Resources: make(map[string]string),
 			}
 			infra.Resources[state.ResourceSubnetPrivate] = tt.privateSubnets
@@ -1654,8 +1651,8 @@ func TestProvisionVPC_WithMocks(t *testing.T) {
 		Resources: make(map[string]string),
 		Status:    state.InfraStatusProvisioning,
 	}
-	if err := store.CreateInfra(infra); err != nil {
-		t.Fatalf("CreateInfra: %v", err)
+	if createErr := store.CreateInfra(infra); createErr != nil {
+		t.Fatalf("CreateInfra: %v", createErr)
 	}
 
 	tags := map[string]string{
@@ -1833,8 +1830,8 @@ func TestProvisionECSCluster_WithMocks(t *testing.T) {
 		Resources: make(map[string]string),
 		Status:    state.InfraStatusProvisioning,
 	}
-	if err := store.CreateInfra(infra); err != nil {
-		t.Fatalf("CreateInfra: %v", err)
+	if createErr := store.CreateInfra(infra); createErr != nil {
+		t.Fatalf("CreateInfra: %v", createErr)
 	}
 
 	tags := map[string]string{
@@ -1914,8 +1911,8 @@ func TestProvisionALB_WithMocks(t *testing.T) {
 		},
 		Status: state.InfraStatusProvisioning,
 	}
-	if err := store.CreateInfra(infra); err != nil {
-		t.Fatalf("CreateInfra: %v", err)
+	if createErr := store.CreateInfra(infra); createErr != nil {
+		t.Fatalf("CreateInfra: %v", createErr)
 	}
 
 	tags := map[string]string{
@@ -2163,13 +2160,13 @@ func TestValidateHealthCheckPath(t *testing.T) {
 		path    string
 		wantErr bool
 	}{
-		{"", false},       // Empty uses default
+		{"", false}, // Empty uses default
 		{"/", false},
 		{"/health", false},
 		{"/healthz", false},
 		{"/api/health", false},
 		{"/api/v1/healthcheck", false},
-		{"health", true},  // Must start with /
+		{"health", true}, // Must start with /
 		{"api/health", true},
 	}
 

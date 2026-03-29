@@ -1,0 +1,33 @@
+# GoReleaser configuration for agent-deploy
+#
+# WHY: Per spec ralph/specs/distribution.md - enables cross-platform binary releases
+# via GitHub Actions. Users can download prebuilt binaries without needing Go installed.
+#
+# Release workflow: Tag a version (e.g., git tag v0.1.0 && git push --tags)
+# to trigger .github/workflows/release.yml which runs goreleaser.
+
+version: 2
+
+builds:
+  - main: ./cmd/agent-deploy
+    binary: agent-deploy
+    ldflags:
+      - -X main.Version={{ .Version }}
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+release:
+  github:
+    owner: cjmartian
+    name: agent-deploy

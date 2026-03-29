@@ -7,8 +7,9 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev
 all: lint test build
 
 # Build the binary with version injection
+# WHY: Entry point moved to cmd/agent-deploy/ per distribution.md spec to enable `go install`
 build:
-	go build -ldflags "-X main.Version=$(VERSION)" -o agent-deploy ./internal
+	go build -ldflags "-X main.Version=$(VERSION)" -o agent-deploy ./cmd/agent-deploy
 
 # Run all tests
 test:
@@ -37,8 +38,9 @@ run: build
 	./agent-deploy
 
 # Install binary to GOPATH/bin
+# WHY: Uses cmd/agent-deploy/ path so external repos can `go install github.com/cjmartian/agent-deploy/cmd/agent-deploy@latest`
 install:
-	go install ./internal
+	go install -ldflags "-X main.Version=$(VERSION)" ./cmd/agent-deploy
 
 # Clean build artifacts
 clean:

@@ -30,18 +30,49 @@ User → AI Agent → agent-deploy (MCP) → AWS
 
 The server also exposes an `aws:deployments` resource (JSON list of all deployments) and an `aws_deploy_plan` prompt.
 
+## Installation
+
+### Option 1: `go install` (requires Go 1.25+)
+
+```sh
+go install github.com/cjmartian/agent-deploy/cmd/agent-deploy@latest
+```
+
+### Option 2: Download prebuilt binary
+
+```sh
+# Linux (amd64)
+curl -sL https://github.com/cjmartian/agent-deploy/releases/latest/download/agent-deploy_linux_amd64.tar.gz \
+  | tar xz -C /usr/local/bin agent-deploy
+
+# macOS (Apple Silicon)
+curl -sL https://github.com/cjmartian/agent-deploy/releases/latest/download/agent-deploy_darwin_arm64.tar.gz \
+  | tar xz -C /usr/local/bin agent-deploy
+```
+
+### Option 3: Build from source
+
+```sh
+git clone https://github.com/cjmartian/agent-deploy.git
+cd agent-deploy
+make build    # produces ./agent-deploy
+```
+
+### Option 4: Devcontainer (for Codespaces)
+
+In your repo's `.devcontainer/devcontainer.json`:
+
+```jsonc
+{
+  "postCreateCommand": "go install github.com/cjmartian/agent-deploy/cmd/agent-deploy@latest"
+}
+```
+
 ## Getting started
 
 ### Prerequisites
 
-- Go 1.25+
 - AWS credentials configured (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, `~/.aws/credentials`, or any method supported by the AWS SDK)
-
-### Build
-
-```sh
-make build    # produces ./agent-deploy
-```
 
 ### Run
 
@@ -130,8 +161,11 @@ make test     # run all unit tests
 ## Project structure
 
 ```
+cmd/
+  agent-deploy/      # MCP server entrypoint (per distribution.md spec)
+    main.go          # Entry point - enables `go install`
+    main_test.go     # Server integration tests
 internal/
-  main.go            # MCP server entrypoint (stdio + HTTP)
   providers/
     provider.go      # Provider interface
     aws.go           # AWS provider (tools, resources, prompts)
@@ -142,3 +176,39 @@ internal/
   id/                # ULID-based ID generation
   logging/           # Structured logging
 ```
+
+## Using from another repository
+
+To use agent-deploy from a separate Codespace or repo (e.g., one containing only your applications):
+
+1. Install agent-deploy (see Installation above)
+2. Add MCP configuration to your repo's `.vscode/mcp.json`:
+
+```jsonc
+{
+  "servers": {
+    "agent-deploy": {
+      "command": "agent-deploy",
+      "env": {
+        "AWS_REGION": "us-east-1"
+      }
+    }
+  }
+}
+```
+
+Or in `.vscode/settings.json`:
+
+```jsonc
+{
+  "mcp": {
+    "servers": {
+      "agent-deploy": {
+        "command": "agent-deploy"
+      }
+    }
+  }
+}
+```
+
+AWS credentials should be provided via Codespace secrets, not committed to the repo.

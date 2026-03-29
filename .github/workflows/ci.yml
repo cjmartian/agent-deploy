@@ -93,8 +93,9 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # WHY: Entry point moved to cmd/agent-deploy/ per distribution.md spec to enable `go install`
       - name: Build
-        run: go build -v -o agent-deploy ./internal
+        run: go build -v -o agent-deploy ./cmd/agent-deploy
 
       - name: Verify binary exists
         run: test -f agent-deploy && ./agent-deploy -help || true
