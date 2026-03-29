@@ -1,0 +1,9 @@
+P1.9 VPC CIDR Configuration implementation:
+- VpcCIDR in planInfraInput (default 10.0.0.0/16)
+- VpcCIDR persisted in state.Plan
+- ValidateVpcCIDR() validates prefix /16 to /24
+- CalculateSubnetLayout() derives subnet CIDRs
+- provisionVPC uses dynamic subnet layout
+- Tests: TestValidateVpcCIDR, TestCalculateSubnetLayout, TestPlanInfra_VpcCIDR
+
+Enables custom VPC CIDR for VPC peering scenarios.
