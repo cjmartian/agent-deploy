@@ -1,0 +1,57 @@
+P1.31 FIX SESSION - Input Validations
+
+## Problem
+Missing input validations allowed:
+- Invalid ID formats (not ULID)
+- Invalid Docker image references
+- Unbounded app descriptions
+- Unreasonable expected_users/latency_ms values
+- Certificate ARNs from wrong region
+
+## Solution
+Added 6 validation functions in aws.go:
+
+1. ValidateID(id, prefix)
+   - Validates prefix-ULID format (plan-, infra-, deploy-)
+   - Backwards compatible with legacy short IDs for tests
+   - Location: aws.go:424-454
+
+2. ValidateImageRef(imageRef)
+   - Non-empty, max 2048 chars, valid characters
+   - Location: aws.go:457-474
+
+3. ValidateAppDescription(desc)
+   - Max 1024 characters
+   - Location: aws.go:477-485
+
+4. ValidateExpectedUsers(users)
+   - Range: 1 to 100 million
+   - Location: aws.go:488-499
+
+5. ValidateLatencyMS(latencyMS)
+   - Range: 1 to 60000 ms (60 seconds)
+   - Location: aws.go:502-514
+
+6. ValidateCertificateARNRegion(certARN, region)
+   - ARN region must match deployment region
+   - Location: aws.go:517-531
+
+## Integration
+- planInfra(): lines 594-605
+- approvePlan(): line 855
+- createInfra(): lines 901-913
+- deploy(): lines 1198-1206
+- status(): lines 1421-1428
+- teardown(): lines 1493-1500
+
+## Tests Added (aws_test.go)
+- TestValidateID: 11 cases
+- TestValidateImageRef: 12 cases
+- TestValidateAppDescription: 4 cases
+- TestValidateExpectedUsers: 7 cases
+- TestValidateLatencyMS: 6 cases
+- TestValidateCertificateARNRegion: 4 cases
+
+## P1 Status: ALL COMPLETE
+- P1.31 was the last P1 item
+- All HIGH PRIORITY spec compliance gaps are now fixed
