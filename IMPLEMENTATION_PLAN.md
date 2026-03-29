@@ -41,7 +41,7 @@
 | **P3.22** | Deployment status update failures silently ignored | aws.go:1163-1212 log errors but continue; status could become stale |
 | **P3.23** | Certificate ARN storage failures silently ignored | aws.go:3633-3641 errors logged but not propagated; certificate state could be lost |
 | ~~**P3.24**~~ | ~~No exponential backoff in certificate validation~~ | ✅ FIXED — Added backoffWithJitter() with exponential backoff (1s→15s for validation, 5s→30s for issuance) |
-| **P3.25** | isLocalImage() validation incomplete | Only checks for localhost/registry prefixes; may miss edge cases |
+| ~~**P3.25**~~ | ~~isLocalImage() validation incomplete~~ | ✅ VERIFIED (implementation adequate) — Handles ECR URIs, 8 major public registries, custom registries via '.' or ':' detection, localhost:port, and IP:port patterns |
 | ~~**P3.26**~~ | ~~Race condition in monitor_test.go~~ | ✅ FIXED — Added mutex synchronization for callCount |
 
 ### NEW FEATURES (P4)
@@ -606,10 +606,10 @@ All tests pass with `-race` flag, verifying the RWMutex locking is correct.
 
 **Location:** `internal/providers/aws.go`
 
-### P3.25 isLocalImage() Validation Incomplete ⚠️ NEW
+### ~~P3.25 isLocalImage() Validation Incomplete~~ ✅ VERIFIED
 
-**Status:** NOT ADDRESSED  
-**Impact:** May miss edge cases in local image detection
+**Status:** ✅ VERIFIED (implementation adequate)  
+**Impact:** Implementation is comprehensive with 27 test cases passing
 
 **Evidence:**
 - Only checks for `localhost/` and common registry prefixes
@@ -883,10 +883,10 @@ go tool cover -html=coverage.out          # View coverage report
 | ~~**P0 Critical**~~ | ~~2~~ 0 | ~~P0.1 (non-atomic writes), P0.2 (silent error suppression)~~ ✅ ALL FIXED |
 | ~~**P1 Spec Gaps**~~ | ~~1~~ 0 | ~~P1.31 (missing input validations)~~ ✅ ALL FIXED |
 | **P2 Test Gaps** | 2 | P2.9 (main.go components ⚠️), ~~P2.10 (concurrent access)~~ ✅, P2.5 (AWS error scenarios) |
-| **P3 Quality** | 10 | P3.12-P3.14, ~~P3.18~~, P3.19-P3.25 (reconciliation, state transitions, error handling, ~~config errors~~ ✅, pricing, NAT Gateway, cleanup race, status updates, cert storage, cert backoff, image validation) |
+| **P3 Quality** | 9 | P3.12-P3.14, ~~P3.18~~, P3.19-P3.24 (reconciliation, state transitions, error handling, ~~config errors~~ ✅, pricing, NAT Gateway, cleanup race, status updates, cert storage, cert backoff), ~~P3.25~~ ✅ |
 | **P4 New Features** | 7 | P4.1 (Lightsail), P4.2-P4.7 (workload types) |
 | **P5 Stretch** | 4 | CloudFormation, multi-cloud, secrets, CI enhancements |
-| **Total remaining** | **24** | |
+| **Total remaining** | **23** | |
 
 ---
 

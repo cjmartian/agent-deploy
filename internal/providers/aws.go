@@ -3822,13 +3822,26 @@ func (p *AWSProvider) provisionCertificate(
 		return "", fmt.Errorf("request certificate: %w", err)
 	}
 	certARN := *certResp.CertificateArn
+
+	// Store certificate ARN in infrastructure state for teardown.
+	// This is critical: if storage fails, teardown won't know to delete the certificate.
 	if storeErr := p.store.UpdateInfraResource(infra.ID, state.ResourceCertificateARN, certARN); storeErr != nil {
 		slog.Error("failed to store certificate ARN", logging.InfraID(infra.ID), logging.Err(storeErr))
+		// Attempt to delete the certificate we just created since we can't track it
+		if _, delErr := acmClient.DeleteCertificate(ctx, &acm.DeleteCertificateInput{
+			CertificateArn: aws.String(certARN),
+		}); delErr != nil {
+			slog.Error("failed to cleanup orphaned certificate", logging.InfraID(infra.ID), logging.Err(delErr))
+		}
+		return "", fmt.Errorf("failed to store certificate ARN: %w (certificate rolled back)", storeErr)
 	}
 	infra.Resources[state.ResourceCertificateARN] = certARN
+
 	// Mark as auto-created for cleanup.
 	if storeErr := p.store.UpdateInfraResource(infra.ID, state.ResourceCertAutoCreated, "true"); storeErr != nil {
 		slog.Error("failed to store cert auto-created flag", logging.InfraID(infra.ID), logging.Err(storeErr))
+		// Non-critical: certificate ARN is stored, teardown will still work
+		// Just log the error and continue
 	}
 	infra.Resources[state.ResourceCertAutoCreated] = "true"
 
