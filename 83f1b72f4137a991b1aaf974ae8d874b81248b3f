@@ -1,0 +1,29 @@
+P1.30 Distribution Implementation Notes:
+
+Implementation completed: 2025-03-29
+
+Files changed:
+- MOVED: internal/main.go → cmd/agent-deploy/main.go
+- MOVED: internal/main_test.go → cmd/agent-deploy/main_test.go
+- ADDED: .goreleaser.yml - cross-platform release config (linux/darwin, amd64/arm64)
+- ADDED: .github/workflows/release.yml - automated releases on v* tags
+- MODIFIED: Makefile - build/install use ./cmd/agent-deploy
+- MODIFIED: .github/workflows/ci.yml - build path updated
+- MODIFIED: README.md - installation section, external repo usage
+- MODIFIED: .gitignore - /agent-deploy (binary only, not directory)
+
+Test fixes (pre-existing bugs):
+- internal/providers/aws_test.go:TestPlanInfra_SpendingLimit - added HOME isolation
+- internal/spending/config_test.go:TestLoadLimits_PartialEnvVars - added HOME isolation
+
+Key decisions:
+- Used cmd/agent-deploy/ (not cmd/main/) per Go conventions for installable binaries
+- Cross-compile for linux+darwin on amd64+arm64 (Windows omitted per spec)
+- GoReleaser version 2 config format
+- Release workflow triggers on v* tags only
+
+Verification:
+- go build ./cmd/agent-deploy ✅
+- go test -race ./... ✅
+- golangci-lint run ./... ✅
+- ./agent-deploy -help ✅
