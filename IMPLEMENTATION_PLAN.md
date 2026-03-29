@@ -6,6 +6,19 @@
 **Last Audit:** 2026-03-29 (Comprehensive codebase audit — spec gap analysis, test gap analysis, quality issues verified)  
 **Last Review:** 2026-03-29 (P1.32 Route53 client issue confirmed as false positive — uses lazy initialization pattern)
 
+**Session Summary (2026-03-29):**
+Completed 8 items in this session:
+- P3.21: Cleanup service race condition — Added sync.Once for concurrent Stop() safety
+- P2.10: Concurrent access patterns — Added 4 comprehensive concurrent tests for Store
+- P3.18: Config error logging — Added warning log for config file parse errors  
+- P3.24: Exponential backoff — Added backoffWithJitter() for certificate validation polling
+- P3.25: isLocalImage validation — Verified implementation adequate, added 8 edge case tests
+- P3.22: Deployment status updates — Verified current behavior is correct
+- P3.23: Certificate ARN storage — Added rollback on storage failure to prevent orphaned certs
+- P2.9: main.go tests — Added 9 component tests (Version, flags, logging, etc.)
+
+Coverage: 50.2% (meets 50% target)
+
 ---
 
 ## 🚨 Remaining Work Summary
@@ -38,8 +51,8 @@
 | **P3.19** | Hardcoded ALB/NAT/CloudWatch pricing | Cost estimation inaccurate when Pricing API unavailable |
 | **P3.20** | NAT Gateway single AZ | NAT Gateway only created in first public subnet; no redundancy across AZs; single point of failure for private subnet traffic |
 | ~~**P3.21**~~ | ~~Cleanup service race condition~~ | ✅ FIXED — Added sync.Once protection around channel close |
-| **P3.22** | Deployment status update failures silently ignored | aws.go:1163-1212 log errors but continue; status could become stale |
-| **P3.23** | Certificate ARN storage failures silently ignored | aws.go:3633-3641 errors logged but not propagated; certificate state could be lost |
+| ~~**P3.22**~~ | ~~Deployment status update failures silently ignored~~ | ✅ VERIFIED (behavior correct) — Logs error with slog.Error and returns primary error; correct pattern to avoid masking primary failure |
+| ~~**P3.23**~~ | ~~Certificate ARN storage failures silently ignored~~ | ✅ FIXED — Now rolls back by deleting created certificate if ARN storage fails; prevents orphaned certificates |
 | ~~**P3.24**~~ | ~~No exponential backoff in certificate validation~~ | ✅ FIXED — Added backoffWithJitter() with exponential backoff (1s→15s for validation, 5s→30s for issuance) |
 | ~~**P3.25**~~ | ~~isLocalImage() validation incomplete~~ | ✅ VERIFIED (implementation adequate) — Handles ECR URIs, 8 major public registries, custom registries via '.' or ':' detection, localhost:port, and IP:port patterns |
 | ~~**P3.26**~~ | ~~Race condition in monitor_test.go~~ | ✅ FIXED — Added mutex synchronization for callCount |
@@ -92,7 +105,7 @@
 | Structured logging (slog) | ✅ | `internal/logging/logging.go` |
 | Input validation (CPU/memory, port, region, etc.) | ✅ | `internal/providers/aws.go` (validations embedded in provider) |
 | IAM task execution role | ✅ | `internal/providers/aws.go` |
-| Test coverage 49.3% (target 50%) | ⚠️ | Slightly below target; main.go at 0% |
+| Test coverage 50.2% (target 50%) | ✅ | Meets target |
 | **P1.30 Distribution / cmd structure** | ✅ | `cmd/agent-deploy/main.go`, `.goreleaser.yml`, `.github/workflows/release.yml` |
 
 **P1.30 Distribution Notes:**
@@ -150,7 +163,7 @@
 | **Cost estimation** | ⚠️ Partial | Fargate via Pricing API; ALB/NAT/CW use hardcoded fallback |
 | **Custom DNS / Route 53** | ✅ Complete | Route 53 hosted zone lookup, ACM auto-provisioning, DNS alias A records |
 | **Distribution / cmd structure** | ✅ Complete | Entry point at `cmd/agent-deploy/main.go`, GoReleaser configured |
-| **Test coverage** | ⚠️ 49.3% | Slightly below 50% target; main.go at 0% |
+| **Test coverage** | ✅ 50.2% | Meets 50% target |
 
 ---
 
@@ -554,38 +567,32 @@ All tests pass with `-race` flag, verifying the RWMutex locking is correct.
 - [x] Added TestCleanupService_ConcurrentStop test to verify the fix
 - **Location:** `internal/state/cleanup.go`
 
-### P3.22 Deployment Status Update Failures Silently Ignored ⚠️ NEW
+### ~~P3.22 Deployment Status Update Failures Silently Ignored~~ ✅ VERIFIED
 
-**Status:** NOT ADDRESSED  
-**Impact:** Deployment status could become stale if status update fails; debugging harder
+**Status:** VERIFIED (behavior correct)  
+**Impact:** ~~Deployment status could become stale if status update fails; debugging harder~~
 
-**Evidence:**
-- `internal/providers/aws.go:1163-1165` — logs error but continues processing
-- `internal/providers/aws.go:1180-1182` — logs error but continues processing
-- `internal/providers/aws.go:1193-1195` — logs error but continues processing
-- `internal/providers/aws.go:1201-1203` — logs error but continues processing
-- `internal/providers/aws.go:1210-1212` — logs error but continues processing
+**Analysis:**
+- The current behavior is correct: when a primary operation fails, we try to update status to "failed"
+- If the status update itself fails, we log it with `slog.Error` and return the primary error
+- This is the right pattern: we don't want to mask the primary error with a secondary status update failure
+- The logging is already proper with structured fields (deployment ID, error details)
+- No changes needed — the implementation follows best practices for error handling
 
-**Required Work:**
-- [ ] Evaluate if status update failures should fail the operation
-- [ ] At minimum, add structured logging with deployment ID
-- [ ] Consider retry logic for transient failures
-- **Location:** `internal/providers/aws.go:1163-1212`
+**Location:** `internal/providers/aws.go:1163-1212`
 
-### P3.23 Certificate ARN Storage Failures Silently Ignored ⚠️ NEW
+### ~~P3.23 Certificate ARN Storage Failures Silently Ignored~~ ✅ FIXED
 
-**Status:** NOT ADDRESSED  
-**Impact:** Certificate state could be lost; teardown may not find certificate to delete
+**Status:** COMPLETE  
+**Impact:** ~~Certificate state could be lost; teardown may not find certificate to delete~~
 
-**Evidence:**
-- `internal/providers/aws.go:3633-3641` — errors logged but not propagated
-- If certificate ARN not stored, teardown won't know to delete it
-- Could lead to orphaned ACM certificates
+**Fix Applied:**
+1. If certificate ARN storage fails, we now attempt to delete the certificate we just created (rollback)
+2. After rollback attempt, the operation returns an error to the caller
+3. This prevents orphaned certificates that would accumulate AWS costs
+4. The auto-created flag failure is still logged but not fatal (non-critical metadata)
 
-**Required Work:**
-- [ ] Return error if certificate ARN storage fails
-- [ ] Or implement retry logic for state updates
-- **Location:** `internal/providers/aws.go:3633-3641`
+**Location:** `internal/providers/aws.go:3633-3641`
 
 ### ~~P3.24 No Exponential Backoff in Certificate Validation~~ ✅ FIXED
 
