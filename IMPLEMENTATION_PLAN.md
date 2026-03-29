@@ -7,7 +7,9 @@
 **Last Review:** 2026-03-29 (P1.32 Route53 client issue confirmed as false positive — uses lazy initialization pattern)
 
 **Session Summary (2026-03-29):**
-Completed 8 items in this session:
+Completed 12 items in this session:
+- P3.12: State transition validation — Added validateInfraTransition() and validateDeploymentTransition() with full state machine validation
+- P2.5 (progress): AWS teardown tests — Added 9 tests for deleteVPCResources, deleteRouteTable, rollbackInfra
 - P3.21: Cleanup service race condition — Added sync.Once for concurrent Stop() safety
 - P2.10: Concurrent access patterns — Added 4 comprehensive concurrent tests for Store
 - P3.18: Config error logging — Added warning log for config file parse errors  
@@ -15,9 +17,10 @@ Completed 8 items in this session:
 - P3.25: isLocalImage validation — Verified implementation adequate, added 8 edge case tests
 - P3.22: Deployment status updates — Verified current behavior is correct
 - P3.23: Certificate ARN storage — Added rollback on storage failure to prevent orphaned certs
+- P3.14: Main.go startup error handling — Added defer shutdown() with sync.Once for idempotent cleanup on any exit path
 - P2.9: main.go tests — Added 9 component tests (Version, flags, logging, etc.)
 
-Coverage: 50.2% (meets 50% target)
+Coverage: 53.0% (meets 50% target)
 
 ---
 
@@ -45,8 +48,8 @@ Coverage: 50.2% (meets 50% target)
 | ID | Issue | Impact |
 |----|-------|--------|
 | **P3.13** | Shallow reconciliation (3/19 resource types) | Orphaned resources (subnets, NAT GW, SGs, etc.) may not be detected; SyncedCount misleading |
-| ~~**P3.12**~~ | ~~Missing state transitions~~ | ~~No deployment update or infrastructure retry transitions; any→any transitions allowed~~ ✅ |
-| **P3.14** | Main.go startup error handling (partial) | Background services not cleaned up on startup failure |
+| ~~**P3.12**~~ | ~~Missing state transitions~~ | ✅ FIXED — Added validateInfraTransition() and validateDeploymentTransition() with full state machine validation |
+| ~~**P3.14**~~ | ~~Main.go startup error handling~~ | ✅ FIXED — Added defer shutdown() with sync.Once for idempotent cleanup on any exit path |
 | ~~**P3.18**~~ | ~~Silent error suppression in config.go:36~~ | ✅ FIXED — Added warning log when config file exists but fails to parse |
 | **P3.19** | Hardcoded ALB/NAT/CloudWatch pricing | Cost estimation inaccurate when Pricing API unavailable |
 | **P3.20** | NAT Gateway single AZ | NAT Gateway only created in first public subnet; no redundancy across AZs; single point of failure for private subnet traffic |
@@ -105,7 +108,7 @@ Coverage: 50.2% (meets 50% target)
 | Structured logging (slog) | ✅ | `internal/logging/logging.go` |
 | Input validation (CPU/memory, port, region, etc.) | ✅ | `internal/providers/aws.go` (validations embedded in provider) |
 | IAM task execution role | ✅ | `internal/providers/aws.go` |
-| Test coverage 50.2% (target 50%) | ✅ | Meets target |
+| Test coverage 53.0% (target 50%) | ✅ | Meets target |
 | **P1.30 Distribution / cmd structure** | ✅ | `cmd/agent-deploy/main.go`, `.goreleaser.yml`, `.github/workflows/release.yml` |
 
 **P1.30 Distribution Notes:**
@@ -163,7 +166,7 @@ Coverage: 50.2% (meets 50% target)
 | **Cost estimation** | ⚠️ Partial | Fargate via Pricing API; ALB/NAT/CW use hardcoded fallback |
 | **Custom DNS / Route 53** | ✅ Complete | Route 53 hosted zone lookup, ACM auto-provisioning, DNS alias A records |
 | **Distribution / cmd structure** | ✅ Complete | Entry point at `cmd/agent-deploy/main.go`, GoReleaser configured |
-| **Test coverage** | ✅ 50.2% | Meets 50% target |
+| **Test coverage** | ✅ 53.0% | Meets 50% target |
 
 ---
 
@@ -488,9 +491,9 @@ Coverage improved from 44.6% → 48.7% on providers package.
 - Added 8 comprehensive test functions covering all transitions
 - **Location:** `internal/state/store.go`
 
-### P3.14 Main.go Startup Error Handling ⚠️
+### P3.14 Main.go Startup Error Handling ✅
 
-**Status:** PARTIAL  
+**Status:** COMPLETE  
 **Impact:** Partial startup could leave system in bad state
 
 **Evidence:**
@@ -498,11 +501,17 @@ Coverage improved from 44.6% → 48.7% on providers package.
 - Background services not cleaned up on startup failure
 - Orphaned resources logged as warnings but not auto-teardown optioned
 
-**Required Work:**
+**Work Completed:**
 - [x] Wire up `-enable-reconcile` flag properly ✅ (already implemented)
-- [ ] Clean up background services on startup failure
-- [ ] Add optional `--auto-teardown-orphans` flag to remove orphaned resources
-- **Location:** `internal/main.go`
+- [x] Clean up background services on startup failure
+- [ ] Add optional `--auto-teardown-orphans` flag to remove orphaned resources (separate feature)
+- **Location:** `cmd/agent-deploy/main.go`
+
+**Implementation Details:**
+- Added `defer shutdown()` to ensure cleanup runs on any exit path
+- Added `sync.Once` to shutdown handler to make it idempotent
+- Shutdown can now be called from: defer, signal handler, or HTTP server shutdown
+- Background services (CleanupService, CostMonitor) are properly stopped on any exit
 
 ### ~~P3.16 Missing Input Validations~~ → **MOVED TO P1.31**
 

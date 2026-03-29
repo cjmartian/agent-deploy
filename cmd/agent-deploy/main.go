@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -195,26 +196,36 @@ func main() {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	// Graceful shutdown handler.
+	// Graceful shutdown handler with sync.Once to ensure it runs exactly once.
+	// WHY: Per P3.14 - shutdown may be called from multiple paths (defer, signal handler,
+	// HTTP server shutdown). sync.Once prevents duplicate cleanup and log spam.
+	var shutdownOnce sync.Once
 	shutdown := func() {
-		log.Info("shutting down...")
-		cancel() // Cancel context for background services.
+		shutdownOnce.Do(func() {
+			log.Info("shutting down...")
+			cancel() // Cancel context for background services.
 
-		if cleanupService != nil && cleanupService.IsRunning() {
-			cleanupService.Stop()
-			stats := cleanupService.Stats()
-			log.Info("cleanup service stopped",
-				slog.Int("total_deleted", stats.TotalDeleted))
-		}
+			if cleanupService != nil && cleanupService.IsRunning() {
+				cleanupService.Stop()
+				stats := cleanupService.Stats()
+				log.Info("cleanup service stopped",
+					slog.Int("total_deleted", stats.TotalDeleted))
+			}
 
-		if costMonitor != nil && costMonitor.IsRunning() {
-			costMonitor.Stop()
-			stats := costMonitor.Stats()
-			log.Info("cost monitor stopped",
-				slog.Int("alerts_sent", stats.AlertsSent),
-				slog.Int("teardowns_done", stats.TeardownsDone))
-		}
+			if costMonitor != nil && costMonitor.IsRunning() {
+				costMonitor.Stop()
+				stats := costMonitor.Stats()
+				log.Info("cost monitor stopped",
+					slog.Int("alerts_sent", stats.AlertsSent),
+					slog.Int("teardowns_done", stats.TeardownsDone))
+			}
+		})
 	}
+
+	// Ensure shutdown is called on any exit path.
+	// WHY: Per P3.14 - if server startup fails after background services have
+	// started, we must clean them up to prevent leaked goroutines and resources.
+	defer shutdown()
 
 	// Serve over stdio or streamable HTTP.
 	if *httpAddr != "" {
