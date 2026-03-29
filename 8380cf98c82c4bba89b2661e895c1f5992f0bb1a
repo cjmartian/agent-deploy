@@ -1,0 +1,23 @@
+P1.28 Container Health Check Implementation Notes:
+
+Implementation completed: 2026-03-29
+
+Changes:
+- internal/providers/aws.go: Added container-level health check to task definition
+  - New deployInput.HealthCheckGracePeriod parameter (default: 60s)
+  - Container HEALTHCHECK using CMD-SHELL: curl -f http://localhost:PORT/PATH || exit 1
+  - Health check config: interval=30s, timeout=5s, retries=3, startPeriod=grace_period
+
+- internal/providers/aws_test.go: Added TestDeployInput_HealthCheckGracePeriod test
+
+Key decisions:
+- Uses curl (standard in most container images) for health check command
+- Same health_check_path as ALB for consistency
+- Default grace period 60s allows slow-starting apps to initialize
+- 3 retries before marking unhealthy to avoid flapping
+
+How it works:
+1. Container health check runs inside ECS task (not ALB)
+2. ECS monitors container health status independently
+3. If container marked unhealthy, ECS stops and replaces the task
+4. Works in conjunction with ALB health checks for defense in depth
