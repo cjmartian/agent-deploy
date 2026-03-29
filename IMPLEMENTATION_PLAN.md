@@ -2,8 +2,8 @@
 
 **Project Goal:** Natural language deployment of applications via MCP server → Cloud provider. Allow users to end-to-end create applications and make them publicly available while ensuring spend does not cross user-defined boundaries.
 
-**Last Updated:** 2026-03-28  
-**Last Audit:** 2026-03-28 (Comprehensive codebase audit)
+**Last Updated:** 2026-03-29  
+**Last Audit:** 2026-03-29 (Comprehensive codebase audit — spec gap analysis)
 
 ---
 
@@ -17,12 +17,17 @@
 ### HIGH PRIORITY — Spec Compliance
 | ID | Issue | Impact |
 |----|-------|--------|
+| **P1.9** | VPC CIDR hardcoded to 10.0.0.0/16 | Cannot customize VPC for peering scenarios |
 | **P1.21** | Per-request spending override MISSING | Users cannot set deployment-specific budget caps |
 | **P1.22** | Auto-scaling cost range MISSING | Cannot predict worst-case costs when auto-scaling configured |
+| **P1.28** | Container-level health check MISSING | Unhealthy containers may not be replaced by ECS |
+| **P1.29** | Custom DNS / Route 53 MISSING (entire spec) | No custom domain support, no ACM auto-provisioning |
+| **P1.30** | Distribution / cmd structure MISSING (entire spec) | Cannot `go install`, no GoReleaser, not distributable |
 
 ### MEDIUM PRIORITY — Test Gaps
 | ID | Issue | Impact |
 |----|-------|--------|
+| **P2.5** | AWS provider error scenarios incomplete | Error paths not fully covered |
 | **P2.9** | main.go 0% coverage | Entry point completely untested; flag/signal handling unverified |
 | **P2.10** | Concurrent access UNTESTED | Store has RWMutex but locking never verified |
 
@@ -31,13 +36,17 @@
 |----|-------|--------|
 | **P3.9** | Silent error suppression (store.go:86,123,220) | Data loss/corruption could go undetected |
 | **P3.10** | Missing error types (ErrCertificateInvalid, ErrInvalidInput) | Inconsistent error handling |
+| **P3.11** | Non-atomic infrastructure updates | Potential data corruption under concurrent access |
+| **P3.12** | Missing state transitions | Limited state management flexibility |
 | **P3.13** | Shallow reconciliation (3/19 resource types) | Orphaned resources may not be detected |
+| **P3.14** | Main.go startup error handling | Partial startup could leave system in bad state |
+| **P3.15** | Missing state/types.go DNS resource constants | Required for custom-dns.md implementation (P1.29) |
 
 ---
 
 ## ✅ Completed
 
-| Component | Status | Location | Audit Notes (2026-03-27) |
+| Component | Status | Location | Audit Notes (2026-03-29) |
 |-----------|--------|----------|-------------|
 | MCP server (stdio + HTTP) | ✅ Working | `internal/main.go` | Verified |
 | Provider interface | ✅ Defined | `internal/providers/provider.go` | Verified |
@@ -45,7 +54,7 @@
 | AWS `aws:deployments` resource | ✅ Implemented | `internal/providers/aws.go` | Verified |
 | AWS `aws_deploy_plan` prompt | ✅ Implemented | `internal/providers/aws.go` | Verified |
 | Tool input/output types | ✅ Defined | `internal/providers/aws.go` | Verified |
-| Specifications | ✅ Written | `ralph/specs/` | All 4 specs present: aws-provider.md, deployment-state.md, spending-safeguards.md, ci.md |
+| Specifications | ✅ Written | `ralph/specs/` | 16 specs present (4 original + 12 added) |
 | Makefile syntax | ✅ Fixed | `Makefile` | tabs, build path, test flags |
 | AWS SDK dependency | ✅ Added | `go.mod` | ec2, ecs, ecr, elbv2, cloudwatchlogs, costexplorer |
 | ULID dependency | ✅ Added | `go.mod` | github.com/oklog/ulid/v2 |
@@ -79,7 +88,7 @@
 | Expired plan cleanup tests | ✅ Done | `internal/state/cleanup_test.go` | Comprehensive |
 | State reconciliation | ✅ Done | `internal/state/reconcile.go` | Full pagination support (P3.1, P3.2 completed) |
 | Reconciliation tests | ✅ Done | `internal/state/reconcile_test.go` | Mock-based only |
-| Structured logging infrastructure | ✅ Done | `internal/logging/logging.go` | Full slog infrastructure (AddTime field in Config defined but never used) |
+| Structured logging infrastructure | ✅ Done | `internal/logging/logging.go` | Full slog infrastructure |
 | Structured logging tests | ✅ Done | `internal/logging/logging_test.go` | Comprehensive |
 | AllWithStore provider init | ✅ Done | `internal/providers/provider.go` | Shared store instances |
 | Background services integration | ✅ Done | `internal/main.go` | CleanupService, CostMonitor, signal handling |
@@ -132,6 +141,8 @@
 | **Input validation** | ✅ **Complete** | ValidateFargateResources, ValidateLogRetention, ValidateContainerPort, ValidateEnvironmentVariables, ValidateHealthCheckPath, ValidateAWSRegion, ValidateDesiredCount implemented in `internal/providers/validation.go` |
 | **Rollback on failure** | ✅ **Done** | rollbackInfra() cleans up partially created resources on provisioning failure |
 | **Error types** | ⚠️ **INCOMPLETE** | Missing ErrCertificateInvalid, ErrInvalidInput (P3.10) |
+| **Custom DNS / Route 53** | ❌ **NOT STARTED** | Entire spec `ralph/specs/custom-dns.md` unimplemented (P1.29) |
+| **Distribution / cmd structure** | ❌ **NOT STARTED** | Entire spec `ralph/specs/distribution.md` unimplemented (P1.30) |
 
 ---
 
@@ -241,7 +252,6 @@
 - [x] Update task definition to use configurable port (`aws.go:814`)
 - [x] Update ALB target group health checks (`aws.go:865`)
 - [x] 5 hardcoded port 80 references across `aws.go`
-- **Impact:** Cannot deploy apps on non-80 ports (Node.js uses 3000, Go uses 8080, etc.)
 - **Location:** `internal/providers/aws.go`
 - **Completed:** ContainerPort parameter added with default value of 80
 
@@ -249,7 +259,6 @@
 
 - [x] Add `health_check_path` input parameter
 - [x] Update target group health check configuration (currently "/" at `aws.go:701`)
-- **Impact:** Apps with custom health endpoints (`/health`, `/healthz`) fail ALB health checks
 - **Location:** `internal/providers/aws.go`
 - **Completed:** HealthCheckPath parameter added with default value of /
 
@@ -257,7 +266,6 @@
 
 - [x] Add `desired_count` parameter to deploy tool
 - [x] Update ECS service `DesiredCount` (currently always 1 at `aws.go:853`)
-- **Impact:** No high availability; single point of failure; cannot scale
 - **Location:** `internal/providers/aws.go`
 - **Completed:** DesiredCount parameter added with default value of 1
 
@@ -265,7 +273,6 @@
 
 - [x] Add `environment` map input to deploy tool
 - [x] Pass environment to container definition
-- **Impact:** Cannot configure apps via environment variables (common pattern)
 - **Location:** `internal/providers/aws.go`
 - **Completed:** Environment map parameter added for container environment variables
 
@@ -279,7 +286,6 @@
 - [x] ✅ Added `ResourceTLSEnabled` and `ResourceCertificateARN` constants to state types
 - [x] ✅ Added comprehensive tests for certificate ARN validation and TLS configuration
 - [x] ✅ Added `github.com/aws/aws-sdk-go-v2/service/acm` dependency
-- **Impact:** Production deployments can now use HTTPS with ACM certificates
 - **Location:** `internal/providers/aws.go`, `internal/state/types.go`, `go.mod`
 - **Completed:** 2026-03-25
 
@@ -289,11 +295,9 @@
 - [x] Migrate 1 instance in `provider.go`
 - [x] Migrate ~4 instances in `costs.go`
 - [x] Use existing `internal/logging/logging.go` infrastructure
-- **Impact:** Inconsistent logging; structured logging infrastructure built but not adopted
 - **Location:** `internal/providers/aws.go` (30), `internal/providers/provider.go` (1), `internal/spending/costs.go` (~4)
-- **Audit (2026-03-20):** Total of 32 `log.Printf` instances identified
 
-### P1.9 VPC CIDR NOT CONFIGURABLE ⚠️
+### P1.9 VPC CIDR NOT CONFIGURABLE ⚠️ STILL OPEN
 
 - [ ] No `vpc_cidr` parameter in planInfraInput struct
 - [ ] VPC CIDR hardcoded to "10.0.0.0/16" at line 893
@@ -301,6 +305,7 @@
 - [ ] No CalculateSubnetLayout() function
 - **Status:** STILL HARDCODED
 - **Impact:** Cannot customize VPC for VPC peering scenarios
+- **Spec:** ralph/specs/networking.md
 - **Location:** `internal/providers/aws.go`
 
 ### P1.10 Subnet CIDRs ✅ COMPLETED
@@ -309,7 +314,6 @@
 - [x] ✅ Public subnets: 10.0.1.0/24, 10.0.2.0/24 (for ALB, NAT Gateway)
 - [x] ✅ Private subnets: 10.0.10.0/24, 10.0.11.0/24 (for ECS tasks)
 - [x] ✅ CIDRs derived automatically from VPC CIDR
-- **Impact:** Proper network topology with public/private separation
 - **Location:** `internal/providers/aws.go`
 - **Completed:** 2026-03-25
 
@@ -326,9 +330,7 @@
 - [x] ✅ Added ResourceNATGateway, ResourceElasticIP, ResourceRouteTablePrivate, ResourceSecurityGroupALB, ResourceSecurityGroupTask constants
 - [x] ✅ Backward compatibility: falls back to legacy resources if new ones not present
 - [x] ✅ Added comprehensive tests for networking configuration
-- **Impact:** ECS tasks now isolated in private subnets; improved security posture
 - **Location:** `internal/providers/aws.go`, `internal/state/types.go`, `internal/providers/aws_test.go`
-- **Note:** NAT Gateway adds ~$32/month to cost
 - **Completed:** 2026-03-25
 
 ### P1.12 Auto Scaling ✅ COMPLETED
@@ -344,7 +346,6 @@
 - [x] ✅ Updated `deploy()` to configure auto-scaling when `max_count > desired_count`
 - [x] ✅ Updated `teardown()` to delete auto-scaling before ECS service
 - [x] ✅ Comprehensive tests for all new functionality
-- **Impact:** Services can now automatically scale based on CPU/memory thresholds
 - **Location:** `internal/providers/aws.go`, `internal/providers/aws_test.go`, `go.mod`
 - **Completed:** 2026-03-24
 
@@ -353,7 +354,6 @@
 - [x] ✅ Plans now require explicit approval via `aws_approve_plan` tool
 - [x] ✅ Added `RejectPlan()` method for explicit rejection
 - [x] ✅ `createInfra` now checks for approved status, returns `ErrPlanNotApproved` otherwise
-- **Impact:** Users can now review cost estimates before resources are created
 - **Location:** `internal/providers/aws.go`, `internal/state/store.go`
 - **Completed:** 2026-03-24
 
@@ -363,16 +363,13 @@
 - [x] Implement wait for ECS service to reach RUNNING state
 - [x] Check ALB health check passes
 - [x] Spec `ralph/specs/aws-provider.md` requires waiting for healthy deployment
-- **Impact:** Users think deployment succeeded when it may still be starting/failing
 - **Location:** `internal/providers/aws.go`
-- **Audit (2026-03-20):** Verified returns immediately without waiting
 
 ### P1.15 Default Docker Image ✅ COMPLETED
 
 - [x] Default image is `nginx:latest` at `aws.go:787`
 - [x] Should require explicit image specification or document default clearly
 - [x] Now requires explicit `image_ref` parameter - no nginx:latest default
-- **Impact:** Accidental deployments with wrong image
 - **Location:** `internal/providers/aws.go:787`
 - **Resolution:** Removed nginx:latest default. The `image_ref` parameter is now required and must be explicitly specified by the user.
 
@@ -381,9 +378,7 @@
 - [x] CloudWatch log retention hardcoded to 7 days at `aws.go:749`
 - [x] Make configurable per deployment
 - [x] Now configurable via `log_retention_days` parameter
-- **Impact:** Cannot retain logs longer for compliance/debugging
 - **Location:** `internal/providers/aws.go:749`
-- **Resolution:** Added `log_retention_days` parameter to make CloudWatch log retention configurable per deployment.
 
 ### P1.17 ECS Task Resources Hardcoded ✅ COMPLETED
 
@@ -391,24 +386,19 @@
 - [x] Memory hardcoded to "512" at `aws.go:807`
 - [x] Make configurable via deploy tool parameters
 - [x] Now configurable via `cpu` and `memory` parameters
-- **Impact:** Apps may run out of resources; no way to allocate more
 - **Location:** `internal/providers/aws.go:806-807`
-- **Resolution:** Added `cpu` and `memory` parameters to make ECS task resources configurable per deployment.
 
 ### P1.18 Error Wrapping Breaks errors.Is() ✅ COMPLETED
 
 - [x] Inconsistent error wrapping at `aws.go:226`
 - [x] Should use `fmt.Errorf("...: %w", err)` for proper wrapping
-- **Impact:** Error type checking with `errors.Is()` fails
 - **Location:** `internal/providers/aws.go:226`
-- **Resolution:** Error wrapping was fixed as part of the P0.1 implementation when ErrPlanNotApproved was wired in. Verified that `%w` is used consistently for error wrapping throughout the codebase.
 
 ### P1.19 Fargate CPU/Memory Validation ✅ COMPLETED
 
 - [x] Implemented `ValidateFargateResources(cpu, memory string) error`
 - [x] Validates against valid Fargate CPU/memory combinations per AWS docs
 - [x] Clear error messages listing valid combinations
-- **Status:** IMPLEMENTED
 - **Spec:** ralph/specs/deploy-configuration.md
 - **Location:** `internal/providers/validation.go`
 
@@ -417,7 +407,6 @@
 - [x] Implemented `ValidateLogRetention(days int) error`
 - [x] Validates against CloudWatch-accepted retention values
 - [x] Wired into createInfra
-- **Status:** IMPLEMENTED
 - **Spec:** ralph/specs/deploy-configuration.md
 - **Location:** `internal/providers/validation.go`
 
@@ -446,7 +435,6 @@
 - [x] Implemented `ValidateContainerPort(port int) error`
 - [x] Validates port range 1-65535
 - [x] Wired into deploy
-- **Status:** IMPLEMENTED
 - **Spec:** ralph/specs/deploy-configuration.md
 - **Location:** `internal/providers/validation.go`
 
@@ -456,7 +444,6 @@
 - [x] Validates name format (alphanumeric + underscore)
 - [x] Blocks reserved AWS_, ECS_, FARGATE_ prefixes
 - [x] Wired into deploy
-- **Status:** IMPLEMENTED
 - **Location:** `internal/providers/validation.go`
 
 ### P1.25 Health Check Path Validation ✅ COMPLETED
@@ -464,7 +451,6 @@
 - [x] Implemented `ValidateHealthCheckPath(path string) error`
 - [x] Validates path starts with /
 - [x] Wired into deploy
-- **Status:** IMPLEMENTED
 - **Location:** `internal/providers/validation.go`
 
 ### P1.26 AWS Region Validation ✅ COMPLETED
@@ -472,7 +458,6 @@
 - [x] Implemented `ValidateAWSRegion(region string) error`
 - [x] Validates against list of valid AWS regions
 - [x] Wired into planInfra
-- **Status:** IMPLEMENTED
 - **Location:** `internal/providers/validation.go`
 
 ### P1.27 Desired Count Upper Limit ✅ COMPLETED
@@ -480,16 +465,47 @@
 - [x] Implemented `ValidateDesiredCount(count int) error`
 - [x] Enforces max of 100 to prevent runaway costs
 - [x] Wired into deploy
-- **Status:** IMPLEMENTED
 - **Location:** `internal/providers/validation.go`
 
 ### P1.28 Container Health Check MISSING ❌
 
 - [ ] No container-level health check in task definition
 - [ ] Only ALB health check exists; container can be unhealthy but pass ALB check
+- [ ] No health check grace period parameter
 - **Status:** NOT IMPLEMENTED
 - **Impact:** Unhealthy containers may not be replaced by ECS
 - **Location:** `internal/providers/aws.go` task definition
+
+### P1.29 Custom DNS / Route 53 — COMPLETELY MISSING ❌ 🆕
+
+- [ ] Add optional `domain_name` parameter to `aws_plan_infra` tool
+- [ ] Implement `findHostedZone()` to lookup existing Route 53 hosted zones (walk-up algorithm for subdomains)
+- [ ] Auto-provision ACM certificates with DNS validation when `domain_name` is provided
+- [ ] Create Route 53 alias A record pointing custom domain to ALB
+- [ ] Update `aws_status` output to show custom domain as primary URL
+- [ ] Implement teardown: delete Route 53 record, ACM cert, DNS validation CNAME
+- [ ] Add state constants: `ResourceDomainName`, `ResourceHostedZoneID`, `ResourceCertAutoCreated`, `ResourceDNSRecordName` to `internal/state/types.go`
+- [ ] Add `github.com/aws/aws-sdk-go-v2/service/route53` SDK dependency
+- [ ] Include Route 53 costs in plan estimation ($0.50/mo hosted zone + query costs)
+- **Status:** NOT IMPLEMENTED — entire spec `ralph/specs/custom-dns.md` is unimplemented
+- **Spec:** ralph/specs/custom-dns.md
+- **Impact:** Users cannot map custom domain names to their deployments; no DNS automation
+- **Location:** `internal/providers/aws.go`, `internal/state/types.go`, `go.mod`
+
+### P1.30 Distribution / cmd Structure — COMPLETELY MISSING ❌ 🆕
+
+- [ ] Move entry point from `internal/main.go` → `cmd/agent-deploy/main.go` (enables `go install`)
+- [ ] Move `internal/main_test.go` → `cmd/agent-deploy/main_test.go`
+- [ ] Create `.goreleaser.yml` (version: 2, tar.gz archives, checksum file, cross-platform builds)
+- [ ] Create `.github/workflows/release.yml` (trigger on tags matching `v*`)
+- [ ] Update `Makefile` build/install/run targets to use `./cmd/agent-deploy`
+- [ ] Update `README.md` with installation section (go install, binary download, devcontainer)
+- [ ] Add MCP client configuration guide for using agent-deploy from external repos
+- [ ] Generate cross-platform prebuilt binaries: linux/amd64, linux/arm64, darwin/amd64, darwin/arm64
+- **Status:** NOT IMPLEMENTED — entire spec `ralph/specs/distribution.md` is unimplemented
+- **Spec:** ralph/specs/distribution.md
+- **Impact:** Not distributable; cannot `go install`; no release automation
+- **Location:** `internal/main.go`, `Makefile`, `README.md`
 
 ---
 
@@ -514,10 +530,7 @@
 - [x] Test all error types: ErrPlanNotApproved, ErrProvisioningFailed, ErrInvalidState, ErrNotSupported
 - [x] Test error message formatting and Error() method
 - [x] Test errors.Is() compatibility
-- [x] Note: All error types now in use (ErrProvisioningFailed, ErrInvalidState, ErrPlanNotApproved wired in P3.5)
-- **Impact:** Domain error behavior untested
 - **Location:** `internal/errors/`
-- **Audit (2026-03-20):** Verified 0% coverage — only definitions exist, no tests
 
 ### P2.3 Spending Config Has No Tests (0% coverage) ✅ COMPLETED
 
@@ -527,9 +540,7 @@
 - [x] Test custom values from env vars
 - [x] Test zero values handling
 - [x] Test negative values handling
-- **Impact:** Spending configuration untested
 - **Location:** `internal/spending/config.go`
-- **Audit (2026-03-20):** Verified 0% coverage
 
 ### P2.4 Provider.go Has No Tests (0% coverage) ✅ COMPLETED
 
@@ -537,7 +548,7 @@
 - [x] Test `All()` and `AllWithStore()` registration
 - [x] Test Provider and TeardownProvider interface implementations
 - [x] Test graceful degradation with nil store
-- **Coverage:** 0% → 80%+ (All: 60%, AllWithStore: 100%, GetAWSProvider: 100%)
+- **Coverage:** 0% → 80%+
 - **Location:** `internal/providers/provider.go`
 
 ### P2.5 AWS Provider Tool Tests Missing (Coverage improved 18.2% → 42.9%) ⚠️
@@ -560,7 +571,6 @@
 - **Impact:** Extended test coverage for core AWS provider tools
 - **Location:** `internal/providers/aws_test.go`
 - **Depends on:** P2.6 (AWS SDK mocking setup) ✅ COMPLETED
-- **Audit (2026-03-20):** Verified only planInfra tested, 8.3% coverage
 - **Progress:** 42.9% coverage achieved with new unit tests
 
 ### P2.6 AWS SDK Mocking Infrastructure ✅ COMPLETED
@@ -568,37 +578,24 @@
 - [x] Create mock interfaces for EC2, ECS, ECR, ELB, CloudWatch clients
 - [x] Set up test fixtures for common AWS responses
 - [x] Enable unit testing without LocalStack
-- **Impact:** Required for P2.5; enables fast, reliable unit tests
 - **Location:** `internal/awsclient/interfaces.go`, `internal/awsclient/mocks/`
 - **Completed:** 2026-03-25
-- **Details:** Created EC2API, ECSAPI, ELBV2API, IAMAPI, ECRAPI, CloudWatchLogsAPI, AutoScalingAPI, ACMAPI interfaces; AWSClients struct; mock implementations; compile-time interface verification tests
-- **Note:** Mocks are now actively used in tests via NewAWSProviderWithClients dependency injection
 
 ### P2.7 Reconciliation Unit Tests with Mocks ✅ COMPLETED
 
 - [x] Refactored Reconciler to use interfaces (ReconcileEC2API, ReconcileECSAPI, ReconcileELBV2API)
 - [x] Added NewReconcilerWithClients() for dependency injection in tests
-- [x] Added comprehensive mock-based unit tests:
-  - TestReconciler_NoResources, TestReconciler_OrphanedVPC, TestReconciler_OrphanedECSCluster, TestReconciler_OrphanedALB
-  - TestReconciler_SyncedResources, TestReconciler_StaleInfra, TestReconciler_StaleDeployment
-  - TestReconciler_CleanupStaleEntries
-  - TestReconciler_VpcExists, TestReconciler_EcsClusterExists, TestReconciler_AlbExists, TestReconciler_EcsServiceExists
-  - TestReconciler_Pagination, TestReconciler_BatchTagFetching
-  - TestGetTagValue
-- [x] Removed paginator dependencies to enable mock testing
+- [x] Added comprehensive mock-based unit tests
 - **Coverage:** reconcile.go now tested via mocks; state package coverage 44.4% → 82.0%
 - **Location:** `internal/state/reconcile.go`, `internal/state/reconcile_test.go`
 - **Completed:** 2026-03-25
-- **Note:** LocalStack integration tests not needed - mock tests achieve same coverage with faster execution
 
 ### P2.8 State Store Silent Failure Handling ✅ COMPLETED
 
 - [x] Add logging for malformed state files in List operations
 - [x] Silent skips at `store.go:111,248,335` now log warnings
-- **Impact:** Malformed state files silently ignored; debugging difficult
 - **Location:** `internal/state/store.go:111,248,335`
 - **Completed:** 2026-03-25
-- **Details:** Added slog.Warn logging when List operations skip malformed JSON files; log includes file path, state type (plan/infrastructure/deployment), and error detail
 
 ### P2.9 Main.go Test Coverage (0%) ❌ 🔴 CONFIRMED
 
@@ -632,19 +629,13 @@
 
 - [x] Added CostExplorerAPI interface for dependency injection
 - [x] Added NewCostTrackerWithClient() constructor
-- [x] Added NewCostMonitorWithTracker() constructor  
-- [x] Comprehensive tests for CostTracker methods:
-  - GetDeploymentCosts (success, empty, API error, invalid amount)
-  - GetTotalMonthlySpend
-  - GetCostsByDeployment
-  - CheckAlerts
-  - GetDeploymentsOverBudget
-  - GenerateMonitoringReport
+- [x] Added NewCostMonitorWithTracker() constructor
+- [x] Comprehensive tests for CostTracker methods
 - [x] CostMonitor lifecycle tests (Start/Stop)
 - [x] PricingEstimator tests
-**Coverage:** 23.0% → 67.4%
-**Location:** `internal/spending/costs.go`, `internal/spending/costs_test.go`
-**Completed:** 2026-03-25
+- **Coverage:** 23.0% → 67.4%
+- **Location:** `internal/spending/costs.go`, `internal/spending/costs_test.go`
+- **Completed:** 2026-03-25
 
 ### P2.12 Spending Config Tests ✅ RESOLVED
 
@@ -652,10 +643,8 @@
 - [x] ✅ Tests were picking up a config file from ~/.agent-deploy/config.json which had $70 instead of default $25
 - [x] ✅ Tests now properly isolate from the real config file using t.TempDir()
 - **Status:** RESOLVED — tests now pass with proper isolation
-- **Impact:** Tests correctly verify default $25 limit without interference from user config files
 - **Location:** `internal/spending/check_test.go`, `internal/spending/config_test.go`
 - **Completed:** 2026-03-28
-- **Root Cause:** Tests were reading the user's real config file instead of using test defaults. The fix sets HOME to a temp directory during tests.
 
 ---
 
@@ -667,36 +656,29 @@
 - [x] Add pagination support for `ListClusters` using `NewListClustersPaginator` with batch processing of 100 clusters
 - [x] Add pagination support for `DescribeLoadBalancers` using `NewDescribeLoadBalancersPaginator`
 - [x] Handle large deployments (>100 resources per API call)
-- **Impact:** Reconciliation now handles large AWS accounts correctly
 - **Location:** `internal/state/reconcile.go`
 - **Completed:** 2026-03-25
-- **Details:** Implemented AWS SDK paginators for all three resource types; ECS clusters processed in batches of 100 (API limit)
 
 ### P3.2 Inefficient ALB Tag Fetching ✅ COMPLETED
 
 - [x] Currently makes individual tag API calls per ALB
 - [x] Batch tag fetching for multiple resources using `batchFetchALBTags()`
-- **Impact:** Performance improved; ALB tags fetched in batches of 20 (API limit)
 - **Location:** `internal/state/reconcile.go`
 - **Completed:** 2026-03-25
-- **Details:** Implemented `batchFetchALBTags()` function that fetches tags for up to 20 ALBs per API call (AWS DescribeTags limit)
 
 ### P3.3 Version String Duplicated ✅ COMPLETED
 
 - [x] Consolidate version "v0.1.0" (appears at `main.go:41` and `main.go:165`)
 - [x] Use single constant for version
-- **Impact:** Version drift possible if updated in one place only
 - **Location:** `internal/main.go:41,165`
 - **Completed:** 2026-03-25
-- **Details:** Added Version variable at package level; both log message and MCP Implementation use the constant; Makefile injects version from git via ldflags
 
 ### P3.4 Cost Monitor Region Hardcoded ✅ COMPLETED
 
 - [x] Cost monitor intentionally uses `us-east-1` (at `main.go:113`)
-- **Impact:** Cost Explorer API is only available in us-east-1 (AWS limitation)
 - **Location:** `internal/main.go:113`
 - **Completed:** 2026-03-25
-- **Details:** This is intentional; AWS Cost Explorer API is only available in us-east-1. Added documentation comment in main.go explaining this constraint. CostTracker already enforces us-east-1 internally.
+- **Details:** This is intentional; AWS Cost Explorer API is only available in us-east-1.
 
 ### P3.5 rollbackInfra Implementation ✅ COMPLETE
 
@@ -707,18 +689,14 @@
 - [x] Continues on delete failures
 - [x] Marks infra as destroyed
 - [x] ErrProvisioningFailed properly used
-- **Impact:** All domain error types now properly utilized; rollback handles partial failures
 - **Location:** `internal/errors/errors.go`, `internal/state/store.go`, `internal/providers/aws.go`
 - **Completed:** 2026-03-25
-- **Details:** rollbackInfra() cleans up partially created resources on provisioning failure. All requirements from spec met.
 
 ### P3.6 planInfra Cost Estimate Disclaimer ✅ COMPLETED
 
 - The disclaimer is already implemented in internal/spending/pricing.go
 - "Estimate based on AWS pricing. Actual costs may vary based on usage." is set on every cost estimate
-- When using fallback pricing, an additional assumption is added: "Using fallback pricing estimates (Pricing API unavailable)"
-- The summary in planInfra includes the disclaimer when present
-- **Completed:** 2026-03-25 (was already implemented, just marked as done)
+- **Completed:** 2026-03-25
 
 ### P3.7 Makefile Missing Targets ✅ COMPLETED
 
@@ -729,20 +707,15 @@
 - [x] Add `run` target
 - [x] Add `all` target
 - [x] Add `help` target
-- **Impact:** Developer experience; missing common workflows
 - **Location:** `Makefile`
 - **Completed:** 2026-03-25
-- **Details:** Added all, test-race, coverage, coverage-html, run, install, help targets; improved clean target; updated test target
 
 ### P3.8 Logging Config AddTime Field Unused ✅ COMPLETED
 
 - [x] `AddTime` field in `internal/logging/Config` is defined but never used
-- [x] Either implement time addition logic or remove the field
-- **Impact:** Dead code; confusing API
+- [x] Removed unused AddTime field from logging.Config
 - **Location:** `internal/logging/logging.go`
-- **Audit (2026-03-20):** Discovered unused field
 - **Completed:** 2026-03-25
-- **Details:** Removed unused AddTime field from logging.Config; slog handlers already include timestamps by default
 
 ### P3.9 Silent Error Suppression in Store ❌ 🔴 CONFIRMED
 
@@ -755,7 +728,7 @@
 - **Location:** `internal/state/store.go:86,123,220`
 - **Required Work:** Add error logging or return errors for:
   1. JSON marshal failures at line 86
-  2. File write failures at line 123  
+  2. File write failures at line 123
   3. Delete failures in DeleteExpiredPlans at line 220
 
 ### P3.10 Missing Error Types ❌
@@ -817,6 +790,17 @@
 - **Impact:** Partial startup could leave system in bad state
 - **Location:** `internal/main.go`
 
+### P3.15 Missing State Constants for Custom DNS 🆕 ❌
+
+- [ ] `ResourceDomainName` — needed for custom domain tracking
+- [ ] `ResourceHostedZoneID` — needed for Route 53 zone tracking
+- [ ] `ResourceCertAutoCreated` — needed to distinguish auto-provisioned vs user-provided certs
+- [ ] `ResourceDNSRecordName` — needed for DNS record cleanup in teardown
+- **Status:** NOT IMPLEMENTED — constants only exist in spec, not in code
+- **Impact:** Blocks P1.29 (Custom DNS) implementation
+- **Spec:** ralph/specs/custom-dns.md
+- **Location:** `internal/state/types.go`
+
 ---
 
 ## P5 — Stretch Goals
@@ -841,7 +825,7 @@
 - [ ] Secure secret injection into containers
 - **Impact:** No way to pass sensitive configuration securely
 - **Location:** `internal/providers/aws.go`
-- **Depends on:** P1.6 (environment variables)
+- **Depends on:** P1.6 (environment variables) ✅
 
 ---
 
@@ -897,7 +881,7 @@ go tool cover -html=coverage.out          # View coverage report
 |------|---------|
 | `internal/main.go` | MCP server entry point |
 | `internal/providers/provider.go` | Provider interface + registration |
-| `internal/providers/aws.go` | AWS provider (5 tools, 1 resource, 1 prompt) |
+| `internal/providers/aws.go` | AWS provider (6 tools, 1 resource, 1 prompt) |
 | `internal/state/store.go` | File-backed state storage |
 | `internal/state/types.go` | Plan, Infrastructure, Deployment structs |
 | `internal/state/reconcile.go` | State reconciliation with AWS resource tags |
@@ -914,6 +898,8 @@ go tool cover -html=coverage.out          # View coverage report
 | `ralph/specs/aws-provider.md` | Tool/resource/prompt specifications |
 | `ralph/specs/deployment-state.md` | State model and storage spec |
 | `ralph/specs/spending-safeguards.md` | Budget enforcement spec |
+| `ralph/specs/custom-dns.md` | Route 53 / custom domain spec |
+| `ralph/specs/distribution.md` | Distribution / GoReleaser spec |
 | `ralph/specs/ci.md` | CI/CD requirements spec |
 
 ### Hardcoded Values Summary
@@ -951,12 +937,12 @@ go tool cover -html=coverage.out          # View coverage report
 
 | Priority | Count | Items |
 |----------|-------|-------|
-| **P0 Critical** | 0 | *(All P0 issues resolved — P0.6 ECR Image Push completed)* |
-| **P1 Spec Gaps** | 4 | P1.9 (VPC CIDR hardcoded), P1.21 (Per-request spending override), P1.22 (Auto-scaling cost range), P1.28 (Container health check) |
+| **P0 Critical** | 0 | *(All P0 issues resolved)* |
+| **P1 Spec Gaps** | 6 | P1.9 (VPC CIDR hardcoded), P1.21 (per-request spending override), P1.22 (auto-scaling cost range), P1.28 (container health check), **P1.29 (Custom DNS / Route 53)** 🆕, **P1.30 (Distribution / cmd structure)** 🆕 |
 | **P2 Test Gaps** | 3 | P2.5 (AWS error scenarios), P2.9 (main.go 0% confirmed), P2.10 (concurrent access untested) |
-| **P3 Quality** | 6 | P3.9 (silent error suppression at store.go:86,123,220), P3.10 (missing error types), P3.11 (non-atomic updates), P3.12 (missing state transitions), P3.13 (shallow reconciliation - 3/19 types), P3.14 (startup error handling) |
+| **P3 Quality** | 7 | P3.9 (silent error suppression), P3.10 (missing error types), P3.11 (non-atomic updates), P3.12 (missing state transitions), P3.13 (shallow reconciliation 3/19), P3.14 (startup error handling), **P3.15 (missing DNS state constants)** 🆕 |
 | **P5 Stretch** | 3 | CloudFormation, multi-cloud, secrets |
-| **Total** | **16** | |
+| **Total remaining** | **19** | |
 
 ---
 
@@ -967,23 +953,30 @@ go tool cover -html=coverage.out          # View coverage report
 | **aws-provider.md** | 6 tools | ✅ Implemented (plan, approve, create, deploy, status, teardown) |
 | **aws-provider.md** | 1 resource (aws:deployments) | ✅ Implemented |
 | **aws-provider.md** | 1 prompt (aws_deploy_plan) | ✅ Implemented |
-| **aws-provider.md** | AWS Pricing API for cost estimation | ✅ **IMPLEMENTED** — parsePricingResponse() extracts Fargate prices from AWS Pricing API (P1.1 completed) |
+| **aws-provider.md** | AWS Pricing API for cost estimation | ✅ **IMPLEMENTED** — parsePricingResponse() extracts Fargate prices from AWS Pricing API |
 | **aws-provider.md** | Wait for healthy deployment in aws_deploy | ✅ IMPLEMENTED — polls ECS + ALB health checks |
 | **aws-provider.md** | TLS/HTTPS with ACM certificate support | ✅ IMPLEMENTED — TLS 1.2+ policy, HTTP-to-HTTPS redirect |
 | **aws-provider.md** | Plan approval before provisioning | ✅ IMPLEMENTED — explicit approval workflow |
 | **aws-provider.md** | Rollback on provisioning failure | ✅ IMPLEMENTED — rollbackInfra() cleans up partial resources |
-| **ecr-image-push.md** | Push local images to ECR | ✅ **IMPLEMENTED** — P0.6 completed (isLocalImage detection, pushImageToECR with Docker SDK) |
+| **ecr-image-push.md** | Push local images to ECR | ✅ **IMPLEMENTED** — P0.6 completed |
 | **deploy-configuration.md** | Fargate CPU/memory validation | ✅ IMPLEMENTED — P1.19 |
 | **deploy-configuration.md** | Log retention validation | ✅ IMPLEMENTED — P1.20 |
 | **deploy-configuration.md** | Container port validation (1-65535) | ✅ IMPLEMENTED — P1.23 |
 | **deploy-configuration.md** | Environment variables validation | ✅ IMPLEMENTED — P1.24 |
 | **deploy-configuration.md** | Health check path validation (must start with /) | ✅ IMPLEMENTED — P1.25 |
+| **custom-dns.md** | Route 53 hosted zone lookup | ❌ **NOT IMPLEMENTED** — P1.29 |
+| **custom-dns.md** | ACM certificate auto-provisioning | ❌ **NOT IMPLEMENTED** — P1.29 |
+| **custom-dns.md** | DNS alias A record creation | ❌ **NOT IMPLEMENTED** — P1.29 |
+| **custom-dns.md** | DNS resource tracking in state | ❌ **NOT IMPLEMENTED** — P3.15 |
+| **distribution.md** | Move main.go to cmd/agent-deploy/ | ❌ **NOT IMPLEMENTED** — P1.30 |
+| **distribution.md** | GoReleaser + release workflow | ❌ **NOT IMPLEMENTED** — P1.30 |
+| **distribution.md** | `go install` support | ❌ **NOT IMPLEMENTED** — P1.30 |
 | **deployment-state.md** | Plan, Infrastructure, Deployment types | ✅ Implemented |
 | **deployment-state.md** | File-backed JSON at ~/.agent-deploy/state/ | ✅ Implemented |
 | **deployment-state.md** | 24-hour plan expiration, hourly cleanup | ✅ Implemented |
-| **deployment-state.md** | AWS resource tag reconciliation | ⚠️ **PARTIAL** — only 3 of 19 resource types reconciled (VPC, ECS cluster, ALB) (P3.13) |
+| **deployment-state.md** | AWS resource tag reconciliation | ⚠️ **PARTIAL** — only 3 of 19 resource types reconciled (P3.13) |
 | **spending-safeguards.md** | monthly_budget_usd, per_deployment_usd, alert_threshold_percent | ✅ Implemented |
-| **spending-safeguards.md** | Pre-provisioning budget check | ⚠️ PARTIAL — Cost Explorer works, but pricing uses hardcoded fallback |
+| **spending-safeguards.md** | Pre-provisioning budget check | ⚠️ PARTIAL — Cost Explorer works, but ALB/NAT/CW pricing uses hardcoded fallback |
 | **spending-safeguards.md** | Runtime cost monitoring with Cost Explorer | ✅ Implemented |
 | **spending-safeguards.md** | Auto-teardown when budget exceeded | ✅ IMPLEMENTED |
 | **spending-safeguards.md** | Per-request spending limit overrides | ❌ NOT IMPLEMENTED — P1.21 |
@@ -995,6 +988,6 @@ go tool cover -html=coverage.out          # View coverage report
 | **ci.md** | CI workflow with lint, test, build jobs | ✅ IMPLEMENTED |
 | **testing.md** | 50% code coverage | ✅ **TARGET MET** — 51% overall |
 | **testing.md** | main.go test coverage | ❌ **0% COVERAGE** — P2.9 |
-| **testing.md** | Concurrent access testing | ❌ NOT TESTED — no t.Parallel(), no goroutine tests (P2.10) |
+| **testing.md** | Concurrent access testing | ❌ NOT TESTED — P2.10 |
 | **error-handling.md** | Domain error types | ⚠️ PARTIAL — missing ErrCertificateInvalid, ErrInvalidInput (P3.10) |
-| **operational.md** | No silent error suppression | ❌ NOT ADDRESSED — store.go:86,123,220 suppress errors (P3.9) |
+| **operational.md** | No silent error suppression | ❌ NOT ADDRESSED — store.go:86,123,220 (P3.9) |
