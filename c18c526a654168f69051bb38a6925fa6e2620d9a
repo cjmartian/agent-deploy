@@ -1,0 +1,26 @@
+P3.18 FIXED - Config Error Logging
+
+## Problem
+config.go:36 silently ignored config file load errors with '_ = err'
+Comment said 'log but don't fail' but NO LOGGING existed
+
+## Solution
+Added proper warning logging for config file parse errors:
+
+1. Added imports:
+   - log/slog
+   - github.com/cjmartian/agent-deploy/internal/logging
+
+2. Changed error handling:
+   - Missing config file is expected behavior, not logged
+   - Uses logging.ComponentSpending for consistent tagging
+   - Logs reason (err.Error()) for debugging
+
+## Test Output
+TestLoadLimits_InvalidConfigFile now shows:
+'WARN could not load config file, using defaults component=spending reason=parse config: invalid character...'
+
+## Why This Matters
+- Operators can now see when config file has syntax errors
+- Helps debug misconfiguration issues
+- Silent failures no longer hide problems
