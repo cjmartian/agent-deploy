@@ -279,7 +279,14 @@ func (s *Store) UpdateInfraResource(id, resourceType, arn string) error {
 	return s.writeJSON(s.infraPath(id), infra)
 }
 
-// SetInfraStatus updates the infrastructure status.
+// SetInfraStatus updates the infrastructure status with transition validation.
+// Valid transitions:
+//   - provisioning → ready (success) or failed (error)
+//   - failed → provisioning (retry) or destroyed (teardown)
+//   - ready → destroyed (teardown)
+//   - destroyed → (terminal state, no transitions)
+//
+// Returns ErrInvalidState if the transition is not allowed.
 func (s *Store) SetInfraStatus(id, status string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -289,8 +296,51 @@ func (s *Store) SetInfraStatus(id, status string) error {
 		return err
 	}
 
+	// Validate the state transition.
+	if err := validateInfraTransition(infra.Status, status); err != nil {
+		return err
+	}
+
 	infra.Status = status
 	return s.writeJSON(s.infraPath(id), infra)
+}
+
+// validateInfraTransition checks if the infrastructure state transition is valid.
+// State machine:
+//
+//	provisioning ──┬──► ready ──────────► destroyed
+//	               │                          ▲
+//	               └──► failed ──┬────────────┘
+//	                             │
+//	                             └──► provisioning (retry)
+func validateInfraTransition(from, to string) error {
+	// Same state is always valid (idempotent).
+	if from == to {
+		return nil
+	}
+
+	valid := false
+	switch from {
+	case InfraStatusProvisioning:
+		// Can transition to ready (success) or failed (error).
+		valid = to == InfraStatusReady || to == InfraStatusFailed
+	case InfraStatusReady:
+		// Can only transition to destroyed (teardown).
+		valid = to == InfraStatusDestroyed
+	case InfraStatusFailed:
+		// Can transition to provisioning (retry) or destroyed (teardown).
+		valid = to == InfraStatusProvisioning || to == InfraStatusDestroyed
+	case InfraStatusDestroyed:
+		// Terminal state — no transitions allowed.
+		valid = false
+	default:
+		return fmt.Errorf("%w: unknown infrastructure status '%s'", apperrors.ErrInvalidState, from)
+	}
+
+	if !valid {
+		return fmt.Errorf("%w: cannot transition infrastructure from '%s' to '%s'", apperrors.ErrInvalidState, from, to)
+	}
+	return nil
 }
 
 // ListInfra returns all infrastructure records.
@@ -367,7 +417,14 @@ func (s *Store) GetDeployment(id string) (*Deployment, error) {
 	return &deploy, nil
 }
 
-// UpdateDeploymentStatus updates the status and URLs of a deployment.
+// UpdateDeploymentStatus updates the status and URLs of a deployment with transition validation.
+// Valid transitions:
+//   - deploying → running (success), failed (error), or stopped (teardown)
+//   - running → deploying (update), failed (error), or stopped (teardown)
+//   - failed → deploying (retry), or stopped (teardown)
+//   - stopped → (terminal state, no transitions)
+//
+// Returns ErrInvalidState if the transition is not allowed.
 func (s *Store) UpdateDeploymentStatus(id, status string, urls []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -377,12 +434,59 @@ func (s *Store) UpdateDeploymentStatus(id, status string, urls []string) error {
 		return err
 	}
 
+	// Validate the state transition.
+	if err := validateDeploymentTransition(deploy.Status, status); err != nil {
+		return err
+	}
+
 	deploy.Status = status
 	if urls != nil {
 		deploy.URLs = urls
 	}
 	deploy.LastUpdated = time.Now()
 	return s.writeJSON(s.deployPath(id), deploy)
+}
+
+// validateDeploymentTransition checks if the deployment state transition is valid.
+// State machine:
+//
+//	deploying ──┬──► running ──┬──► deploying (update)
+//	            │              │
+//	            │              ├──► failed ──┬──► deploying (retry)
+//	            │              │             │
+//	            │              └──► stopped  │
+//	            │                    ▲       │
+//	            ├──► failed ─────────┼───────┘
+//	            │                    │
+//	            └──► stopped ────────┘
+func validateDeploymentTransition(from, to string) error {
+	// Same state is always valid (idempotent).
+	if from == to {
+		return nil
+	}
+
+	valid := false
+	switch from {
+	case DeploymentStatusDeploying:
+		// Can transition to running (success), failed (error), or stopped (teardown).
+		valid = to == DeploymentStatusRunning || to == DeploymentStatusFailed || to == DeploymentStatusStopped
+	case DeploymentStatusRunning:
+		// Can transition to deploying (update), failed (error), or stopped (teardown).
+		valid = to == DeploymentStatusDeploying || to == DeploymentStatusFailed || to == DeploymentStatusStopped
+	case DeploymentStatusFailed:
+		// Can transition to deploying (retry) or stopped (teardown).
+		valid = to == DeploymentStatusDeploying || to == DeploymentStatusStopped
+	case DeploymentStatusStopped:
+		// Terminal state — no transitions allowed.
+		valid = false
+	default:
+		return fmt.Errorf("%w: unknown deployment status '%s'", apperrors.ErrInvalidState, from)
+	}
+
+	if !valid {
+		return fmt.Errorf("%w: cannot transition deployment from '%s' to '%s'", apperrors.ErrInvalidState, from, to)
+	}
+	return nil
 }
 
 // ListDeployments returns all deployments.

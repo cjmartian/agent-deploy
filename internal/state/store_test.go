@@ -751,3 +751,300 @@ func dirExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
 }
+
+// --- Infrastructure State Transition Tests ---
+
+func TestInfraStateTransitions_ValidTransitions(t *testing.T) {
+	tests := []struct {
+		name     string
+		from     string
+		to       string
+		wantErr  bool
+		errCheck func(error) bool
+	}{
+		// From provisioning
+		{name: "provisioning->ready", from: InfraStatusProvisioning, to: InfraStatusReady, wantErr: false},
+		{name: "provisioning->failed", from: InfraStatusProvisioning, to: InfraStatusFailed, wantErr: false},
+		{name: "provisioning->destroyed (invalid)", from: InfraStatusProvisioning, to: InfraStatusDestroyed, wantErr: true, errCheck: func(err error) bool { return errors.Is(err, apperrors.ErrInvalidState) }},
+		{name: "provisioning->provisioning (idempotent)", from: InfraStatusProvisioning, to: InfraStatusProvisioning, wantErr: false},
+
+		// From ready
+		{name: "ready->destroyed", from: InfraStatusReady, to: InfraStatusDestroyed, wantErr: false},
+		{name: "ready->provisioning (invalid)", from: InfraStatusReady, to: InfraStatusProvisioning, wantErr: true, errCheck: func(err error) bool { return errors.Is(err, apperrors.ErrInvalidState) }},
+		{name: "ready->failed (invalid)", from: InfraStatusReady, to: InfraStatusFailed, wantErr: true, errCheck: func(err error) bool { return errors.Is(err, apperrors.ErrInvalidState) }},
+		{name: "ready->ready (idempotent)", from: InfraStatusReady, to: InfraStatusReady, wantErr: false},
+
+		// From failed
+		{name: "failed->provisioning (retry)", from: InfraStatusFailed, to: InfraStatusProvisioning, wantErr: false},
+		{name: "failed->destroyed (teardown)", from: InfraStatusFailed, to: InfraStatusDestroyed, wantErr: false},
+		{name: "failed->ready (invalid)", from: InfraStatusFailed, to: InfraStatusReady, wantErr: true, errCheck: func(err error) bool { return errors.Is(err, apperrors.ErrInvalidState) }},
+		{name: "failed->failed (idempotent)", from: InfraStatusFailed, to: InfraStatusFailed, wantErr: false},
+
+		// From destroyed (terminal)
+		{name: "destroyed->provisioning (invalid)", from: InfraStatusDestroyed, to: InfraStatusProvisioning, wantErr: true, errCheck: func(err error) bool { return errors.Is(err, apperrors.ErrInvalidState) }},
+		{name: "destroyed->ready (invalid)", from: InfraStatusDestroyed, to: InfraStatusReady, wantErr: true, errCheck: func(err error) bool { return errors.Is(err, apperrors.ErrInvalidState) }},
+		{name: "destroyed->failed (invalid)", from: InfraStatusDestroyed, to: InfraStatusFailed, wantErr: true, errCheck: func(err error) bool { return errors.Is(err, apperrors.ErrInvalidState) }},
+		{name: "destroyed->destroyed (idempotent)", from: InfraStatusDestroyed, to: InfraStatusDestroyed, wantErr: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			store, _ := NewStore(dir)
+
+			infra := &Infrastructure{
+				ID:        "infra-" + tc.name,
+				PlanID:    "plan-test",
+				Region:    "us-east-1",
+				Resources: map[string]string{},
+				Status:    tc.from,
+				CreatedAt: time.Now(),
+			}
+
+			if err := store.CreateInfra(infra); err != nil {
+				t.Fatalf("CreateInfra: %v", err)
+			}
+
+			err := store.SetInfraStatus(infra.ID, tc.to)
+
+			if tc.wantErr {
+				if err == nil {
+					t.Errorf("SetInfraStatus(%s, %s) = nil, want error", tc.from, tc.to)
+				} else if tc.errCheck != nil && !tc.errCheck(err) {
+					t.Errorf("SetInfraStatus(%s, %s) = %v, want ErrInvalidState", tc.from, tc.to, err)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("SetInfraStatus(%s, %s) = %v, want nil", tc.from, tc.to, err)
+				} else {
+					// Verify status was actually updated
+					got, _ := store.GetInfra(infra.ID)
+					if got.Status != tc.to {
+						t.Errorf("Status = %q, want %q", got.Status, tc.to)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestInfraStateTransitions_UnknownStatus(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := NewStore(dir)
+
+	infra := &Infrastructure{
+		ID:        "infra-unknown",
+		PlanID:    "plan-test",
+		Region:    "us-east-1",
+		Resources: map[string]string{},
+		Status:    "unknown-status", // Invalid starting status
+		CreatedAt: time.Now(),
+	}
+
+	if err := store.CreateInfra(infra); err != nil {
+		t.Fatalf("CreateInfra: %v", err)
+	}
+
+	err := store.SetInfraStatus(infra.ID, InfraStatusReady)
+	if err == nil {
+		t.Error("SetInfraStatus with unknown from status = nil, want error")
+	}
+	if !errors.Is(err, apperrors.ErrInvalidState) {
+		t.Errorf("SetInfraStatus error = %v, want ErrInvalidState", err)
+	}
+}
+
+func TestInfraStateTransitions_NotFound(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := NewStore(dir)
+
+	err := store.SetInfraStatus("nonexistent", InfraStatusReady)
+	if !errors.Is(err, apperrors.ErrInfraNotFound) {
+		t.Errorf("SetInfraStatus nonexistent = %v, want ErrInfraNotFound", err)
+	}
+}
+
+// --- Deployment State Transition Tests ---
+
+func TestDeploymentStateTransitions_ValidTransitions(t *testing.T) {
+	tests := []struct {
+		name     string
+		from     string
+		to       string
+		wantErr  bool
+		errCheck func(error) bool
+	}{
+		// From deploying
+		{name: "deploying->running", from: DeploymentStatusDeploying, to: DeploymentStatusRunning, wantErr: false},
+		{name: "deploying->failed", from: DeploymentStatusDeploying, to: DeploymentStatusFailed, wantErr: false},
+		{name: "deploying->stopped", from: DeploymentStatusDeploying, to: DeploymentStatusStopped, wantErr: false},
+		{name: "deploying->deploying (idempotent)", from: DeploymentStatusDeploying, to: DeploymentStatusDeploying, wantErr: false},
+
+		// From running
+		{name: "running->deploying (update)", from: DeploymentStatusRunning, to: DeploymentStatusDeploying, wantErr: false},
+		{name: "running->failed", from: DeploymentStatusRunning, to: DeploymentStatusFailed, wantErr: false},
+		{name: "running->stopped", from: DeploymentStatusRunning, to: DeploymentStatusStopped, wantErr: false},
+		{name: "running->running (idempotent)", from: DeploymentStatusRunning, to: DeploymentStatusRunning, wantErr: false},
+
+		// From failed
+		{name: "failed->deploying (retry)", from: DeploymentStatusFailed, to: DeploymentStatusDeploying, wantErr: false},
+		{name: "failed->stopped", from: DeploymentStatusFailed, to: DeploymentStatusStopped, wantErr: false},
+		{name: "failed->running (invalid)", from: DeploymentStatusFailed, to: DeploymentStatusRunning, wantErr: true, errCheck: func(err error) bool { return errors.Is(err, apperrors.ErrInvalidState) }},
+		{name: "failed->failed (idempotent)", from: DeploymentStatusFailed, to: DeploymentStatusFailed, wantErr: false},
+
+		// From stopped (terminal)
+		{name: "stopped->deploying (invalid)", from: DeploymentStatusStopped, to: DeploymentStatusDeploying, wantErr: true, errCheck: func(err error) bool { return errors.Is(err, apperrors.ErrInvalidState) }},
+		{name: "stopped->running (invalid)", from: DeploymentStatusStopped, to: DeploymentStatusRunning, wantErr: true, errCheck: func(err error) bool { return errors.Is(err, apperrors.ErrInvalidState) }},
+		{name: "stopped->failed (invalid)", from: DeploymentStatusStopped, to: DeploymentStatusFailed, wantErr: true, errCheck: func(err error) bool { return errors.Is(err, apperrors.ErrInvalidState) }},
+		{name: "stopped->stopped (idempotent)", from: DeploymentStatusStopped, to: DeploymentStatusStopped, wantErr: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			store, _ := NewStore(dir)
+
+			deploy := &Deployment{
+				ID:          "deploy-" + tc.name,
+				InfraID:     "infra-test",
+				ImageRef:    "nginx:latest",
+				Status:      tc.from,
+				URLs:        []string{},
+				CreatedAt:   time.Now(),
+				LastUpdated: time.Now(),
+			}
+
+			if err := store.CreateDeployment(deploy); err != nil {
+				t.Fatalf("CreateDeployment: %v", err)
+			}
+
+			err := store.UpdateDeploymentStatus(deploy.ID, tc.to, nil)
+
+			if tc.wantErr {
+				if err == nil {
+					t.Errorf("UpdateDeploymentStatus(%s, %s) = nil, want error", tc.from, tc.to)
+				} else if tc.errCheck != nil && !tc.errCheck(err) {
+					t.Errorf("UpdateDeploymentStatus(%s, %s) = %v, want ErrInvalidState", tc.from, tc.to, err)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("UpdateDeploymentStatus(%s, %s) = %v, want nil", tc.from, tc.to, err)
+				} else {
+					// Verify status was actually updated
+					got, _ := store.GetDeployment(deploy.ID)
+					if got.Status != tc.to {
+						t.Errorf("Status = %q, want %q", got.Status, tc.to)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestDeploymentStateTransitions_UnknownStatus(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := NewStore(dir)
+
+	deploy := &Deployment{
+		ID:          "deploy-unknown",
+		InfraID:     "infra-test",
+		ImageRef:    "nginx:latest",
+		Status:      "unknown-status", // Invalid starting status
+		URLs:        []string{},
+		CreatedAt:   time.Now(),
+		LastUpdated: time.Now(),
+	}
+
+	if err := store.CreateDeployment(deploy); err != nil {
+		t.Fatalf("CreateDeployment: %v", err)
+	}
+
+	err := store.UpdateDeploymentStatus(deploy.ID, DeploymentStatusRunning, nil)
+	if err == nil {
+		t.Error("UpdateDeploymentStatus with unknown from status = nil, want error")
+	}
+	if !errors.Is(err, apperrors.ErrInvalidState) {
+		t.Errorf("UpdateDeploymentStatus error = %v, want ErrInvalidState", err)
+	}
+}
+
+func TestDeploymentStateTransitions_NotFound(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := NewStore(dir)
+
+	err := store.UpdateDeploymentStatus("nonexistent", DeploymentStatusRunning, nil)
+	if !errors.Is(err, apperrors.ErrDeploymentNotFound) {
+		t.Errorf("UpdateDeploymentStatus nonexistent = %v, want ErrDeploymentNotFound", err)
+	}
+}
+
+func TestDeploymentStateTransitions_PreservesURLs(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := NewStore(dir)
+
+	deploy := &Deployment{
+		ID:          "deploy-urls",
+		InfraID:     "infra-test",
+		ImageRef:    "nginx:latest",
+		Status:      DeploymentStatusDeploying,
+		URLs:        []string{"http://original.com"},
+		CreatedAt:   time.Now(),
+		LastUpdated: time.Now(),
+	}
+
+	if err := store.CreateDeployment(deploy); err != nil {
+		t.Fatalf("CreateDeployment: %v", err)
+	}
+
+	// Update status with nil URLs - should preserve original
+	if err := store.UpdateDeploymentStatus(deploy.ID, DeploymentStatusRunning, nil); err != nil {
+		t.Fatalf("UpdateDeploymentStatus: %v", err)
+	}
+
+	got, _ := store.GetDeployment(deploy.ID)
+	if len(got.URLs) != 1 || got.URLs[0] != "http://original.com" {
+		t.Errorf("URLs = %v, want [http://original.com]", got.URLs)
+	}
+
+	// Update status with new URLs - should replace
+	newURLs := []string{"http://new.com", "https://secure.new.com"}
+	if err := store.UpdateDeploymentStatus(deploy.ID, DeploymentStatusRunning, newURLs); err != nil {
+		t.Fatalf("UpdateDeploymentStatus with new URLs: %v", err)
+	}
+
+	got, _ = store.GetDeployment(deploy.ID)
+	if len(got.URLs) != 2 || got.URLs[0] != "http://new.com" {
+		t.Errorf("URLs = %v, want %v", got.URLs, newURLs)
+	}
+}
+
+func TestDeploymentStateTransitions_UpdatesLastUpdated(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := NewStore(dir)
+
+	now := time.Now()
+	deploy := &Deployment{
+		ID:          "deploy-time",
+		InfraID:     "infra-test",
+		ImageRef:    "nginx:latest",
+		Status:      DeploymentStatusDeploying,
+		URLs:        []string{},
+		CreatedAt:   now,
+		LastUpdated: now,
+	}
+
+	if err := store.CreateDeployment(deploy); err != nil {
+		t.Fatalf("CreateDeployment: %v", err)
+	}
+
+	time.Sleep(10 * time.Millisecond) // Ensure time difference
+
+	if err := store.UpdateDeploymentStatus(deploy.ID, DeploymentStatusRunning, nil); err != nil {
+		t.Fatalf("UpdateDeploymentStatus: %v", err)
+	}
+
+	got, _ := store.GetDeployment(deploy.ID)
+	if !got.LastUpdated.After(now) {
+		t.Errorf("LastUpdated = %v, want after %v", got.LastUpdated, now)
+	}
+}

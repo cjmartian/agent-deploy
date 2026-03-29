@@ -45,7 +45,7 @@ Coverage: 50.2% (meets 50% target)
 | ID | Issue | Impact |
 |----|-------|--------|
 | **P3.13** | Shallow reconciliation (3/19 resource types) | Orphaned resources (subnets, NAT GW, SGs, etc.) may not be detected; SyncedCount misleading |
-| **P3.12** | Missing state transitions | No deployment update or infrastructure retry transitions; any→any transitions allowed |
+| ~~**P3.12**~~ | ~~Missing state transitions~~ | ~~No deployment update or infrastructure retry transitions; any→any transitions allowed~~ ✅ |
 | **P3.14** | Main.go startup error handling (partial) | Background services not cleaned up on startup failure |
 | ~~**P3.18**~~ | ~~Silent error suppression in config.go:36~~ | ✅ FIXED — Added warning log when config file exists but fails to parse |
 | **P3.19** | Hardcoded ALB/NAT/CloudWatch pricing | Cost estimation inaccurate when Pricing API unavailable |
@@ -454,20 +454,25 @@ All tests pass with `-race` flag, verifying the RWMutex locking is correct.
 - [x] Added `ResourceDNSRecordName` constant
 - **Location:** `internal/state/types.go`
 
-### P3.12 Missing State Transitions ❌
+### ~~P3.12 Missing State Transitions~~ ✅
 
-**Status:** NOT IMPLEMENTED  
-**Impact:** Limited state management flexibility; any→any transitions allowed
+**Status:** COMPLETE  
+**Impact:** ~~Limited state management flexibility; any→any transitions allowed~~
 
-**Missing Transitions:**
-- Deployment update (running → deploying)
-- Infrastructure retry (failed → provisioning)
-- Current infrastructure and deployment transitions have NO validation
-
-**Required Work:**
-- [ ] Add deployment update transition in state model
-- [ ] Add infrastructure retry transition in state model
-- [ ] Add transition validation (prevent invalid state changes)
+**Implementation:**
+- Added `validateInfraTransition()` with proper state machine:
+  - provisioning → ready (success) or failed (error)
+  - failed → provisioning (retry) or destroyed (teardown)
+  - ready → destroyed (teardown)
+  - destroyed → terminal (no transitions)
+- Added `validateDeploymentTransition()` with proper state machine:
+  - deploying → running (success), failed (error), or stopped (teardown)
+  - running → deploying (update), failed (error), or stopped (teardown)
+  - failed → deploying (retry) or stopped (teardown)
+  - stopped → terminal (no transitions)
+- Returns `ErrInvalidState` for invalid transitions
+- Idempotent: same-state transitions always succeed
+- Added 8 comprehensive test functions covering all transitions
 - **Location:** `internal/state/store.go`
 
 ### P3.14 Main.go Startup Error Handling ⚠️
@@ -890,10 +895,10 @@ go tool cover -html=coverage.out          # View coverage report
 | ~~**P0 Critical**~~ | ~~2~~ 0 | ~~P0.1 (non-atomic writes), P0.2 (silent error suppression)~~ ✅ ALL FIXED |
 | ~~**P1 Spec Gaps**~~ | ~~1~~ 0 | ~~P1.31 (missing input validations)~~ ✅ ALL FIXED |
 | **P2 Test Gaps** | 2 | P2.9 (main.go components ⚠️), ~~P2.10 (concurrent access)~~ ✅, P2.5 (AWS error scenarios) |
-| **P3 Quality** | 9 | P3.12-P3.14, ~~P3.18~~, P3.19-P3.24 (reconciliation, state transitions, error handling, ~~config errors~~ ✅, pricing, NAT Gateway, cleanup race, status updates, cert storage, cert backoff), ~~P3.25~~ ✅ |
+| **P3 Quality** | 8 | ~~P3.12~~ ✅, P3.13-P3.14, ~~P3.18~~, P3.19-P3.24 (reconciliation, ~~state transitions~~ ✅, error handling, ~~config errors~~ ✅, pricing, NAT Gateway, cleanup race, status updates, cert storage, cert backoff), ~~P3.25~~ ✅ |
 | **P4 New Features** | 7 | P4.1 (Lightsail), P4.2-P4.7 (workload types) |
 | **P5 Stretch** | 4 | CloudFormation, multi-cloud, secrets, CI enhancements |
-| **Total remaining** | **23** | |
+| **Total remaining** | **22** | |
 
 ---
 
