@@ -1,0 +1,33 @@
+P0.1 + P0.2 + P3.26 FIX SESSION
+
+## Changes Made
+
+### P0.1 - Atomic File Writes (CRITICAL)
+- Location: internal/state/store.go:452-504
+- Changed writeJSON from os.WriteFile to temp+rename pattern
+- Steps: CreateTemp → Write → Sync → Chmod → Rename
+- Why: os.WriteFile can leave corrupted partial files on crash
+- Atomic rename ensures file is either fully written or untouched
+
+### P0.2 - Silent Error Suppression (CRITICAL)
+- Location: internal/state/store.go:86,123,218-220
+- ApprovePlan/RejectPlan: _ = s.writeJSON → slog.Error on failure
+- DeleteExpiredPlans: silent continue → slog.Warn with plan_id and error
+- Why: Silent failures make debugging impossible, data loss undetected
+
+### P3.26 - Race Condition Fix
+- Location: internal/spending/monitor_test.go:570-625
+- Added sync.Mutex to protect callCount variable
+- Why: Background goroutine writes while test goroutine reads
+
+### Tests Added
+- TestAtomicWrites: 10 plans, verifies no .tmp files left
+- TestConcurrentWrites: 10 goroutines updating same infra
+- Both pass with -race flag
+
+### Coverage Impact
+- internal/state: 80.7% (up from ~70%)
+- Overall: 49.3% (target: 50%)
+
+### Remaining P0 Items: NONE
+All critical production blockers resolved.
