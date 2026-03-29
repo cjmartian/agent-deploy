@@ -25,7 +25,7 @@
 | ID | Issue | Impact |
 |----|-------|--------|
 | **P2.9** | main.go test coverage | Entry point components tested; main() itself architecturally hard to test |
-| **P2.10** | Concurrent access patterns untested | Store has RWMutex but locking never verified under race conditions |
+| ~~**P2.10**~~ | ~~Concurrent access patterns untested~~ | ✅ COMPLETE — comprehensive concurrent tests added with -race flag verification |
 | **P2.5** | AWS provider error scenarios incomplete | 42.6% coverage; Route53/ALB/IAM/ECR/CloudWatch error paths and E2E flows untested |
 
 ### LOWER PRIORITY — Quality (P3)
@@ -338,24 +338,32 @@
 **Not Feasible:**
 - [ ] Direct `main()` function testing (runs forever with signal handling — architecturally challenging)
 
-### P2.10 Concurrent Access Patterns Untested ❌
+### P2.10 Concurrent Access Patterns Untested ✅ COMPLETE
 
-**Status:** NOT TESTED  
-**Impact:** Concurrent access bugs could go undetected
+**Status:** ✅ COMPLETE  
+**Impact:** ~~Concurrent access bugs could go undetected~~ RWMutex locking verified correct
 
 **Evidence:**
-- store.go has RWMutex but ZERO concurrent tests
-- No goroutine usage in store_test.go
-- No `t.Parallel()` usage
-- No race condition stress tests
-- DeletePlan, DeleteInfra, DeleteExpiredPlans, ListInfra untested for concurrency
+- ~~store.go has RWMutex but ZERO concurrent tests~~ ✅ Comprehensive concurrent tests added
+- ~~No goroutine usage in store_test.go~~ ✅ Multiple goroutine-based tests
+- ~~No `t.Parallel()` usage~~ ✅ Tests run with -race flag
+- ~~No race condition stress tests~~ ✅ Race condition stress tests pass
+- ~~DeletePlan, DeleteInfra, DeleteExpiredPlans, ListInfra untested for concurrency~~ ✅ All tested
 
-**Required Work:**
-- [ ] Add concurrent read/write tests for Store
-- [ ] Add race condition stress tests
-- [ ] Verify RWMutex locking behavior under contention
-- [ ] Test DeletePlan, DeleteInfra, DeleteExpiredPlans, ListInfra concurrently
+**Completed Work:**
+- [x] Add concurrent read/write tests for Store
+- [x] Add race condition stress tests
+- [x] Verify RWMutex locking behavior under contention
+- [x] Test DeletePlan, DeleteInfra, DeleteExpiredPlans, ListInfra concurrently
 - **Location:** `internal/state/store_test.go`
+
+**Tests Added:**
+1. `TestConcurrentPlanOperations` - Tests concurrent plan create/read/delete with 20 goroutines × 5 plans each
+2. `TestConcurrentMixedReadWrite` - Tests 50 concurrent readers + 10 concurrent writers on deployments
+3. `TestConcurrentListOperations` - Tests 20 concurrent list operations with 50 iterations each
+4. `TestConcurrentDeleteOperations` - Tests 5 concurrent goroutines trying to delete same items
+
+All tests pass with `-race` flag, verifying the RWMutex locking is correct.
 
 ### P2.5 AWS Provider Error Scenarios Incomplete ⚠️
 
@@ -869,11 +877,11 @@ go tool cover -html=coverage.out          # View coverage report
 |----------|-------|-------|
 | ~~**P0 Critical**~~ | ~~2~~ 0 | ~~P0.1 (non-atomic writes), P0.2 (silent error suppression)~~ ✅ ALL FIXED |
 | ~~**P1 Spec Gaps**~~ | ~~1~~ 0 | ~~P1.31 (missing input validations)~~ ✅ ALL FIXED |
-| **P2 Test Gaps** | 3 | P2.9 (main.go components ⚠️), P2.10 (concurrent access), P2.5 (AWS error scenarios) |
+| **P2 Test Gaps** | 2 | P2.9 (main.go components ⚠️), ~~P2.10 (concurrent access)~~ ✅, P2.5 (AWS error scenarios) |
 | **P3 Quality** | 11 | P3.12-P3.14, P3.18-P3.25 (reconciliation, state transitions, error handling, pricing, NAT Gateway, cleanup race, status updates, cert storage, cert backoff, image validation) |
 | **P4 New Features** | 7 | P4.1 (Lightsail), P4.2-P4.7 (workload types) |
 | **P5 Stretch** | 4 | CloudFormation, multi-cloud, secrets, CI enhancements |
-| **Total remaining** | **26** | |
+| **Total remaining** | **25** | |
 
 ---
 
@@ -927,7 +935,7 @@ go tool cover -html=coverage.out          # View coverage report
 | **ci.md** | CI workflow with lint, test, build jobs | ✅ IMPLEMENTED |
 | **testing.md** | 50% code coverage | ✅ **TARGET MET** — 50.1% overall |
 | **testing.md** | main.go test coverage | ⚠️ **PARTIAL** — components tested, main() itself hard to test (P2.9) |
-| **testing.md** | Concurrent access testing | ❌ NOT TESTED — P2.10 |
+| **testing.md** | Concurrent access testing | ✅ **COMPLETE** — P2.10 fixed with comprehensive concurrent tests |
 | **error-handling.md** | Domain error types | ✅ **COMPLETE** — all 9 required error types defined and wired |
 | **operational.md** | No silent error suppression | ✅ FIXED — P0.2 complete, store.go now logs errors |
 | **operational.md** | Pagination for list operations | ✅ IMPLEMENTED |

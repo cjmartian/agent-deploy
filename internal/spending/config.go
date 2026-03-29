@@ -4,9 +4,12 @@ package spending
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
+
+	"github.com/cjmartian/agent-deploy/internal/logging"
 )
 
 // Limits defines user spending thresholds.
@@ -33,7 +36,12 @@ func LoadLimits() (Limits, error) {
 	// Try to load from config file.
 	if err := loadFromConfigFile(&limits); err != nil {
 		// Config file is optional; log but don't fail.
-		_ = err
+		// Only log if the error is NOT "file not found" (file missing is expected).
+		if !os.IsNotExist(err) {
+			log := logging.WithComponent(logging.ComponentSpending)
+			log.Warn("could not load config file, using defaults",
+				slog.String("reason", err.Error()))
+		}
 	}
 
 	// Override with environment variables.
