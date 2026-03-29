@@ -1,0 +1,19 @@
+P3.14: Startup Error Handling Fix
+
+Problem:
+If server startup failed (e.g., ListenAndServe returned error) after
+background services had started, those services were left running.
+
+Solution:
+1. Added 'defer shutdown()' at line 229 to ensure cleanup on any exit
+2. Wrapped shutdown logic in sync.Once for idempotency (line 202)
+3. Shutdown can now be called safely from multiple paths without issues
+
+Key Design Decision:
+Using sync.Once instead of removing explicit shutdown() calls from
+signal handlers preserves the existing clean separation of concerns.
+The signal handler path can still do additional HTTP server shutdown
+logic while relying on defer for the basic service cleanup.
+
+Files Modified:
+- cmd/agent-deploy/main.go: Added sync import, sync.Once, defer shutdown()
