@@ -1,0 +1,32 @@
+P2.5: AWS Teardown and Rollback Tests
+
+Tests added for delete/teardown operations:
+
+1. deleteVPCResources() tests:
+   - Success path with full resource cleanup
+   - Empty infrastructure handling
+   - VPC delete error propagation (critical failure)
+   - Partial failure continuation (SG errors don't block cleanup)
+
+2. deleteRouteTable() tests:
+   - Association disassociation before deletion
+   - Skip main route table associations
+   - Describe error handling
+   - Disassociate error handling
+
+3. rollbackInfra() tests:
+   - Cleanup with multiple resources
+   - Continue cleanup despite errors
+   - Error accumulation and reporting
+
+Coverage Impact:
+- internal/providers: 44.6% → 48.7%
+
+Key Design Observations:
+- VPC deletion is the only 'critical' error in deleteVPCResources
+- All other resource delete failures are logged but don't fail the operation
+- This is intentional: best-effort cleanup to prevent orphaned resources
+- Rollback must start from 'failed' status to transition to 'destroyed'
+
+Files Modified:
+- internal/providers/aws_test.go: Added 9 new test functions
