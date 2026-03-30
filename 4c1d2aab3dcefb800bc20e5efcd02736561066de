@@ -1,0 +1,36 @@
+P1.36 Fix: Spending Confirmation Gap
+
+## Problem
+Spec requires 'warn but allow (with confirmation)' when no spending limits
+are explicitly configured. Implementation was silently applying defaults
+without informing users.
+
+## Solution
+1. Added LimitsWithSource struct:
+   - Contains Limits struct
+   - ExplicitlyConfigured bool flag
+
+2. Added LoadLimitsWithSource() function:
+   - Returns true if config file loaded successfully
+   - Returns true if any AGENT_DEPLOY_* env var is set
+   - Returns false when only using defaults
+
+3. Updated planInfraOutput:
+   - Added RequiresConfirmation bool field
+   - Added ConfirmationReason string field
+
+4. Updated planInfra() logic:
+   - Calls LoadLimitsWithSource() instead of LoadLimits()
+   - Per-request budget override counts as explicit config
+   - Adds warning to summary when using defaults
+
+## Testing
+- TestLoadLimitsWithSource_NoConfig: Verifies false when no config
+- TestLoadLimitsWithSource_WithConfigFile: Verifies true with file
+- TestLoadLimitsWithSource_WithEnvVars: Verifies true with env vars
+
+## Files Changed
+- internal/spending/config.go
+- internal/spending/config_test.go
+- internal/providers/aws.go
+- IMPLEMENTATION_PLAN.md
