@@ -1,0 +1,33 @@
+P0.3 Fix: Nil Store Guards
+
+## Problem
+11 unguarded p.store.* accesses in aws.go could cause nil pointer panic
+if store initialization fails. Lines 967-968 also silently ignored errors.
+
+## Solution
+1. Added checkStore() helper method that:
+   - Checks if p.store is nil
+   - Returns ErrInvalidState with descriptive message
+   - Prevents panic with graceful error handling
+
+2. Added guard at entry of 7 methods:
+   - planInfra (line 611)
+   - approvePlan (line 867)
+   - createInfra (line 920)
+   - deploy (line 1211)
+   - status (line 1446)
+   - teardown (line 1513)
+   - deploymentsResource (line 3123)
+
+3. Fixed silent error suppression:
+   - Lines 989-996: Changed from _, _ to proper error logging
+   - Now logs with slog.Warn for visibility
+
+## Testing
+Added TestNilStoreGuard with 7 subtests confirming all methods
+return proper error instead of panicking when store is nil.
+
+## Files Changed
+- internal/providers/aws.go
+- internal/providers/aws_test.go
+- IMPLEMENTATION_PLAN.md
