@@ -339,6 +339,64 @@ func TestStatusOutput_JSON(t *testing.T) {
 	}
 }
 
+// TestStatusOutput_CustomDomain tests that custom domain is included in status output.
+// WHY: P1.35 - Spec requires custom domain in aws_status URL list when configured.
+func TestStatusOutput_CustomDomain(t *testing.T) {
+	output := statusOutput{
+		DeploymentID: "deploy-123",
+		Status:       "running",
+		URLs:         []string{"https://app.example.com", "https://my-alb-123.us-east-1.elb.amazonaws.com"},
+		CustomDomain: "app.example.com",
+	}
+
+	data, err := json.Marshal(output)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	// Verify JSON contains custom_domain field.
+	if !strings.Contains(string(data), `"custom_domain":"app.example.com"`) {
+		t.Errorf("JSON should contain custom_domain field: %s", string(data))
+	}
+
+	var parsed statusOutput
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	if parsed.CustomDomain != "app.example.com" {
+		t.Errorf("CustomDomain = %q, want %q", parsed.CustomDomain, "app.example.com")
+	}
+
+	// Verify custom domain URL appears first in URLs list.
+	if len(parsed.URLs) < 2 {
+		t.Fatalf("Expected at least 2 URLs, got %d", len(parsed.URLs))
+	}
+	if !strings.Contains(parsed.URLs[0], "app.example.com") {
+		t.Errorf("First URL should be custom domain, got %q", parsed.URLs[0])
+	}
+}
+
+// TestStatusOutput_NoCustomDomain tests that custom_domain is omitted when not configured.
+func TestStatusOutput_NoCustomDomain(t *testing.T) {
+	output := statusOutput{
+		DeploymentID: "deploy-123",
+		Status:       "running",
+		URLs:         []string{"http://my-alb-123.us-east-1.elb.amazonaws.com"},
+		CustomDomain: "", // Empty - no custom domain configured
+	}
+
+	data, err := json.Marshal(output)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	// Verify JSON does NOT contain custom_domain field (omitempty).
+	if strings.Contains(string(data), "custom_domain") {
+		t.Errorf("JSON should not contain custom_domain field when empty: %s", string(data))
+	}
+}
+
 // TestPlanInfra_InputValidation tests that planInfra rejects invalid inputs.
 func TestPlanInfra_InputValidation(t *testing.T) {
 	store, _ := state.NewStore(t.TempDir())

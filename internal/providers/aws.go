@@ -234,6 +234,7 @@ type statusOutput struct {
 	DeploymentID string       `json:"deployment_id"`
 	Status       string       `json:"status"`
 	URLs         []string     `json:"urls"`
+	CustomDomain string       `json:"custom_domain,omitempty"` // P1.35: Include custom domain in status output
 	Scaling      *scalingInfo `json:"scaling,omitempty"`
 }
 
@@ -1519,10 +1520,14 @@ func (p *AWSProvider) status(ctx context.Context, _ *mcp.CallToolRequest, in sta
 		}
 	}
 
+	// P1.35: Include custom domain in status output when configured.
+	customDomain := infra.Resources[state.ResourceDomainName]
+
 	return nil, statusOutput{
 		DeploymentID: deployment.ID,
 		Status:       deployment.Status,
 		URLs:         deployment.URLs,
+		CustomDomain: customDomain,
 		Scaling:      scaling,
 	}, nil
 }
@@ -2661,6 +2666,14 @@ func (p *AWSProvider) getALBURLs(ctx context.Context, cfg aws.Config, infra *sta
 	}
 
 	var urls []string
+
+	// P1.35: Include custom domain URL first (primary) when configured.
+	// Per spec ralph/specs/custom-dns.md: Custom domain should appear in status URL list.
+	if customDomain := infra.Resources[state.ResourceDomainName]; customDomain != "" {
+		urls = append(urls, scheme+"://"+customDomain)
+	}
+
+	// Add ALB DNS name as secondary/fallback URL.
 	for _, lb := range resp.LoadBalancers {
 		if lb.DNSName != nil {
 			urls = append(urls, scheme+"://"+*lb.DNSName)

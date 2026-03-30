@@ -17,10 +17,10 @@
 **Current Status:**
 - ✅ Coverage: 52.9% (meets 50% target)
 - ✅ All P0 critical issues resolved (P0.1, P0.2, P0.3)
+- ✅ P1.29 Custom DNS — 100% complete (P1.35 status URL gap fixed)
 - 🔴 P1.34 Lightsail provider — spec has `priority: P1` in YAML frontmatter, 0% implemented
 - 🔴 P1.37 Static Site workload — workload-roadmap.md priority P1, 0% implemented
 - 🔴 P1.38 Background Worker workload — workload-roadmap.md priority P1, 0% implemented
-- 🟡 P1.29 Custom DNS — 95% complete, status URL gap remaining (P1.35)
 - 🟡 P1.36: Spending confirmation gap — silently applies defaults without user confirmation
 - 🟡 P3.32: Reconcile error handling — errors silently ignored in multiple reconcile functions
 
@@ -39,7 +39,7 @@
 | 🚨 **P1.34** | **Lightsail provider not implemented** | ❌ | **Spec has `priority: P1`** in `ralph/specs/lightsail-provider.md` YAML frontmatter. Would enable $7-25/mo deployments vs $65+/mo with ECS. Current minimum cost prohibitive for personal projects. |
 | 🚨 **P1.37** | **Static Site workload not implemented** | ❌ | **Priority P1** per `ralph/specs/workload-roadmap.md`. S3+CloudFront = $1-5/mo vs $65+/mo. No CloudFront, no S3 bucket provisioning code exists. |
 | 🚨 **P1.38** | **Background Worker workload not implemented** | ❌ | **Priority P1** per `ralph/specs/workload-roadmap.md`. SQS+Lambda/Fargate without ALB. No SQS, no worker patterns implemented. |
-| **P1.35** | **Custom DNS status URL gap** | ❌ | Spec requires custom domain in `aws_status` URL list; `statusOutput` struct lacks `custom_domain` field; `getALBURLs()` only returns ALB DNS, not custom domain. |
+| ✅ ~~P1.35~~ | ~~Custom DNS status URL gap~~ | ✅ FIXED | Custom domain now included in `aws_status` URL list and `custom_domain` field. |
 | **P1.36** | **Spending confirmation gap** | ❌ | Spec requires "allow with confirmation" when no limits configured; implementation silently applies defaults without user confirmation. |
 
 ### MEDIUM PRIORITY — Test Gaps (P2)
@@ -172,7 +172,7 @@
 | **Reconciliation** | ⚠️ Partial | Only 3/25 resource types reconciled (P3.13); error handling issues (P3.32) |
 | **Cost estimation** | ⚠️ Partial | Fargate OK; ALB/NAT/CW hardcoded (P3.19) |
 | **Networking** | ⚠️ Partial | NAT Gateway single AZ only (P3.20) |
-| **Custom DNS / Route 53** | ⚠️ 95% | Core working; status URL missing custom domain (P1.35); DNS teardown error unchecked (P3.31) |
+| **Custom DNS / Route 53** | ✅ Complete | Core working; status URL includes custom domain (P1.35); DNS teardown error unchecked (P3.31) |
 | **Distribution** | ✅ Complete | `cmd/agent-deploy/main.go`, GoReleaser configured |
 | **Test coverage** | ✅ 52.9% | Meets 50% target; gaps in processAlert, checkInfraResources, main.go signal/HTTP (P2.11-P2.15) |
 | **CI/CD** | ⚠️ Partial | Missing security scanning, SBOM (P3.27-P3.30) |
@@ -208,9 +208,10 @@
 - [x] Added tests: `TestValidateDomainName`, `TestExtractParentDomain`, `TestPlanInfra_DomainName`
 - **Location:** `internal/providers/aws.go`, `internal/state/types.go`, `go.mod`
 
-**Remaining Gap (P1.35):**
-- [ ] Add `custom_domain` field to `statusOutput` so `aws_status` URL list includes the custom domain
-- [ ] Update `getALBURLs()` to also return the custom domain when configured
+**P1.35 Status URL Gap: ✅ FIXED**
+- [x] Added `custom_domain` field to `statusOutput` so `aws_status` URL list includes the custom domain
+- [x] Updated `getALBURLs()` to return custom domain URL first when configured
+- [x] Added tests: `TestStatusOutput_CustomDomain`, `TestStatusOutput_NoCustomDomain`
 - **Location:** `internal/providers/aws.go`
 
 ### P1.9 VPC CIDR Configuration ✅ COMPLETE
@@ -351,17 +352,19 @@
 **Spec:** `ralph/specs/custom-dns.md`  
 **Impact:** Spec requires custom domain in `aws_status` URL list; users cannot see their custom domain in status output
 
-**Evidence:**
-- `statusOutput` struct has no `custom_domain` field
-- `getALBURLs()` only returns ALB DNS names, never the configured custom domain
-- When user deploys with `domain_name: "app.example.com"`, `aws_status` only shows the raw ALB URL
+### P1.35 Custom DNS Status URL Gap ✅ COMPLETE
 
-**Required Work:**
-- [ ] Add `custom_domain` field to `statusOutput` struct
-- [ ] Update `getALBURLs()` (or status method) to include the custom domain URL when configured
-- [ ] Pull domain from stored state (`ResourceDomainName`)
-- [ ] Add test: status output includes custom domain when configured
-- **Location:** `internal/providers/aws.go`
+**Status:** FIXED  
+**Spec:** `ralph/specs/custom-dns.md`  
+**Impact:** Spec requires custom domain in `aws_status` URL list; now properly included
+
+**Resolution:**
+- Added `custom_domain` field to `statusOutput` struct with `omitempty` tag
+- Updated `getALBURLs()` to include custom domain URL first (as primary URL) when configured
+- Custom domain URL now appears before ALB DNS in URLs list
+- Status method populates `CustomDomain` field from stored state (`ResourceDomainName`)
+- Added tests: `TestStatusOutput_CustomDomain`, `TestStatusOutput_NoCustomDomain`
+- **Location:** `internal/providers/aws.go`, `internal/providers/aws_test.go`
 
 ### P1.36 Spending Confirmation Gap ❌
 
