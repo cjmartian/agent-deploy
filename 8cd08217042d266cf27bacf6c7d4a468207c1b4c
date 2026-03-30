@@ -1,0 +1,35 @@
+P1.34 Lightsail Provider Implementation
+
+## Summary
+Implemented automatic backend selection between AWS Lightsail ($7-25/mo) and ECS Fargate ($65+/mo). Lightsail is auto-selected for simple apps based on workload signals.
+
+## Backend Selection Logic
+- Lightsail preferred for:
+  * ≤500 expected users
+  * No auto-scaling required
+  * No production/enterprise keywords in description
+- ECS Fargate preferred for:
+  * >500 expected users
+  * Auto-scaling required (maxCount > minCount)
+  * Production keywords: 'production', 'prod', 'enterprise', 'high-availability', 'ha', 'mission-critical'
+
+## Lightsail Power Levels
+- Nano: 0.25 vCPU, 512MB @ $7/mo (≤50 users)
+- Micro: 0.5 vCPU, 1GB @ $10/mo (≤200 users)
+- Small: 1 vCPU, 2GB @ $25/mo (≤500 users)
+- Medium/Large/XLarge for higher tiers
+
+## Files Modified
+- internal/state/types.go: Backend field, Lightsail resource constants
+- internal/awsclient/interfaces.go: LightsailAPI interface
+- internal/awsclient/mocks/lightsail.go: Mock for testing
+- internal/providers/aws.go: All Lightsail functions and branching
+- internal/providers/aws_test.go: Backend selection tests
+
+## Test Coverage
+Added TestPlanInfra_LightsailBackendSelection covering:
+- Small app → Lightsail
+- High user count → ECS Fargate
+- Production keywords → ECS Fargate
+- Auto-scaling → ECS Fargate
+- Medium users → Lightsail
