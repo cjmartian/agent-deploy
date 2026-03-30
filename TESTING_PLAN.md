@@ -8,19 +8,211 @@ End-to-end live testing of agent-deploy: build a tool via natural language, depl
 
 ### 1. Create IAM Credentials
 
-Create a dedicated IAM user (or use temporary credentials via SSO). Attach a policy with these permissions:
-
-- `ec2:*` — VPC, subnets, security groups, NAT Gateway, Elastic IP, Internet Gateway, route tables
-- `ecs:*` — clusters, services, task definitions
-- `ecr:*` — repositories, image push/pull
-- `elasticloadbalancing:*` — ALB, target groups, listeners
-- `iam:CreateRole`, `iam:DeleteRole`, `iam:AttachRolePolicy`, `iam:DetachRolePolicy`, `iam:GetRole`, `iam:PassRole` — ECS task execution role
-- `logs:*` — CloudWatch log groups
-- `application-autoscaling:*` — if testing auto-scaling
-- `pricing:GetProducts` — cost estimation
-- `ce:GetCostAndUsage` — optional, for cost monitoring
+Create a dedicated IAM user (or use temporary credentials via SSO). Attach the following IAM policy:
 
 > **Tip:** Scope the policy with a condition like `aws:RequestTag/managed-by = agent-deploy` where possible to limit blast radius.
+
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "EC2Write",
+            "Effect": "Allow",
+            "Action": [
+                "ec2:CreateVpc",
+                "ec2:CreateSubnet",
+                "ec2:CreateInternetGateway",
+                "ec2:CreateNatGateway",
+                "ec2:CreateRouteTable",
+                "ec2:CreateSecurityGroup",
+                "ec2:CreateRoute",
+                "ec2:CreateTags",
+                "ec2:AllocateAddress",
+                "ec2:AssociateRouteTable",
+                "ec2:AttachInternetGateway",
+                "ec2:AuthorizeSecurityGroupIngress",
+                "ec2:AuthorizeSecurityGroupEgress",
+                "ec2:ModifyVpcAttribute",
+                "ec2:ModifySubnetAttribute",
+                "ec2:DeleteVpc",
+                "ec2:DeleteSubnet",
+                "ec2:DeleteInternetGateway",
+                "ec2:DeleteNatGateway",
+                "ec2:DeleteRouteTable",
+                "ec2:DeleteRoute",
+                "ec2:DeleteSecurityGroup",
+                "ec2:DetachInternetGateway",
+                "ec2:DisassociateRouteTable",
+                "ec2:DisassociateAddress",
+                "ec2:ReleaseAddress",
+                "ec2:RevokeSecurityGroupIngress",
+                "ec2:RevokeSecurityGroupEgress"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "EC2Reads",
+            "Effect": "Allow",
+            "Action": [
+                "ec2:Describe*",
+                "ec2:GetSecurityGroupsForVpc"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "ECSFull",
+            "Effect": "Allow",
+            "Action": "ecs:*",
+            "Resource": "*"
+        },
+        {
+            "Sid": "ECRFull",
+            "Effect": "Allow",
+            "Action": "ecr:*",
+            "Resource": "*"
+        },
+        {
+            "Sid": "ELBFull",
+            "Effect": "Allow",
+            "Action": "elasticloadbalancing:*",
+            "Resource": "*"
+        },
+        {
+            "Sid": "IAMRoles",
+            "Effect": "Allow",
+            "Action": [
+                "iam:CreateRole",
+                "iam:DeleteRole",
+                "iam:AttachRolePolicy",
+                "iam:DetachRolePolicy",
+                "iam:GetRole",
+                "iam:PassRole",
+                "iam:TagRole",
+                "iam:PutRolePolicy",
+                "iam:DeleteRolePolicy"
+            ],
+            "Resource": "arn:aws:iam::*:role/agent-deploy-*"
+        },
+        {
+            "Sid": "IAMServiceLinkedRoles",
+            "Effect": "Allow",
+            "Action": "iam:CreateServiceLinkedRole",
+            "Resource": "arn:aws:iam::*:role/aws-service-role/*"
+        },
+        {
+            "Sid": "CloudWatchLogs",
+            "Effect": "Allow",
+            "Action": "logs:*",
+            "Resource": "*"
+        },
+        {
+            "Sid": "AutoScaling",
+            "Effect": "Allow",
+            "Action": "application-autoscaling:*",
+            "Resource": "*"
+        },
+        {
+            "Sid": "LightsailContainers",
+            "Effect": "Allow",
+            "Action": [
+                "lightsail:CreateContainerService",
+                "lightsail:GetContainerServices",
+                "lightsail:UpdateContainerService",
+                "lightsail:DeleteContainerService",
+                "lightsail:CreateContainerServiceDeployment",
+                "lightsail:GetContainerServiceDeployments",
+                "lightsail:RegisterContainerImage",
+                "lightsail:CreateContainerServiceRegistryLogin",
+                "lightsail:TagResource",
+                "lightsail:UntagResource",
+                "lightsail:CreateCertificate",
+                "lightsail:GetCertificates",
+                "lightsail:DeleteCertificate"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "S3StaticSite",
+            "Effect": "Allow",
+            "Action": [
+                "s3:CreateBucket",
+                "s3:DeleteBucket",
+                "s3:ListBucket",
+                "s3:PutBucketPublicAccessBlock",
+                "s3:PutBucketPolicy",
+                "s3:DeleteBucketPolicy",
+                "s3:PutObject",
+                "s3:DeleteObject"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "CloudFrontCDN",
+            "Effect": "Allow",
+            "Action": [
+                "cloudfront:CreateDistribution",
+                "cloudfront:GetDistribution",
+                "cloudfront:UpdateDistribution",
+                "cloudfront:DeleteDistribution",
+                "cloudfront:CreateOriginAccessControl",
+                "cloudfront:DeleteOriginAccessControl",
+                "cloudfront:GetOriginAccessControl",
+                "cloudfront:CreateInvalidation"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "SQSQueues",
+            "Effect": "Allow",
+            "Action": [
+                "sqs:CreateQueue",
+                "sqs:DeleteQueue",
+                "sqs:GetQueueAttributes",
+                "sqs:SetQueueAttributes",
+                "sqs:GetQueueUrl",
+                "sqs:SendMessage",
+                "sqs:ReceiveMessage",
+                "sqs:DeleteMessage",
+                "sqs:PurgeQueue"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "Route53DNS",
+            "Effect": "Allow",
+            "Action": [
+                "route53:ListHostedZonesByName",
+                "route53:ChangeResourceRecordSets",
+                "route53:GetChange"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "ACMCertificates",
+            "Effect": "Allow",
+            "Action": [
+                "acm:DescribeCertificate",
+                "acm:RequestCertificate",
+                "acm:DeleteCertificate"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "Pricing",
+            "Effect": "Allow",
+            "Action": "pricing:GetProducts",
+            "Resource": "*"
+        },
+        {
+            "Sid": "CostExplorer",
+            "Effect": "Allow",
+            "Action": "ce:GetCostAndUsage",
+            "Resource": "*"
+        }
+    ]
+}
+```
 
 ### 2. Export Credentials
 

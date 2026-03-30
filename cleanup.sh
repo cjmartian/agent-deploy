@@ -32,6 +32,18 @@ if [ "$MODE" = "discover" ]; then
   aws logs describe-log-groups --log-group-name-prefix /ecs/agent-deploy --query "logGroups[].logGroupName" --output text
   echo "--- ECR Repos ---"
   aws ecr describe-repositories --query "repositories[?contains(repositoryName,'agent-deploy')].repositoryName" --output text
+  echo "--- Lightsail Container Services ---"
+  aws lightsail get-container-services --query "containerServices[].containerServiceName" --output text 2>/dev/null || echo "(no access or none found)"
+  echo "--- Lightsail Certificates ---"
+  aws lightsail get-certificates --query "certificates[].certificateName" --output text 2>/dev/null || echo "(no access or none found)"
+  echo "--- S3 Buckets ---"
+  aws s3api list-buckets --query "Buckets[?contains(Name,'agent-deploy')].Name" --output text 2>/dev/null || echo "(no access or none found)"
+  echo "--- CloudFront Distributions ---"
+  aws cloudfront list-distributions --query "DistributionList.Items[?Comment!=null && contains(Comment,'agent-deploy')].{Id:Id,Domain:DomainName}" --output text 2>/dev/null || echo "(no access or none found)"
+  echo "--- SQS Queues ---"
+  aws sqs list-queues --queue-name-prefix agent-deploy --query "QueueUrls" --output text 2>/dev/null || echo "(no access or none found)"
+  echo "--- Route 53 Hosted Zones ---"
+  aws route53 list-hosted-zones --query "HostedZones[].{Id:Id,Name:Name}" --output text 2>/dev/null || echo "(no access or none found)"
   echo "=== Done ==="
   exit 0
 fi
@@ -138,8 +150,48 @@ if [ "$MODE" = "destroy" ]; then
       echo "Detaching $policy_arn from $role"
       aws iam detach-role-policy --role-name "$role" --policy-arn "$policy_arn"
     done
+    for inline in $(aws iam list-role-policies --role-name "$role" --query "PolicyNames" --output text 2>/dev/null); do
+      echo "Deleting inline policy $inline from $role"
+      aws iam delete-role-policy --role-name "$role" --policy-name "$inline"
+    done
     echo "Deleting IAM role $role"
     aws iam delete-role --role-name "$role"
+  done
+
+  # Lightsail container services
+  for svc in $(aws lightsail get-container-services --query "containerServices[].containerServiceName" --output text 2>/dev/null); do
+    echo "Deleting Lightsail container service $svc"
+    aws lightsail delete-container-service --service-name "$svc"
+  done
+
+  # Lightsail certificates
+  for cert in $(aws lightsail get-certificates --query "certificates[].certificateName" --output text 2>/dev/null); do
+    echo "Deleting Lightsail certificate $cert"
+    aws lightsail delete-certificate --certificate-name "$cert"
+  done
+
+  # S3 buckets (empty then delete)
+  for bucket in $(aws s3api list-buckets --query "Buckets[?contains(Name,'agent-deploy')].Name" --output text 2>/dev/null); do
+    echo "Emptying and deleting S3 bucket $bucket"
+    aws s3 rm "s3://$bucket" --recursive 2>/dev/null || true
+    aws s3api delete-bucket --bucket "$bucket" 2>/dev/null || true
+  done
+
+  # CloudFront distributions
+  for dist_id in $(aws cloudfront list-distributions --query "DistributionList.Items[?Comment!=null && contains(Comment,'agent-deploy')].Id" --output text 2>/dev/null); do
+    echo "Disabling CloudFront distribution $dist_id (must be disabled before deletion)"
+    # Get current config and ETag
+    etag=$(aws cloudfront get-distribution-config --id "$dist_id" --query "ETag" --output text 2>/dev/null)
+    aws cloudfront get-distribution-config --id "$dist_id" --query "DistributionConfig" --output json 2>/dev/null | \
+      jq '.Enabled = false' | \
+      aws cloudfront update-distribution --id "$dist_id" --if-match "$etag" --distribution-config file:///dev/stdin 2>/dev/null || true
+    echo "  (CloudFront distribution $dist_id disabled — manual deletion needed after it finishes deploying)"
+  done
+
+  # SQS queues
+  for queue_url in $(aws sqs list-queues --queue-name-prefix agent-deploy --query "QueueUrls[]" --output text 2>/dev/null); do
+    echo "Deleting SQS queue $queue_url"
+    aws sqs delete-queue --queue-url "$queue_url"
   done
 
   echo "=== Destroy complete ==="

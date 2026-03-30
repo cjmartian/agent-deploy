@@ -246,3 +246,168 @@ ACM SDK is already included (from TLS spec).
 | `go.mod` | Add `service/route53` dependency |
 | `internal/providers/aws_test.go` | Tests for hosted zone lookup, cert provisioning, DNS record creation, teardown cleanup |
 | `cleanup.sh` | Add Route 53 record and ACM certificate discovery/cleanup |
+
+## Known Issues
+
+Issues discovered during live testing of custom DNS with the Lightsail backend.
+
+### Issue 1: Lightsail custom DNS is not automated
+
+**Severity:** High  
+**Status:** Not implemented  
+**Affects:** Lightsail backend only
+
+The `aws_create_infra` custom DNS flow (certificate provisioning, DNS validation, record creation) only executes when an ALB exists (`infra.Resources[state.ResourceALB] != ""`). Lightsail deployments don't use ALBs, so the entire DNS configuration block is skipped even when `domain_name` is set in the plan.
+
+**Required fix:** Add a Lightsail-specific DNS path in `aws_create_infra` that:
+1. Calls `lightsail:CreateCertificate` (not ACM — Lightsail has its own certificate API)
+2. Creates DNS validation CNAME records in Route 53
+3. Waits for certificate validation (`ISSUED` status)
+4. Attaches the certificate via `lightsail:UpdateContainerService` with `publicDomainNames`
+5. Creates a CNAME record in Route 53 pointing the domain to the Lightsail endpoint
+
+The flow should be structured as:
+
+```go
+if plan.DomainName != "" {
+    if plan.Backend == state.BackendLightsail {
+        // Lightsail DNS path: lightsail:CreateCertificate + Route 53 CNAME
+        p.configureLightsailDNS(ctx, cfg, serviceName, plan.DomainName, lightsailEndpoint)
+    } else {
+        // ECS path: ACM certificate + Route 53 A alias record
+        // (existing implementation)
+    }
+}
+```
+
+### Issue 2: Apex domain (zone root) not supported with Lightsail
+
+**Severity:** Medium  
+**Status:** Known limitation  
+**Affects:** Lightsail backend only
+
+Lightsail endpoints require CNAME records for DNS. Route 53 does not allow CNAME records at the zone apex (e.g., `cjmartian.me`). Only subdomains (e.g., `www.cjmartian.me`) can use CNAME records.
+
+For ECS/ALB deployments, this works because Route 53 supports ALIAS A records pointing to ALBs. Lightsail endpoints are not valid ALIAS targets.
+
+**Workarounds:**
+1. **Use a subdomain** (e.g., `www.cjmartian.me`) as the primary domain — CNAME works fine for subdomains
+2. **Set up an S3 redirect bucket** for the apex domain that redirects to the www subdomain
+3. **Use CloudFront** in front of Lightsail — CloudFront distributions are valid Route 53 ALIAS targets
+
+**Recommended fix:** When `domain_name` is a zone apex and the backend is Lightsail:
+- Warn the user that apex domains require a workaround
+- Automatically configure `www.<domain>` as the primary CNAME
+- Optionally provision an S3 redirect bucket for the apex → www redirect
+
+### Issue 3: Lightsail certificate uses separate API from ACM
+
+**Severity:** Medium  
+**Status:** Partially documented in lightsail-provider.md  
+**Affects:** Lightsail backend only
+
+Lightsail has its own certificate API (`lightsail:CreateCertificate`, `lightsail:GetCertificates`, `lightsail:DeleteCertificate`) that is separate from the ACM API. The current `provisionCertificate` function in `aws.go` uses `acm:RequestCertificate`, which creates certificates that cannot be attached to Lightsail container services.
+
+The Lightsail certificate API also does not auto-create DNS validation records, even when the domain is in Route 53 — the `dnsRecordCreationState` returns `FAILED` with "User not authorized to perform required actions" because Lightsail tries to use its own DNS service (Lightsail Domains) rather than Route 53.
+
+**Required fix:** DNS validation records must be manually created in Route 53 by agent-deploy:
+1. Call `lightsail:CreateCertificate` 
+2. Read back `domainValidationRecords` from the certificate details
+3. Create each validation CNAME in Route 53 via `route53:ChangeResourceRecordSets`
+4. Poll until certificate status is `ISSUED`
+
+### Issue 4: Lightsail service name must be lowercase
+
+**Severity:** High  
+**Status:** Fixed (hotfix applied)  
+**Affects:** Lightsail backend only
+
+Lightsail container service names must match `^[a-z0-9][a-z0-9-]+[a-z0-9]$` (lowercase only). The infra ID uses ULID encoding which includes uppercase characters (`0-9A-Z`). The service name was generated as `agent-deploy-{infraID[:12]}` without lowercasing, causing `CreateContainerService` to fail with `InvalidInputException`.
+
+**Fix applied:** `strings.ToLower()` added to service name generation in `createLightsailService`.
+
+### Issue 5: Image ref validation rejects Lightsail registered images
+
+**Severity:** High  
+**Status:** Fixed (hotfix applied)  
+**Affects:** Lightsail backend only
+
+Lightsail's `push-container-image` command registers images with a format like `:service-name.label.version` (starting with a colon). The `ValidateImageRef` function used a regex requiring the first character to be `[a-zA-Z0-9]`, which rejected all Lightsail image references.
+
+**Fix applied:** Updated regex to `^:?[a-zA-Z0-9](...` to allow an optional leading colon.
+
+### Issue 6: Missing IAM permissions for Lightsail
+
+**Severity:** High  
+**Status:** Fixed (policy updated)  
+**Affects:** Lightsail backend only
+
+The original IAM policy documented in TESTING_PLAN.md did not include any Lightsail permissions. The following were required and discovered iteratively:
+
+| Permission | Why |
+|---|---|
+| `lightsail:CreateContainerService` | Create the container service |
+| `lightsail:GetContainerServices` | Poll for service readiness |
+| `lightsail:UpdateContainerService` | Attach custom domain certificates |
+| `lightsail:DeleteContainerService` | Teardown |
+| `lightsail:CreateContainerServiceDeployment` | Deploy container images |
+| `lightsail:GetContainerServiceDeployments` | Check deployment status |
+| `lightsail:RegisterContainerImage` | Register pushed images |
+| `lightsail:CreateContainerServiceRegistryLogin` | Authenticate for image push |
+| `lightsail:TagResource` | Tag resources (called implicitly by `CreateContainerService`) |
+| `lightsail:UntagResource` | Cleanup tags on teardown |
+| `lightsail:CreateCertificate` | TLS for custom domains |
+| `lightsail:GetCertificates` | Check certificate validation |
+| `lightsail:DeleteCertificate` | Teardown |
+
+The `lightsail:TagResource` permission was particularly surprising — it is called implicitly during `CreateContainerService` when tags are provided, but is not documented as a required permission in AWS docs.
+
+### Issue 7: Certificate validation requires manual DNS record creation
+
+**Severity:** Medium  
+**Status:** Known limitation  
+**Affects:** Lightsail backend with custom DNS
+
+Lightsail's `CreateCertificate` attempts to auto-create DNS validation records using Lightsail's own DNS service. When the domain is managed by Route 53 (not Lightsail Domains), this auto-creation fails silently (`dnsRecordCreationState.code: "FAILED"`). The validation records must be extracted from the certificate details and manually created in Route 53.
+
+The certificate validation also takes 2-5 minutes after DNS records are created, which must be handled with polling and appropriate timeouts.
+
+### Issue 8: `lightsailctl` plugin required for image push
+
+**Severity:** Low  
+**Status:** Known limitation  
+**Affects:** Lightsail backend only
+
+The `aws lightsail push-container-image` command requires the `lightsailctl` plugin to be installed separately. This is not part of the standard AWS CLI and must be downloaded from:
+```
+https://s3.us-west-2.amazonaws.com/lightsailctl/latest/linux-amd64/lightsailctl
+```
+
+This creates a dependency on the host environment that doesn't exist for the ECS/ECR path (which uses standard Docker + AWS CLI commands). The `aws_deploy` tool should either:
+1. Document this requirement clearly
+2. Auto-detect and install the plugin
+3. Use the Lightsail API directly to register images (bypassing `push-container-image`)
+
+### Issue 9: MCP server must be restarted after binary rebuild
+
+**Severity:** Low  
+**Status:** By design  
+**Affects:** All backends during development
+
+The MCP server runs as a long-lived process. After rebuilding the `agent-deploy` binary, the old process continues running the previous version. The MCP server must be manually restarted (VS Code Command Palette → "Developer: Reload Window") before code changes take effect.
+
+This caused confusion during iterative fixes where the rebuilt binary had the fix but the running server did not.
+
+## Implementation Priority
+
+| Issue | Priority | Effort |
+|---|---|---|
+| Issue 1: Lightsail DNS automation | P0 | Medium — new `configureLightsailDNS` function |
+| Issue 2: Apex domain support | P1 | Medium — S3 redirect bucket or CloudFront |
+| Issue 3: Lightsail vs ACM certificates | P0 | Low — already documented, needs implementation |
+| Issue 4: Lowercase service name | Done | Fixed |
+| Issue 5: Image ref validation | Done | Fixed |
+| Issue 6: IAM permissions | Done | Fixed in TESTING_PLAN.md |
+| Issue 7: DNS validation records | P0 | Low — part of Issue 1 implementation |
+| Issue 8: lightsailctl dependency | P2 | Low — documentation or API-based upload |
+| Issue 9: MCP restart | N/A | By design |

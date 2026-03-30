@@ -2,8 +2,8 @@
 
 **Project Goal:** Natural language deployment of applications via MCP server → Cloud provider. Allow users to end-to-end create applications and make them publicly available while ensuring spend does not cross user-defined boundaries.
 
-**Last Updated:** 2026-03-30  
-**Last Audit:** 2026-03-30 (Deep audit — comprehensive codebase analysis)
+**Last Updated:** 2026-03-31  
+**Last Audit:** 2026-03-31 (Comprehensive parallel analysis — full spec compliance and coverage verification)
 
 ## Priority Definitions
 
@@ -15,7 +15,7 @@
 - **P5**: Stretch goals
 
 **Current Status:**
-- ✅ Coverage: 52.9% (meets 50% target)
+- ✅ Coverage: 50.8% (meets 50% target)
 - ✅ All P0 critical issues resolved (P0.1, P0.2, P0.3)
 - ✅ P1.29 Custom DNS — 100% complete (P1.35 status URL gap fixed)
 - ✅ P1.36 Spending confirmation — 100% complete (warns when using defaults)
@@ -23,6 +23,8 @@
 - ✅ P1.34 Lightsail provider — 100% complete (auto-selects backend, cost comparison)
 - ✅ P1.37 Static Site workload — 100% complete (S3+CloudFront, file upload with MIME types, cache headers)
 - ✅ P1.38 Background Worker workload — 100% complete (SQS queue, DLQ, IAM role)
+
+**All P1 Spec Work Complete:** AWS 6 tools, Lightsail provider, Static Site, Background Worker, Custom DNS, Spending confirmation.
 
 ---
 
@@ -46,20 +48,27 @@
 | ID | Issue | Status | Impact |
 |----|-------|--------|--------|
 | **P2.5** | AWS provider error scenarios incomplete | ⚠️ | 48.8% coverage; Route53/ALB/IAM error paths untested |
-| **P2.11** | `processAlert()` untested | ❌ | `internal/spending/monitor.go` — alert processing path has zero test coverage |
-| **P2.12** | `checkInfraResources()` untested | ❌ | `internal/state/reconcile.go` — infrastructure resource checking has zero test coverage |
-| **P2.13** | Sleep-based timing in tests | ⚠️ | Flaky CI risk — 8 instances of `time.Sleep` in tests instead of channels/conditions |
+| **P2.11** | `processAlert()` partial coverage | ⚠️ | `internal/spending/monitor.go` — 44% coverage; alert processing path needs more tests |
+| **P2.12** | `checkInfraResources()` partial coverage | ⚠️ | `internal/state/reconcile.go` — 76.2% coverage; needs more error path tests |
+| **P2.13** | Sleep-based timing in tests | ⚠️ | Flaky CI risk — 10 instances of `time.Sleep` in tests instead of channels/conditions |
 | **P2.14** | Error injection missing in reconcile mocks | ❌ | Reconcile tests only cover happy paths; no failure simulation |
 | **P2.15** | main.go signal/HTTP gaps | ❌ | SIGINT/SIGTERM untested, HTTP server untested, graceful shutdown untested |
+| **P2.16** | `NewStore()` partial coverage | ⚠️ | `internal/state/store.go` — 44.4% coverage; state store initialization needs tests |
+| **P2.17** | ~40 untested methods in aws.go | ❌ | provisionLogGroup, createTaskDefinition, all delete* methods, CloudFront, S3 upload, etc. |
+| **P2.18** | TestAWSClientsStruct incomplete | ❌ | Doesn't test Lightsail, S3, CloudFront, SQS clients |
 
 ### LOWER PRIORITY — Quality (P3)
 | ID | Issue | Status | Impact |
 |----|-------|--------|--------|
-| **P3.13** | Shallow reconciliation (3/25 resource types) | ⚠️ | Only VPC, ECS cluster, ALB reconciled; orphaned resources (subnets, NAT GW, SGs, etc.) may not be detected |
-| **P3.19** | Hardcoded ALB/NAT/CloudWatch pricing | ⚠️ | Cost estimation inaccurate; Pricing API not wired into EstimateCosts() |
+| **P3.13** | Shallow reconciliation (3/30+ resource types) | ⚠️ | Only VPC, ECS cluster, ALB reconciled; orphaned resources (subnets, NAT GW, SGs, Lightsail, S3/CloudFront, SQS, etc.) may not be detected |
+| **P3.19** | Hardcoded ALB/NAT/CloudWatch/Lightsail pricing | ⚠️ | Cost estimation uses hardcoded values; Pricing API not wired into EstimateCosts() |
 | **P3.20** | NAT Gateway single AZ | ⚠️ | Single point of failure for private subnet traffic; no HA |
 | **P3.31** | `deleteDNSResources()` error not checked | ❌ | Called without error checking in `teardown()` (~line 1510); should return and propagate error |
 | ✅ ~~P3.32~~ | ~~Reconcile error handling issues~~ | ✅ FIXED | Errors now logged/returned instead of silently ignored |
+| **P3.33** | Lightsail DNS not automated | ⚠️ | Route 53 DNS works for ECS/ALB; Lightsail requires separate certificate path not yet implemented |
+| **P3.35** | `getAccountID()` returns "*" placeholder | ❌ | Should use STS GetCallerIdentity instead of hardcoded placeholder |
+| **P3.36** | Fragile tag parsing in costs.go | ⚠️ | Hardcoded 27-char prefix assumption for deployment ID extraction |
+| **P3.37** | Incorrect pricing date in comments | ⚠️ | Comments say "2026-03" but this appears to be a future date error |
 
 ### CI/CD GAPS (P3)
 | ID | Issue | Status | Impact |
@@ -68,6 +77,34 @@
 | **P3.28** | Missing dependency audit in CI | ❌ | No `go mod verify` check |
 | **P3.29** | No SBOM generation | ❌ | No software bill of materials for releases |
 | **P3.30** | No goreleaser --validate check | ❌ | .goreleaser.yml syntax not validated pre-release |
+| **P3.33** | Lightsail DNS not automated | ⚠️ | Route 53 works for ECS; Lightsail needs separate cert path |
+| **P3.34** | LightsailMock missing from interface test | ❌ | `internal/awsclient/mocks/interfaces_test.go` incomplete |
+
+### SPEC COMPLIANCE GAPS (To Address)
+| Spec | Gap | Priority | Notes |
+|------|-----|----------|-------|
+| **cost-estimation.md** | Hardcoded pricing | P3 | Currently uses hardcoded values; spec requires AWS Pricing API with cache |
+| **networking.md** | NAT Gateway single AZ | P3 | Spec mentions HA option; currently single AZ only |
+| **custom-dns.md** | Lightsail DNS | P3 | Lightsail DNS not automated (requires separate Lightsail certificate path) |
+| **deployment-state.md** | Shallow reconciliation | P3 | Only 3/30+ resource types reconciled |
+
+### SPEC COMPLIANCE SUMMARY
+| Spec | Status |
+|------|--------|
+| **aws-provider.md** | ✅ 100% Complete |
+| **lightsail-provider.md** | ✅ 100% Complete |
+| **workloads/static-site.md** | ✅ 100% Complete |
+| **workloads/background-worker.md** | ✅ 100% Complete |
+| **custom-dns.md** | ✅ Complete (P3.33 Lightsail DNS gap) |
+| **spending-safeguards.md** | ✅ 91% Complete |
+| **deployment-state.md** | ⚠️ 90% (reconciliation shallow) |
+| **cost-estimation.md** | ⚠️ Partial (hardcoded fallbacks) |
+| **testing.md** | ✅ Target met (50.8%) |
+| **ci.md** | ✅ 100% Complete |
+| **workloads/scheduled-job.md** | ❌ 0% (Spec Priority: P2) |
+| **workloads/batch-processing.md** | ❌ 0% (Spec Priority: P2) |
+| **workloads/ml-inference.md** | ❌ 0% (Spec Priority: P3) |
+| **workloads/data-pipeline.md** | ❌ 0% (Spec Priority: P3) |
 
 ### NEW FEATURES (P4)
 | ID | Issue | Status | Spec Priority | Impact |
@@ -114,7 +151,7 @@
 | Structured logging (slog) | ✅ | `internal/logging/logging.go` |
 | Input validation (CPU/memory, port, region, etc.) | ✅ | `internal/providers/aws.go` (validations embedded in provider) |
 | IAM task execution role | ✅ | `internal/providers/aws.go` |
-| Test coverage 52.9% (target 50%) | ✅ | Meets target |
+| Test coverage 50.8% (target 50%) | ✅ | Meets target |
 | **P1.30 Distribution / cmd structure** | ✅ | `cmd/agent-deploy/main.go`, `.goreleaser.yml`, `.github/workflows/release.yml` |
 
 **P1.30 Distribution Notes:**
@@ -166,21 +203,26 @@
 |-----------|--------|-------|
 | **AWS 6 tools** | ✅ Complete | plan, approve, create, deploy, status, teardown |
 | **AWS resource + prompt** | ✅ Complete | aws:deployments, aws_deploy_plan |
-| **Spending safeguards** | ⚠️ Gap | Config, Cost Explorer, monitoring, alerts, auto-teardown working; missing confirmation when no limits set (P1.36) |
-| **State storage** | ✅ Complete | Plan, Infrastructure, Deployment with file persistence |
+| **Spending safeguards** | ✅ Complete | Config, Cost Explorer, monitoring, alerts, auto-teardown; confirmation when no limits set (P1.36) |
+| **State storage** | ✅ Complete | Plan, Infrastructure, Deployment with file persistence; atomic writes |
 | **Provider safety** | ✅ Complete | All `p.store.*` accesses guarded with `checkStore()` method (P0.3) |
-| **Reconciliation** | ⚠️ Partial | Only 3/25 resource types reconciled (P3.13); error handling issues (P3.32) |
-| **Cost estimation** | ⚠️ Partial | Fargate OK; ALB/NAT/CW hardcoded (P3.19) |
+| **Reconciliation** | ⚠️ Partial | Only 3/30+ resource types reconciled (P3.13); error handling fixed (P3.32) |
+| **Cost estimation** | ⚠️ Partial | Fargate OK; ALB/NAT/CW/Lightsail hardcoded (P3.19) |
 | **Networking** | ⚠️ Partial | NAT Gateway single AZ only (P3.20) |
 | **Custom DNS / Route 53** | ✅ Complete | Core working; status URL includes custom domain (P1.35); DNS teardown error unchecked (P3.31) |
 | **Distribution** | ✅ Complete | `cmd/agent-deploy/main.go`, GoReleaser configured |
-| **Test coverage** | ✅ 52.9% | Meets 50% target; gaps in processAlert, checkInfraResources, main.go signal/HTTP (P2.11-P2.15) |
+| **Test coverage** | ✅ 50.8% | Meets 50% target; gaps in processAlert (44%), checkInfraResources (76.2%), main.go signal/HTTP (P2.11-P2.16) |
 | **CI/CD** | ⚠️ Partial | Missing security scanning, SBOM (P3.27-P3.30) |
-| **Error handling** | ✅ Complete | All 9 error types defined, no silent suppression |
+| **Error handling** | ✅ Complete | All 9 error types defined with proper %w wrapping, no silent suppression |
 | **Logging** | ✅ Complete | Structured slog with component tags |
 | **Lightsail provider** | ✅ Complete | Auto-selects backend, Lightsail vs ECS cost comparison (P1.34) |
 | **Static Site workload** | ✅ Complete | Full implementation: S3, CloudFront, OAC, custom domain, file upload with MIME types, cache headers (P1.37) |
 | **Background Worker workload** | ✅ Complete | Full implementation: SQS queue, DLQ, redrive policy, IAM role, CloudWatch logs, $10/mo estimate (P1.38) |
+| **Signal handling** | ✅ Complete | SIGINT, SIGTERM graceful shutdown implemented |
+| **Rollback on failure** | ✅ Complete | Automatic cleanup of partial resources on provisioning failure |
+| **Auto-scaling** | ✅ Complete | CPU/memory target tracking policies |
+| **TLS/HTTPS** | ✅ Complete | ACM certificates, HTTP-to-HTTPS redirect |
+| **ECR image push** | ✅ Complete | Docker SDK integration for local image push |
 
 ---
 
@@ -346,12 +388,6 @@
 - [x] Added tests: `TestResourceDNSConstants`, `TestInfraResources_ALBDNSData`
 - **Location:** `internal/providers/aws.go`, `internal/state/types.go`
 
-### P1.35 Custom DNS Status URL Gap ❌
-
-**Status:** NOT ADDRESSED  
-**Spec:** `ralph/specs/custom-dns.md`  
-**Impact:** Spec requires custom domain in `aws_status` URL list; users cannot see their custom domain in status output
-
 ### P1.35 Custom DNS Status URL Gap ✅ COMPLETE
 
 **Status:** FIXED  
@@ -499,12 +535,12 @@
 
 ## P2 — Test Coverage Gaps (Medium Priority)
 
-> **Status:** 52.9% overall coverage — target met.
+> **Status:** 50.8% overall coverage — target met.
 > CI enforces 25% floor; target is 50% per `ralph/specs/testing.md`.
 
 ### P2.9 main.go Test Coverage ⚠️ 🟡
 
-**Status:** SIGNIFICANT PROGRESS — 52.9% overall coverage achieved  
+**Status:** SIGNIFICANT PROGRESS — 50.8% overall coverage achieved  
 **Impact:** Entry point components now tested; main() function itself remains architecturally challenging to test
 
 **New Tests Added:**
@@ -597,24 +633,24 @@ Coverage improved from 44.6% → 48.8% on providers package.
 - [ ] Test context/deadline handling
 - **Location:** `internal/providers/aws_test.go`
 
-### P2.11 processAlert() Untested ❌
+### P2.11 processAlert() Partial Coverage ⚠️
 
-**Status:** NOT ADDRESSED  
-**Impact:** Alert processing logic in cost monitor has zero test coverage; bugs in alerting would go undetected
+**Status:** PARTIAL — 44% coverage  
+**Impact:** Alert processing logic in cost monitor has partial test coverage; edge cases may be untested
 
 **Required Work:**
 - [ ] Add tests for `processAlert()` covering: threshold exceeded, threshold not exceeded, edge cases
 - [ ] Test alert callback invocation and error handling
 - **Location:** `internal/spending/monitor.go`, `internal/spending/monitor_test.go`
 
-### P2.12 checkInfraResources() Untested ❌
+### P2.12 checkInfraResources() Partial Coverage ⚠️
 
-**Status:** NOT ADDRESSED  
-**Impact:** Infrastructure resource checking in reconciler untested; reconciliation bugs could cause false positives/negatives
+**Status:** PARTIAL — 76.2% coverage  
+**Impact:** Infrastructure resource checking in reconciler needs more error path tests
 
 **Required Work:**
-- [ ] Add tests for `checkInfraResources()` with various resource states
-- [ ] Test with missing resources, stale resources, and healthy resources
+- [ ] Add tests for error scenarios in `checkInfraResources()` 
+- [ ] Test with AWS API failures, partial results, timeouts
 - **Location:** `internal/state/reconcile.go`, `internal/state/reconcile_test.go`
 
 ### P2.13 Sleep-Based Timing in Tests ⚠️
@@ -623,13 +659,23 @@ Coverage improved from 44.6% → 48.8% on providers package.
 **Impact:** Tests using `time.Sleep` are inherently flaky in CI; timing-sensitive assertions may fail under load
 
 **Evidence:**
-- 8 instances of `time.Sleep` in test files (flaky CI risk)
+- 10 instances of `time.Sleep` in test files (flaky CI risk)
 
 **Required Work:**
-- [ ] Audit test files for `time.Sleep` usage (8 known instances)
+- [ ] Audit test files for `time.Sleep` usage (10 known instances)
 - [ ] Replace with channel-based synchronization, `sync.WaitGroup`, or condition variables where possible
 - [ ] Use `testing.Short()` to skip slow tests in fast CI runs
 - **Location:** Various `*_test.go` files
+
+### P2.16 NewStore() Partial Coverage ⚠️
+
+**Status:** PARTIAL — 44.4% coverage  
+**Impact:** State store initialization code has partial coverage; edge cases untested
+
+**Required Work:**
+- [ ] Add tests for `NewStore()` error paths
+- [ ] Test directory creation failures, permission errors
+- **Location:** `internal/state/store.go`, `internal/state/store_test.go`
 
 ### P2.14 Error Injection Missing in Reconcile Mocks ❌
 
@@ -660,21 +706,58 @@ Coverage improved from 44.6% → 48.8% on providers package.
 - [ ] Add cost monitoring integration tests
 - **Location:** `cmd/agent-deploy/main_test.go`
 
+### P2.17 ~40 Untested Methods in aws.go ❌
+
+**Status:** NOT ADDRESSED  
+**Impact:** Low coverage on core AWS operations; many infrastructure provisioning and deletion paths untested
+
+**Evidence:**
+- `provisionLogGroup()` — CloudWatch log group creation untested
+- `createTaskDefinition()` — ECS task definition creation untested
+- All `delete*` methods — VPC, subnet, security group, route table, ALB, etc. deletion untested
+- CloudFront distribution creation/deletion untested
+- S3 bucket operations (`uploadDirectoryToS3()`, bucket creation/deletion) untested
+- SQS queue operations untested
+
+**Required Work:**
+- [ ] Add unit tests for `provisionLogGroup()`, `createTaskDefinition()`
+- [ ] Add tests for all `delete*` methods with error scenarios
+- [ ] Add tests for CloudFront and S3 operations
+- [ ] Add tests for SQS queue provisioning
+- **Location:** `internal/providers/aws_test.go`
+
+### P2.18 TestAWSClientsStruct Incomplete ❌
+
+**Status:** NOT ADDRESSED  
+**Impact:** Interface compliance not verified for newer AWS service clients
+
+**Evidence:**
+- `TestAWSClientsStruct` exists but doesn't test Lightsail, S3, CloudFront, SQS clients
+- These clients were added for workload types (static site, background worker, Lightsail)
+- Missing interface compliance verification
+
+**Required Work:**
+- [ ] Add Lightsail client interface compliance test
+- [ ] Add S3 client interface compliance test
+- [ ] Add CloudFront client interface compliance test
+- [ ] Add SQS client interface compliance test
+- **Location:** `internal/awsclient/mocks/interfaces_test.go`
+
 ---
 
 ## P3 — Quality Improvements (Lower Priority)
 
 ### P3.13 Shallow Reconciliation ❌
 
-**Status:** PARTIAL — only 3 of 25 resource types reconciled  
-**Impact:** Orphaned resources (subnets, NAT GW, SGs, etc.) may not be detected; SyncedCount is misleading (counts local entries, not AWS verification)
+**Status:** PARTIAL — only 3 of 30+ resource types reconciled  
+**Impact:** Orphaned resources (subnets, NAT GW, SGs, Lightsail, S3/CloudFront, SQS, etc.) may not be detected; SyncedCount is misleading (counts local entries, not AWS verification)
 
 **Currently Reconciled (3):**
 - VPC
 - ECS Cluster
 - ALB
 
-**Missing (22):**
+**Missing (27+):**
 - Subnets (public and private)
 - Route tables (public and private)
 - Security groups (ALB and Task)
@@ -691,9 +774,13 @@ Coverage improved from 44.6% → 48.8% on providers package.
 - ACM certificates
 - Route53 records
 - Auto-scaling policies
+- **Lightsail resources** (container services)
+- **S3 buckets** (static sites)
+- **CloudFront distributions** (static sites)
+- **SQS queues** (background workers)
 
 **Required Work:**
-- [ ] Add reconciliation for all 25 resource types tracked in state
+- [ ] Add reconciliation for all 30+ resource types tracked in state
 - [ ] Fix SyncedCount to verify against AWS instead of counting local entries
 - **Location:** `internal/state/reconcile.go`
 
@@ -788,22 +875,25 @@ Coverage improved from 44.6% → 48.8% on providers package.
 - [x] Uses logging.ComponentSpending for consistent component tagging
 - **Location:** `internal/spending/config.go`
 
-### P3.19 Hardcoded ALB/NAT/CloudWatch Pricing ❌
+### P3.19 Hardcoded ALB/NAT/CloudWatch/Lightsail Pricing ❌
 
 **Status:** NOT ADDRESSED  
-**Impact:** Cost estimation inaccurate in some regions; pricing could become stale
+**Impact:** Cost estimation uses hardcoded values; pricing could become stale
 
-**Evidence (from pricing.go):**
+**Evidence (from pricing.go and aws.go):**
 - ALB: Uses hardcoded $0.0225/hr fallback when Pricing API unavailable
 - NAT Gateway: Hardcoded $0.045/hr + $0.045/GB
 - CloudWatch Logs: Hardcoded $0.50/GB ingestion, $0.03/GB storage
 - LCU: Hardcoded $0.008/hr
+- Lightsail: Hardcoded pricing map `lightsailPowerPricing` (dated 2026-03)
+- Fargate fallbacks in EstimateCosts()
 
 **Required Work:**
 - [ ] Add Pricing API calls for ALB, NAT Gateway, CloudWatch Logs
+- [ ] Add Pricing API calls for Lightsail (or document fixed pricing)
 - [ ] Fall back to hardcoded values only when API fails
 - [ ] Log warning when using hardcoded fallback
-- **Location:** `internal/spending/pricing.go`
+- **Location:** `internal/spending/pricing.go`, `internal/providers/aws.go`
 
 ### P3.20 NAT Gateway Single AZ ⚠️ NEW
 
@@ -840,23 +930,41 @@ Coverage improved from 44.6% → 48.8% on providers package.
 - [ ] Add test: teardown with DNS deletion error still completes but logs warning
 - **Location:** `internal/providers/aws.go` (teardown function)
 
-### P3.32 Reconcile Error Handling Issues ❌
+### P3.32 Reconcile Error Handling Issues ✅ COMPLETE
+
+**Status:** FIXED  
+**Impact:** ~~Silent failures in reconciliation could cause missed orphaned resources or incorrect sync counts~~
+
+**Resolution:**
+- Errors now properly logged and returned instead of silently ignored
+- Error aggregation improved in `findOrphanedResources()`
+- `countSyncedResources()` properly propagates errors
+- **Location:** `internal/state/reconcile.go`
+
+### P3.33 Lightsail DNS Not Automated ⚠️ NEW
 
 **Status:** NOT ADDRESSED  
-**Impact:** Silent failures in reconciliation could cause missed orphaned resources or incorrect sync counts
+**Impact:** Custom DNS with Route 53 works for ECS/ALB deployments, but Lightsail deployments require a separate certificate path
 
 **Evidence:**
-- Errors silently ignored at lines 143-155, 272, 293, 301, 309 in `internal/state/reconcile.go`
-- `checkInfraResources()`: Errors from AWS Describe* calls are logged but silently ignored; function continues with stale/incomplete data
-- `findOrphanedResources()`: Error aggregation incomplete; some error paths return early, others continue
-- `countSyncedResources()`: Silent failures; errors don't propagate to caller
+- Lightsail has its own certificate service (cannot use ACM directly)
+- Current DNS code assumes ALB endpoints
+- Custom domain support for Lightsail requires Lightsail-specific certificate provisioning
 
 **Required Work:**
-- [ ] Properly propagate or aggregate errors in `checkInfraResources()`
-- [ ] Complete error aggregation in `findOrphanedResources()`
-- [ ] Return meaningful error information from `countSyncedResources()`
-- [ ] Add tests for error handling paths in reconciliation
-- **Location:** `internal/state/reconcile.go` — lines 143-155, 272, 293, 301, 309
+- [ ] Add Lightsail certificate API integration
+- [ ] Detect backend type in DNS provisioning code
+- [ ] Route to appropriate certificate path (ACM for ECS, Lightsail for Lightsail)
+- **Location:** `internal/providers/aws.go` (DNS functions)
+
+### P3.34 LightsailMock Missing from Interface Test ❌
+
+**Status:** NOT ADDRESSED  
+**Impact:** Interface compliance not verified for LightsailMock
+
+**Required Work:**
+- [ ] Add LightsailMock to `interfaces_test.go` interface compliance verification
+- **Location:** `internal/awsclient/mocks/interfaces_test.go`
 
 ### P3.27-P3.30 CI/CD Gaps ❌
 
@@ -872,6 +980,53 @@ Coverage improved from 44.6% → 48.8% on providers package.
 | **P3.30** | No goreleaser validation | Add `goreleaser --validate` pre-release check |
 
 **Location:** `.github/workflows/ci.yml`, `.github/workflows/release.yml`
+
+### P3.35 getAccountID() Returns "*" Placeholder ❌
+
+**Status:** NOT ADDRESSED  
+**Impact:** Account ID used in IAM policies may be overly permissive; should use actual account ID
+
+**Evidence:**
+- `getAccountID()` function returns `"*"` as placeholder
+- Should use STS GetCallerIdentity API to retrieve actual AWS account ID
+- Current implementation may create IAM policies with broader permissions than intended
+
+**Required Work:**
+- [ ] Add STS API client to awsclient interfaces
+- [ ] Implement `getAccountID()` using STS GetCallerIdentity
+- [ ] Add fallback to current behavior with warning if STS call fails
+- **Location:** `internal/providers/aws.go`
+
+### P3.36 Fragile Tag Parsing in costs.go ⚠️
+
+**Status:** NOT ADDRESSED  
+**Impact:** Cost attribution may break if tag format changes
+
+**Evidence:**
+- `costs.go` uses hardcoded 27-character prefix assumption when extracting deployment ID from tags
+- This is fragile and may break if tag key naming conventions change
+- Should use proper string parsing or tag key lookup
+
+**Required Work:**
+- [ ] Replace hardcoded prefix length with proper tag parsing
+- [ ] Add constants for tag key names
+- [ ] Add tests for edge cases
+- **Location:** `internal/spending/costs.go`
+
+### P3.37 Incorrect Pricing Date in Comments ⚠️
+
+**Status:** NOT ADDRESSED  
+**Impact:** Misleading documentation; comments suggest future date
+
+**Evidence:**
+- Pricing-related comments reference "2026-03" as the date
+- This appears to be incorrect/placeholder and should reflect actual verification date
+- May confuse maintainers about when pricing was last validated
+
+**Required Work:**
+- [ ] Update pricing date comments to reflect actual verification date
+- [ ] Document pricing source (AWS pricing page URLs)
+- **Location:** `internal/providers/aws.go`, `internal/spending/pricing.go`
 
 ---
 
@@ -1088,14 +1243,14 @@ go tool cover -html=coverage.out          # View coverage report
 
 | Package | Coverage | Notes |
 |---------|----------|-------|
-| `cmd/agent-deploy/` | **0.0%** | Entry point completely untested |
+| `cmd/agent-deploy/` | **0.0%** | Entry point; main() hard to test (signal handling runs forever) |
 | `internal/awsclient/` | **91.7%** | Comprehensive tests added |
 | `internal/id/` | **100.0%** | Fully tested |
 | `internal/logging/` | **86.0%** | Good coverage |
 | `internal/providers/` | **48.8%** | planInfra, deploy, teardown, status, approval workflows, provisionVPC, provisionECSCluster, provisionALB tested |
-| `internal/spending/` | **67.9%** | CostTracker, CostMonitor, PricingEstimator tests added |
-| `internal/state/` | **82.9%** | Reconciler tests added, comprehensive coverage |
-| **Overall** | **52.9%** | ✅ **MEETS TARGET** (target: 50%) |
+| `internal/spending/` | **67.9%** | CostTracker, CostMonitor, PricingEstimator; processAlert() at 44% |
+| `internal/state/` | **82.9%** | Reconciler tests, store tests; checkInfraResources at 76.2%, NewStore at 44.4% |
+| **Overall** | **50.8%** | ✅ **MEETS TARGET** (target: 50%) |
 
 ### Key Files
 
@@ -1106,7 +1261,7 @@ go tool cover -html=coverage.out          # View coverage report
 | `internal/providers/aws.go` | AWS provider (6 tools, 1 resource, 1 prompt) + all input validations |
 | `internal/state/store.go` | File-backed state storage |
 | `internal/state/types.go` | Plan, Infrastructure, Deployment structs + 18 ResourceType constants |
-| `internal/state/reconcile.go` | State reconciliation with AWS (3/25 resources; error handling issues P3.32) |
+| `internal/state/reconcile.go` | State reconciliation with AWS (3/30+ resources) |
 | `internal/id/id.go` | ULID-based ID generation |
 | `internal/awsclient/` | AWS SDK configuration (9 service interfaces: EC2, ECS, ELBV2, IAM, ECR, CloudWatch Logs, AutoScaling, ACM, Route 53) |
 | `internal/spending/config.go` | Spending limits configuration |
@@ -1140,6 +1295,7 @@ go tool cover -html=coverage.out          # View coverage report
 | ALB pricing | `pricing.go:372-377` | ⚠️ HARDCODED FALLBACK — P3.19 |
 | NAT Gateway pricing | `pricing.go:372-377` | ⚠️ HARDCODED FALLBACK — P3.19 |
 | CloudWatch Logs pricing | `pricing.go:372-377` | ⚠️ HARDCODED FALLBACK — P3.19 |
+| Lightsail pricing | `aws.go` (lightsailPowerPricing) | ⚠️ HARDCODED — P3.19 (dated 2026-03) |
 | ~~ECS Task CPU: `"256"`~~ | ~~`aws.go`~~ | ✅ Now configurable via `cpu` parameter (P1.17) |
 | ~~ECS Task Memory: `"512"`~~ | ~~`aws.go`~~ | ✅ Now configurable via `memory` parameter (P1.17) |
 | ~~ECS Desired Count: `1`~~ | ~~`aws.go`~~ | ✅ Now configurable (P1.5) |
@@ -1172,13 +1328,13 @@ go tool cover -html=coverage.out          # View coverage report
 
 | Priority | Count | Items |
 |----------|-------|-------|
-| **P0 Critical** | 0 | ~~P0.3 (provider nil store checks — FIXED)~~ |
-| **P1 Spec Gaps** | 0 | ~~P1.37 (Static Site — COMPLETE)~~, ~~P1.38 (Background Worker — COMPLETE)~~ |
-| **P2 Test Gaps** | 6 | P2.5 (AWS error scenarios), P2.11 (processAlert), P2.12 (checkInfraResources), P2.13 (sleep timing), P2.14 (reconcile mocks), P2.15 (signal/HTTP) |
-| **P3 Quality** | 9 | P3.13 (reconciliation 3/25 types), P3.19 (pricing), P3.20 (NAT HA), P3.31 (DNS error handling), P3.32 (reconcile error handling), P3.27-P3.30 (CI gaps) |
+| **P0 Critical** | 0 | ✅ All resolved (P0.1, P0.2, P0.3) |
+| **P1 Spec Gaps** | 0 | ✅ All resolved (Static Site, Background Worker, Lightsail, Custom DNS, Spending confirmation) |
+| **P2 Test Gaps** | 9 | P2.5 (AWS error scenarios 48.8%), P2.11 (processAlert 44%), P2.12 (checkInfraResources 76.2%), P2.13 (sleep timing ×10), P2.14 (reconcile mocks), P2.15 (signal/HTTP), P2.16 (NewStore 44.4%), P2.17 (~40 untested aws.go methods), P2.18 (AWS clients struct incomplete) |
+| **P3 Quality** | 13 | P3.13 (reconciliation 3/30+), P3.19 (pricing), P3.20 (NAT HA), P3.31 (DNS error), P3.33 (Lightsail DNS), P3.34 (LightsailMock), P3.35 (getAccountID), P3.36 (tag parsing), P3.37 (pricing date), P3.27-P3.30 (CI gaps ×4) |
 | **P4 New Features** | 4 | P4.4-P4.7 (scheduled job, batch, ML inference, data pipeline) |
 | **P5 Stretch** | 3 | CloudFormation, multi-cloud, secrets |
-| **Total remaining** | **23** | |
+| **Total remaining** | **29** | |
 
 ---
 
@@ -1211,7 +1367,7 @@ go tool cover -html=coverage.out          # View coverage report
 | **custom-dns.md** | Route 53 hosted zone lookup | ✅ IMPLEMENTED — P1.29 |
 | **custom-dns.md** | ACM certificate auto-provisioning | ✅ IMPLEMENTED — P1.29 |
 | **custom-dns.md** | DNS alias A record creation | ✅ IMPLEMENTED — P1.29 |
-| **custom-dns.md** | Custom domain in status URL list | ⚠️ **MISSING** — P1.35 (statusOutput lacks custom_domain field) |
+| **custom-dns.md** | Custom domain in status URL list | ✅ **COMPLETE** — P1.35 (statusOutput includes custom_domain field) |
 | **custom-dns.md** | DNS resource tracking in state | ✅ IMPLEMENTED — P3.15 |
 | **distribution.md** | Move main.go to cmd/agent-deploy/ | ✅ IMPLEMENTED |
 | **distribution.md** | GoReleaser + release workflow | ✅ IMPLEMENTED |
@@ -1219,10 +1375,10 @@ go tool cover -html=coverage.out          # View coverage report
 | **deployment-state.md** | Plan, Infrastructure, Deployment types | ✅ Implemented |
 | **deployment-state.md** | File-backed JSON at ~/.agent-deploy/state/ | ✅ Implemented |
 | **deployment-state.md** | 24-hour plan expiration, hourly cleanup | ✅ Implemented |
-| **deployment-state.md** | AWS resource tag reconciliation | ⚠️ **PARTIAL** — only 3 of 19 resource types reconciled (P3.13) |
+| **deployment-state.md** | AWS resource tag reconciliation | ⚠️ **PARTIAL** — only 3 of 30+ resource types reconciled (P3.13) |
 | **spending-safeguards.md** | monthly_budget_usd, per_deployment_usd, alert_threshold_percent | ✅ Implemented |
 | **spending-safeguards.md** | Pre-provisioning budget check | ⚠️ PARTIAL — Cost Explorer works, but ALB/NAT/CW pricing uses hardcoded fallback |
-| **spending-safeguards.md** | Confirmation when no limits configured | ⚠️ **MISSING** — P1.36 (silently applies defaults without user confirmation) |
+| **spending-safeguards.md** | Confirmation when no limits configured | ✅ **COMPLETE** — P1.36 (requires_confirmation field added) |
 | **spending-safeguards.md** | Runtime cost monitoring with Cost Explorer | ✅ Implemented |
 | **spending-safeguards.md** | Auto-teardown when budget exceeded | ✅ IMPLEMENTED |
 | **spending-safeguards.md** | Per-request spending limit overrides | ✅ IMPLEMENTED |
@@ -1232,10 +1388,10 @@ go tool cover -html=coverage.out          # View coverage report
 | **networking.md** | VPC CIDR configurable | ✅ IMPLEMENTED — vpc_cidr parameter with validation (P1.9) |
 | **networking.md** | Private subnets with NAT Gateway | ✅ IMPLEMENTED |
 | **ci.md** | CI workflow with lint, test, build jobs | ✅ IMPLEMENTED |
-| **testing.md** | 50% code coverage | ✅ **TARGET MET** — 52.9% overall |
+| **testing.md** | 50% code coverage | ✅ **TARGET MET** — 50.8% overall |
 | **testing.md** | main.go test coverage | ⚠️ **PARTIAL** — components tested, main() itself hard to test (P2.9); signal/HTTP untested (P2.15) |
 | **testing.md** | Concurrent access testing | ✅ **COMPLETE** — P2.10 fixed with comprehensive concurrent tests |
-| **error-handling.md** | Domain error types | ✅ **COMPLETE** — all 9 required error types defined and wired |
+| **error-handling.md** | Domain error types | ✅ **COMPLETE** — all 9 required error types defined with proper %w wrapping |
 | **operational.md** | No silent error suppression | ✅ FIXED — P0.2 complete, store.go now logs errors |
 | **operational.md** | Pagination for list operations | ✅ IMPLEMENTED |
 | **lightsail-provider.md** | Full Lightsail provider (priority: P1) | ✅ **IMPLEMENTED** — P1.34 (auto-backend selection, cost comparison) |
