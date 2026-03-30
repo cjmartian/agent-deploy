@@ -1,0 +1,29 @@
+P3.32 Fix: Reconcile Error Handling
+
+## Problem
+Multiple locations in reconcile.go were silently ignoring errors using
+the _, _ pattern. This masks issues during reconciliation and makes
+debugging difficult.
+
+## Solution
+1. Lines 143-155 (findOrphanedResources):
+   - ListDeployments error: now added to errors slice
+   - ListInfra error: now added to errors slice
+
+2. Line 272 (findStaleEntries):
+   - ecsServiceExists error: now added to errors slice
+
+3. Lines 293, 301, 309 (checkInfraResources):
+   - vpcExists error: now logged with slog.Warn
+   - ecsClusterExists error: now logged with slog.Warn
+   - albExists error: now logged with slog.Warn
+
+## Design Decision
+For checkInfraResources, chose logging over returning errors to avoid
+changing function signature. The function returns []string of missing
+resources, and adding error info would require signature change.
+Logging provides visibility without breaking callers.
+
+## Files Changed
+- internal/state/reconcile.go
+- IMPLEMENTATION_PLAN.md
