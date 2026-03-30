@@ -32,6 +32,8 @@ import (
 	elbv2types "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2/types"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
+	"github.com/aws/aws-sdk-go-v2/service/lightsail"
+	lstypes "github.com/aws/aws-sdk-go-v2/service/lightsail/types"
 	"github.com/aws/aws-sdk-go-v2/service/route53"
 	route53types "github.com/aws/aws-sdk-go-v2/service/route53/types"
 	"github.com/cjmartian/agent-deploy/internal/awsclient"
@@ -77,6 +79,7 @@ func (p *AWSProvider) getClients(cfg aws.Config) *awsclient.AWSClients {
 		CloudWatchLogs: cloudwatchlogs.NewFromConfig(cfg),
 		AutoScaling:    applicationautoscaling.NewFromConfig(cfg),
 		ACM:            acm.NewFromConfig(cfg),
+		Lightsail:      lightsail.NewFromConfig(cfg), // P1.34: Low-cost container deployments
 	}
 }
 
@@ -674,77 +677,123 @@ func (p *AWSProvider) planInfra(ctx context.Context, _ *mcp.CallToolRequest, in 
 	}
 	autoScalingEnabled := maxCount > minCount
 
-	// Select services based on requirements.
-	services := []string{"VPC", "ECS Fargate", "ALB", "CloudWatch Logs"}
-	// Add Auto Scaling to services if enabled via parameters OR high expected users.
-	if autoScalingEnabled || in.ExpectedUsers > 1000 {
-		services = append(services, "Auto Scaling")
-	}
+	// P1.34: Select backend based on workload signals.
+	// WHY: Lightsail is cheaper ($7-25/mo) for simple apps; ECS Fargate for production workloads.
+	backend := selectBackend(in.ExpectedUsers, autoScalingEnabled, in.AppDescription)
 
-	// Per spec ralph/specs/cost-estimation.md: Use PricingEstimator for accurate cost estimates.
-	// Falls back to hardcoded regional estimates if Pricing API is unavailable.
-	estimator, err := spending.NewPricingEstimator(ctx)
+	// Select services based on backend and requirements.
+	var services []string
+	var estimatedCost float64
 	var costEstimate *spending.CostEstimate
-	if err != nil {
-		slog.Warn("could not create pricing estimator, using simplified estimate",
-			slog.String("component", "aws_plan_infra"),
-			logging.Err(err))
-		// Fallback to simplified calculation.
-		baseCost := 15.0
-		ecsCost := float64(in.ExpectedUsers) * 0.02
-		if in.LatencyMS < 100 {
-			ecsCost *= 1.5
+
+	if backend == state.BackendLightsail {
+		// Lightsail: simple fixed pricing based on power level.
+		power := selectLightsailPower(in.ExpectedUsers)
+		nodes := calculateLightsailNodes(in.ExpectedUsers)
+		pricePerNode := lightsailPowerPricing[power]
+		estimatedCost = pricePerNode * float64(nodes)
+
+		services = []string{
+			fmt.Sprintf("Lightsail Container (%s)", power),
+			"Built-in HTTPS/TLS",
+			"Built-in Load Balancing",
 		}
-		albCost := 20.0
+		if nodes > 1 {
+			services = append(services, fmt.Sprintf("%d Nodes", nodes))
+		}
+
+		// Build cost estimate for Lightsail.
 		costEstimate = &spending.CostEstimate{
-			TotalMonthlyUSD: baseCost + ecsCost + albCost,
+			TotalMonthlyUSD: estimatedCost,
 			Region:          in.Region,
-			UsingFallback:   true,
-			Disclaimer:      "Using simplified cost estimate (pricing service unavailable).",
+			UsingFallback:   false,
+			Services: []spending.ServiceCost{
+				{
+					Service:     "Lightsail Container",
+					Description: fmt.Sprintf("%s power × %d node(s)", power, nodes),
+					MonthlyCost: estimatedCost,
+				},
+			},
 		}
+
+		slog.Info("selected Lightsail backend",
+			slog.String("component", "aws_plan_infra"),
+			slog.String("power", string(power)),
+			slog.Int("nodes", int(nodes)),
+			logging.Cost(estimatedCost))
 	} else {
-		// Estimate costs with proper pricing.
-		costEstimate, err = estimator.EstimateCosts(ctx, spending.EstimateParams{
-			Region:            in.Region,
-			CPUUnits:          256, // Default for planning
-			MemoryMB:          512, // Default for planning
-			DesiredCount:      1,
-			ExpectedUsers:     in.ExpectedUsers,
-			IncludeNATGateway: true, // Private subnets are now standard
-			LogRetentionDays:  7,
-		})
+		// ECS Fargate: use pricing estimator.
+		services = []string{"VPC", "ECS Fargate", "ALB", "CloudWatch Logs"}
+		// Add Auto Scaling to services if enabled via parameters OR high expected users.
+		if autoScalingEnabled || in.ExpectedUsers > 1000 {
+			services = append(services, "Auto Scaling")
+		}
+
+		// Per spec ralph/specs/cost-estimation.md: Use PricingEstimator for accurate cost estimates.
+		// Falls back to hardcoded regional estimates if Pricing API is unavailable.
+		estimator, err := spending.NewPricingEstimator(ctx)
 		if err != nil {
-			slog.Warn("cost estimation failed, using simplified estimate",
+			slog.Warn("could not create pricing estimator, using simplified estimate",
 				slog.String("component", "aws_plan_infra"),
 				logging.Err(err))
+			// Fallback to simplified calculation.
 			baseCost := 15.0
 			ecsCost := float64(in.ExpectedUsers) * 0.02
+			if in.LatencyMS < 100 {
+				ecsCost *= 1.5
+			}
 			albCost := 20.0
 			costEstimate = &spending.CostEstimate{
 				TotalMonthlyUSD: baseCost + ecsCost + albCost,
 				Region:          in.Region,
 				UsingFallback:   true,
-				Disclaimer:      "Using simplified cost estimate.",
+				Disclaimer:      "Using simplified cost estimate (pricing service unavailable).",
+			}
+		} else {
+			// Estimate costs with proper pricing.
+			costEstimate, err = estimator.EstimateCosts(ctx, spending.EstimateParams{
+				Region:            in.Region,
+				CPUUnits:          256, // Default for planning
+				MemoryMB:          512, // Default for planning
+				DesiredCount:      1,
+				ExpectedUsers:     in.ExpectedUsers,
+				IncludeNATGateway: true, // Private subnets are now standard
+				LogRetentionDays:  7,
+			})
+			if err != nil {
+				slog.Warn("cost estimation failed, using simplified estimate",
+					slog.String("component", "aws_plan_infra"),
+					logging.Err(err))
+				baseCost := 15.0
+				ecsCost := float64(in.ExpectedUsers) * 0.02
+				albCost := 20.0
+				costEstimate = &spending.CostEstimate{
+					TotalMonthlyUSD: baseCost + ecsCost + albCost,
+					Region:          in.Region,
+					UsingFallback:   true,
+					Disclaimer:      "Using simplified cost estimate.",
+				}
 			}
 		}
-	}
 
-	estimatedCost := costEstimate.TotalMonthlyUSD
+		estimatedCost = costEstimate.TotalMonthlyUSD
+	}
 
 	// Calculate cost range for auto-scaling (P1.22).
 	// WHY: Users need to understand min/max costs before committing to auto-scaling.
 	var costRangeOutput *costRange
 	var minCostMo, maxCostMo float64
 
-	// Get per-task cost by assuming single task cost = total cost for 1 task.
-	// Subtract fixed infrastructure costs (ALB, NAT Gateway) to get per-task cost.
-	fixedCosts := 35.0 // Approximate: ALB ($20) + NAT Gateway ($15)
-	perTaskCost := estimatedCost - fixedCosts
-	if perTaskCost < 10 {
-		perTaskCost = 10 // Minimum reasonable per-task cost
-	}
+	// Cost range only applies to ECS Fargate with auto-scaling.
+	if backend == state.BackendECSFargate && autoScalingEnabled {
+		// Get per-task cost by assuming single task cost = total cost for 1 task.
+		// Subtract fixed infrastructure costs (ALB, NAT Gateway) to get per-task cost.
+		fixedCosts := 35.0 // Approximate: ALB ($20) + NAT Gateway ($15)
+		perTaskCost := estimatedCost - fixedCosts
+		if perTaskCost < 10 {
+			perTaskCost = 10 // Minimum reasonable per-task cost
+		}
 
-	if autoScalingEnabled {
 		minCostMo = fixedCosts + (perTaskCost * float64(minCount))
 		maxCostMo = fixedCosts + (perTaskCost * float64(maxCount))
 		costRangeOutput = &costRange{
@@ -810,6 +859,7 @@ func (p *AWSProvider) planInfra(ctx context.Context, _ *mcp.CallToolRequest, in 
 		ExpiresAt:       time.Now().Add(24 * time.Hour),
 		VpcCIDR:         vpcCIDR,    // P1.9: Store VPC CIDR for use in createInfra
 		DomainName:      domainName, // P1.29: Store custom domain for createInfra
+		Backend:         backend,    // P1.34: Store selected backend (lightsail or ecs-fargate)
 	}
 
 	if err := p.store.CreatePlan(plan); err != nil {
@@ -822,13 +872,22 @@ func (p *AWSProvider) planInfra(ctx context.Context, _ *mcp.CallToolRequest, in 
 		slog.String("app_description", in.AppDescription),
 		slog.String("vpc_cidr", vpcCIDR),
 		slog.String("domain_name", domainName),
+		slog.String("backend", backend),
 		logging.Cost(estimatedCost),
 		slog.Bool("using_fallback_pricing", costEstimate.UsingFallback),
 		slog.Bool("auto_scaling_enabled", autoScalingEnabled))
 
 	// Build detailed summary including cost breakdown.
 	var summaryBuilder string
-	if autoScalingEnabled {
+	if backend == state.BackendLightsail {
+		power := selectLightsailPower(in.ExpectedUsers)
+		nodes := calculateLightsailNodes(in.ExpectedUsers)
+		summaryBuilder = fmt.Sprintf(
+			"Proposed plan for %q: Lightsail Container (%s × %d nodes) in %s, targeting %d users at ≤%dms p99. Estimated cost: $%.2f/mo. Plan ID: %s (expires in 24h).\n\n",
+			in.AppDescription, power, nodes, in.Region, in.ExpectedUsers, in.LatencyMS, estimatedCost, plan.ID,
+		)
+		summaryBuilder += fmt.Sprintf("💡 Using Lightsail for cost efficiency ($%.2f/mo vs ~$65/mo with ECS Fargate)\n\n", estimatedCost)
+	} else if autoScalingEnabled {
 		summaryBuilder = fmt.Sprintf(
 			"Proposed plan for %q: ECS Fargate in %s with auto-scaling (%d–%d tasks), targeting %d users at ≤%dms p99. Estimated cost: $%.2f–$%.2f/mo. Plan ID: %s (expires in 24h).\n\n",
 			in.AppDescription, in.Region, minCount, maxCount, in.ExpectedUsers, in.LatencyMS, minCostMo, maxCostMo, plan.ID,
@@ -1095,6 +1154,57 @@ func (p *AWSProvider) createInfra(ctx context.Context, _ *mcp.CallToolRequest, i
 	}
 
 	tags := awsclient.ResourceTags(plan.ID, infraID, "")
+	clients := p.getClients(cfg)
+
+	// P1.34: Branch based on backend selection.
+	if plan.Backend == state.BackendLightsail {
+		// Lightsail path: simpler, single-resource provisioning.
+		slog.Info("provisioning Lightsail infrastructure",
+			slog.String("component", "aws_create_infra"),
+			logging.InfraID(infraID))
+
+		power := selectLightsailPower(plan.ExpectedUsers)
+		nodes := calculateLightsailNodes(plan.ExpectedUsers)
+
+		serviceName, endpoint, err := p.createLightsailService(ctx, clients, infraID, power, nodes)
+		if err != nil {
+			if statusErr := p.store.SetInfraStatus(infraID, state.InfraStatusFailed); statusErr != nil {
+				slog.Error("failed to set infra status", "infraID", infraID, "error", statusErr)
+			}
+			return nil, createInfraOutput{}, fmt.Errorf("%w: provision Lightsail service: %w", apperrors.ErrProvisioningFailed, err)
+		}
+
+		// Store Lightsail resources.
+		infra.Resources[state.ResourceLightsailService] = serviceName
+		infra.Resources[state.ResourceLightsailEndpoint] = endpoint
+		infra.Resources[state.ResourceLightsailPower] = string(power)
+		infra.Resources[state.ResourceLightsailNodes] = fmt.Sprintf("%d", nodes)
+
+		// Save updated infra resources.
+		for k, v := range infra.Resources {
+			if err := p.store.UpdateInfraResource(infraID, k, v); err != nil {
+				slog.Error("failed to save Lightsail resource", logging.InfraID(infraID), slog.String("resource", k), logging.Err(err))
+			}
+		}
+
+		// Set status to ready.
+		if err := p.store.SetInfraStatus(infraID, state.InfraStatusReady); err != nil {
+			return nil, createInfraOutput{}, fmt.Errorf("set infra status: %w", err)
+		}
+
+		slog.Info("Lightsail infrastructure ready",
+			slog.String("component", "aws_create_infra"),
+			logging.InfraID(infraID),
+			slog.String("service", serviceName),
+			slog.String("endpoint", endpoint))
+
+		return nil, createInfraOutput{
+			InfraID: infraID,
+			Status:  state.InfraStatusReady,
+		}, nil
+	}
+
+	// ECS Fargate path: provision VPC, ECS cluster, ALB, etc.
 
 	// Provision resources in order. On failure, rollback already-created resources.
 	// WHY: Per spec ralph/specs/error-handling.md - partial failures must clean up
@@ -1366,6 +1476,48 @@ func (p *AWSProvider) deploy(ctx context.Context, _ *mcp.CallToolRequest, in dep
 		return nil, deployOutput{}, fmt.Errorf("save deployment: %w", err)
 	}
 
+	clients := p.getClients(cfg)
+
+	// P1.34: Check if this is a Lightsail deployment.
+	if serviceName, ok := infra.Resources[state.ResourceLightsailService]; ok && serviceName != "" {
+		// Lightsail deployment path.
+		slog.Info("deploying to Lightsail",
+			slog.String("component", "aws_deploy"),
+			logging.DeploymentID(deployID),
+			slog.String("service", serviceName))
+
+		_, err := p.deployToLightsail(ctx, clients, serviceName, in.ImageRef, containerPort, healthCheckPath, in.Environment)
+		if err != nil {
+			if statusErr := p.store.UpdateDeploymentStatus(deployID, state.DeploymentStatusFailed, nil); statusErr != nil {
+				slog.Error("failed to update deployment status", "deployID", deployID, "error", statusErr)
+			}
+			return nil, deployOutput{}, fmt.Errorf("lightsail deployment: %w", err)
+		}
+
+		// Get the endpoint URL from infra resources.
+		endpoint := infra.Resources[state.ResourceLightsailEndpoint]
+		urls := []string{}
+		if endpoint != "" {
+			urls = append(urls, endpoint)
+		}
+
+		// Update deployment status.
+		if err := p.store.UpdateDeploymentStatus(deployID, state.DeploymentStatusRunning, urls); err != nil {
+			slog.Error("failed to update deployment status", "deployID", deployID, "error", err)
+		}
+
+		slog.Info("Lightsail deployment complete",
+			slog.String("component", "aws_deploy"),
+			logging.DeploymentID(deployID),
+			slog.String("endpoint", endpoint))
+
+		return nil, deployOutput{
+			DeploymentID: deployID,
+			Status:       state.DeploymentStatusRunning,
+		}, nil
+	}
+
+	// ECS Fargate deployment path.
 	tags := awsclient.ResourceTags("", infra.ID, deployID)
 
 	// Create ECR repository if needed.
@@ -1508,36 +1660,52 @@ func (p *AWSProvider) status(ctx context.Context, _ *mcp.CallToolRequest, in sta
 	// Try to get live status from AWS.
 	cfg, err := awsclient.LoadConfig(ctx, infra.Region)
 	if err == nil {
-		// Get ECS service status.
 		clients := p.getClients(cfg)
-		ecsClient := clients.ECS
-		clusterARN := infra.Resources[state.ResourceECSCluster]
-		if clusterARN != "" {
-			resp, err := ecsClient.DescribeServices(ctx, &ecs.DescribeServicesInput{
-				Cluster:  aws.String(clusterARN),
-				Services: []string{deployment.ServiceARN},
-			})
-			if err == nil && len(resp.Services) > 0 {
-				svc := resp.Services[0]
-				if svc.RunningCount > 0 {
-					deployment.Status = state.DeploymentStatusRunning
-				} else if svc.DesiredCount > 0 {
-					deployment.Status = state.DeploymentStatusDeploying
-				}
 
-				// Get scaling info if configured.
-				clusterName := extractClusterName(clusterARN)
-				serviceName := extractServiceName(deployment.ServiceARN)
-				if info, err := p.getScalingInfo(ctx, cfg, clusterName, serviceName, int(svc.RunningCount)); err == nil && info != nil {
-					scaling = info
+		// P1.34: Check if this is a Lightsail deployment.
+		if serviceName, ok := infra.Resources[state.ResourceLightsailService]; ok && serviceName != "" {
+			// Lightsail status path.
+			status, urls, power, nodes, err := p.getLightsailStatus(ctx, clients, serviceName)
+			if err == nil {
+				deployment.Status = status
+				deployment.URLs = urls
+				slog.Debug("Lightsail status retrieved",
+					slog.String("component", "aws_status"),
+					slog.String("status", status),
+					slog.String("power", power),
+					slog.Int("nodes", nodes))
+			}
+		} else {
+			// ECS Fargate status path.
+			ecsClient := clients.ECS
+			clusterARN := infra.Resources[state.ResourceECSCluster]
+			if clusterARN != "" {
+				resp, err := ecsClient.DescribeServices(ctx, &ecs.DescribeServicesInput{
+					Cluster:  aws.String(clusterARN),
+					Services: []string{deployment.ServiceARN},
+				})
+				if err == nil && len(resp.Services) > 0 {
+					svc := resp.Services[0]
+					if svc.RunningCount > 0 {
+						deployment.Status = state.DeploymentStatusRunning
+					} else if svc.DesiredCount > 0 {
+						deployment.Status = state.DeploymentStatusDeploying
+					}
+
+					// Get scaling info if configured.
+					clusterName := extractClusterName(clusterARN)
+					serviceName := extractServiceName(deployment.ServiceARN)
+					if info, err := p.getScalingInfo(ctx, cfg, clusterName, serviceName, int(svc.RunningCount)); err == nil && info != nil {
+						scaling = info
+					}
 				}
 			}
-		}
 
-		// Refresh URLs.
-		urls, err := p.getALBURLs(ctx, cfg, infra)
-		if err == nil && len(urls) > 0 {
-			deployment.URLs = urls
+			// Refresh URLs.
+			urls, err := p.getALBURLs(ctx, cfg, infra)
+			if err == nil && len(urls) > 0 {
+				deployment.URLs = urls
+			}
 		}
 	}
 
@@ -1583,6 +1751,41 @@ func (p *AWSProvider) teardown(ctx context.Context, _ *mcp.CallToolRequest, in t
 		return nil, teardownOutput{}, err
 	}
 
+	clients := p.getClients(cfg)
+
+	// P1.34: Check if this is a Lightsail deployment.
+	if serviceName, ok := infra.Resources[state.ResourceLightsailService]; ok && serviceName != "" {
+		// Lightsail teardown path — simpler, single API call.
+		slog.Info("tearing down Lightsail deployment",
+			slog.String("component", "aws_teardown"),
+			logging.DeploymentID(in.DeploymentID),
+			slog.String("service", serviceName))
+
+		if err := p.teardownLightsail(ctx, clients, serviceName); err != nil {
+			slog.Warn("failed to delete Lightsail service",
+				slog.String("component", "aws_teardown"),
+				logging.Err(err))
+		}
+
+		// Update state.
+		if err := p.store.UpdateDeploymentStatus(in.DeploymentID, state.DeploymentStatusStopped, nil); err != nil {
+			slog.Error("failed to update deployment status during teardown", "deploymentID", in.DeploymentID, "error", err)
+		}
+		if err := p.store.SetInfraStatus(infra.ID, state.InfraStatusDestroyed); err != nil {
+			slog.Error("failed to set infra status during teardown", "infraID", infra.ID, "error", err)
+		}
+
+		slog.Info("Lightsail deployment torn down",
+			slog.String("component", "aws_teardown"),
+			logging.DeploymentID(in.DeploymentID))
+
+		return nil, teardownOutput{
+			DeploymentID: in.DeploymentID,
+			Status:       "destroyed",
+		}, nil
+	}
+
+	// ECS Fargate teardown path.
 	// Delete DNS and certificate resources first (P1.29).
 	// WHY: DNS record must be deleted before ALB, certificate before DNS cleanup.
 	p.deleteDNSResources(ctx, cfg, infra)
@@ -4202,4 +4405,352 @@ func (p *AWSProvider) deleteDNSResources(ctx context.Context, cfg aws.Config, in
 				logging.Err(err))
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Lightsail Provider Functions (P1.34)
+// WHY: Lightsail containers provide $7-25/mo deployments vs $65+/mo with ECS Fargate,
+// making it ideal for personal projects and small applications.
+// ---------------------------------------------------------------------------
+
+// lightsailPowerPricing maps Lightsail container power levels to monthly cost per node.
+// These are fixed prices from AWS (as of 2024) — no need for Pricing API.
+var lightsailPowerPricing = map[lstypes.ContainerServicePowerName]float64{
+	lstypes.ContainerServicePowerNameNano:   7.0,
+	lstypes.ContainerServicePowerNameMicro:  10.0,
+	lstypes.ContainerServicePowerNameSmall:  25.0,
+	lstypes.ContainerServicePowerNameMedium: 50.0,
+	lstypes.ContainerServicePowerNameLarge:  100.0,
+	lstypes.ContainerServicePowerNameXlarge: 200.0,
+}
+
+// lightsailPowerResources maps power levels to their compute resources.
+// WHY: Helps users understand what they get at each tier.
+var lightsailPowerResources = map[lstypes.ContainerServicePowerName]struct{ VCPU, MemoryGB float64 }{
+	lstypes.ContainerServicePowerNameNano:   {0.25, 0.5},
+	lstypes.ContainerServicePowerNameMicro:  {0.5, 1.0},
+	lstypes.ContainerServicePowerNameSmall:  {1.0, 2.0},
+	lstypes.ContainerServicePowerNameMedium: {2.0, 4.0},
+	lstypes.ContainerServicePowerNameLarge:  {4.0, 8.0},
+	lstypes.ContainerServicePowerNameXlarge: {8.0, 16.0},
+}
+
+// selectBackend determines whether to use Lightsail or ECS Fargate based on workload signals.
+// WHY: Lightsail is preferred for simple, low-traffic apps; ECS Fargate for production workloads.
+// Per spec ralph/specs/lightsail-provider.md: selection is automatic based on signals.
+func selectBackend(expectedUsers int, autoScalingEnabled bool, appDescription string) string {
+	// ECS Fargate preferred signals:
+	// - >500 expected users
+	// - Auto-scaling required (maxCount > 1 explicitly set)
+	// - Explicit production keywords in description
+	// - Custom VPC/networking requirements (implied by certain keywords)
+
+	// Check for production signals in app description.
+	prodKeywords := []string{"production", "prod", "enterprise", "high-availability", "ha ", "mission-critical"}
+	descLower := strings.ToLower(appDescription)
+	for _, kw := range prodKeywords {
+		if strings.Contains(descLower, kw) {
+			return state.BackendECSFargate
+		}
+	}
+
+	// High user count requires ECS Fargate for scaling.
+	if expectedUsers > 500 {
+		return state.BackendECSFargate
+	}
+
+	// Auto-scaling required — Lightsail doesn't support auto-scaling.
+	if autoScalingEnabled {
+		return state.BackendECSFargate
+	}
+
+	// Default: Lightsail for simpler, cheaper deployments.
+	return state.BackendLightsail
+}
+
+// selectLightsailPower chooses the appropriate Lightsail power level based on expected users.
+// WHY: Match compute resources to workload requirements cost-effectively.
+func selectLightsailPower(expectedUsers int) lstypes.ContainerServicePowerName {
+	switch {
+	case expectedUsers <= 50:
+		return lstypes.ContainerServicePowerNameNano
+	case expectedUsers <= 200:
+		return lstypes.ContainerServicePowerNameMicro
+	case expectedUsers <= 500:
+		return lstypes.ContainerServicePowerNameSmall
+	default:
+		// For >500 users, we'd typically recommend ECS Fargate.
+		// But if forced to Lightsail, use Small with multiple nodes.
+		return lstypes.ContainerServicePowerNameSmall
+	}
+}
+
+// calculateLightsailNodes determines the number of nodes needed.
+// WHY: More nodes provide redundancy and handle more traffic.
+func calculateLightsailNodes(expectedUsers int) int32 {
+	switch {
+	case expectedUsers <= 100:
+		return 1
+	case expectedUsers <= 300:
+		return 2
+	case expectedUsers <= 500:
+		return 3
+	default:
+		// Cap at 4 nodes for Lightsail; beyond this, use ECS Fargate.
+		return 4
+	}
+}
+
+// createLightsailService provisions a Lightsail container service.
+// WHY: Lightsail bundles compute, load balancing, TLS, and HTTPS endpoint in one resource.
+func (p *AWSProvider) createLightsailService(
+	ctx context.Context,
+	clients *awsclient.AWSClients,
+	infraID string,
+	power lstypes.ContainerServicePowerName,
+	nodes int32,
+) (serviceName string, endpoint string, err error) {
+	log := slog.With(
+		slog.String("component", "lightsail"),
+		logging.InfraID(infraID),
+	)
+
+	// Generate service name from infra ID (max 63 chars for Lightsail).
+	// Format: agent-deploy-{first12chars}
+	serviceName = fmt.Sprintf("agent-deploy-%s", infraID[:12])
+
+	log.Info("creating Lightsail container service",
+		slog.String("service_name", serviceName),
+		slog.String("power", string(power)),
+		slog.Int("scale", int(nodes)))
+
+	// Build tags.
+	tags := []lstypes.Tag{
+		{Key: aws.String("agent-deploy:created-by"), Value: aws.String("agent-deploy")},
+		{Key: aws.String("agent-deploy:infra-id"), Value: aws.String(infraID)},
+	}
+
+	// Create the container service.
+	createResp, err := clients.Lightsail.CreateContainerService(ctx, &lightsail.CreateContainerServiceInput{
+		ServiceName: aws.String(serviceName),
+		Power:       power,
+		Scale:       aws.Int32(nodes),
+		Tags:        tags,
+	})
+	if err != nil {
+		return "", "", fmt.Errorf("create lightsail container service: %w", err)
+	}
+
+	// Wait for service to become ready.
+	// Lightsail services can take 2-5 minutes to provision.
+	log.Info("waiting for Lightsail service to become ready")
+	maxAttempts := 30 // 30 * 10s = 5 minutes
+	for i := 0; i < maxAttempts; i++ {
+		getResp, err := clients.Lightsail.GetContainerServices(ctx, &lightsail.GetContainerServicesInput{
+			ServiceName: aws.String(serviceName),
+		})
+		if err != nil {
+			return "", "", fmt.Errorf("check lightsail service status: %w", err)
+		}
+
+		if len(getResp.ContainerServices) > 0 {
+			svc := getResp.ContainerServices[0]
+			switch svc.State {
+			case lstypes.ContainerServiceStateReady, lstypes.ContainerServiceStateRunning:
+				endpoint = aws.ToString(svc.Url)
+				log.Info("Lightsail service ready",
+					slog.String("endpoint", endpoint),
+					slog.String("state", string(svc.State)))
+				return serviceName, endpoint, nil
+			case lstypes.ContainerServiceStateDisabled, lstypes.ContainerServiceStateDeleting:
+				return "", "", fmt.Errorf("lightsail service entered unexpected state: %s", svc.State)
+			}
+			// Still pending/deploying, continue waiting.
+			log.Debug("Lightsail service still provisioning",
+				slog.String("state", string(svc.State)),
+				slog.Int("attempt", i+1))
+		}
+
+		time.Sleep(10 * time.Second)
+	}
+
+	// If we have a response with URL even if not fully ready, return it.
+	if createResp.ContainerService != nil && createResp.ContainerService.Url != nil {
+		return serviceName, aws.ToString(createResp.ContainerService.Url), nil
+	}
+
+	return "", "", fmt.Errorf("lightsail service did not become ready within 5 minutes")
+}
+
+// deployToLightsail deploys a container image to a Lightsail container service.
+// WHY: Lightsail deployment is simpler than ECS — no task definitions or service updates.
+func (p *AWSProvider) deployToLightsail(
+	ctx context.Context,
+	clients *awsclient.AWSClients,
+	serviceName string,
+	imageRef string,
+	containerPort int,
+	healthCheckPath string,
+	environment map[string]string,
+) (deploymentVersion int, err error) {
+	log := slog.With(
+		slog.String("component", "lightsail"),
+		slog.String("service", serviceName),
+	)
+
+	log.Info("deploying to Lightsail",
+		slog.String("image", imageRef),
+		slog.Int("port", containerPort))
+
+	// Build container definition.
+	containers := map[string]lstypes.Container{
+		"app": {
+			Image:   aws.String(imageRef),
+			Command: nil, // Use image default
+			Ports: map[string]lstypes.ContainerServiceProtocol{
+				fmt.Sprintf("%d", containerPort): lstypes.ContainerServiceProtocolHttp,
+			},
+		},
+	}
+
+	// Add environment variables if provided.
+	if len(environment) > 0 {
+		containers["app"] = lstypes.Container{
+			Image:       aws.String(imageRef),
+			Environment: environment,
+			Ports: map[string]lstypes.ContainerServiceProtocol{
+				fmt.Sprintf("%d", containerPort): lstypes.ContainerServiceProtocolHttp,
+			},
+		}
+	}
+
+	// Build endpoint configuration (routes traffic to container).
+	endpointConfig := &lstypes.EndpointRequest{
+		ContainerName: aws.String("app"),
+		ContainerPort: aws.Int32(int32(containerPort)),
+		HealthCheck: &lstypes.ContainerServiceHealthCheckConfig{
+			Path:               aws.String(healthCheckPath),
+			IntervalSeconds:    aws.Int32(30),
+			TimeoutSeconds:     aws.Int32(5),
+			HealthyThreshold:   aws.Int32(2),
+			UnhealthyThreshold: aws.Int32(3),
+			SuccessCodes:       aws.String("200-399"),
+		},
+	}
+
+	// Create deployment.
+	deployResp, err := clients.Lightsail.CreateContainerServiceDeployment(ctx, &lightsail.CreateContainerServiceDeploymentInput{
+		ServiceName:    aws.String(serviceName),
+		Containers:     containers,
+		PublicEndpoint: endpointConfig,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("create lightsail deployment: %w", err)
+	}
+
+	// Wait for deployment to become active.
+	log.Info("waiting for Lightsail deployment to become active")
+	maxAttempts := 30 // 30 * 10s = 5 minutes
+	for i := 0; i < maxAttempts; i++ {
+		getResp, err := clients.Lightsail.GetContainerServices(ctx, &lightsail.GetContainerServicesInput{
+			ServiceName: aws.String(serviceName),
+		})
+		if err != nil {
+			return 0, fmt.Errorf("check lightsail deployment status: %w", err)
+		}
+
+		if len(getResp.ContainerServices) > 0 {
+			svc := getResp.ContainerServices[0]
+			if svc.CurrentDeployment != nil {
+				switch svc.CurrentDeployment.State {
+				case lstypes.ContainerServiceDeploymentStateActive:
+					version := aws.ToInt32(svc.CurrentDeployment.Version)
+					log.Info("Lightsail deployment active",
+						slog.Int("version", int(version)))
+					return int(version), nil
+				case lstypes.ContainerServiceDeploymentStateFailed:
+					return 0, fmt.Errorf("lightsail deployment failed")
+				}
+			}
+			log.Debug("Lightsail deployment still activating",
+				slog.Int("attempt", i+1))
+		}
+
+		time.Sleep(10 * time.Second)
+	}
+
+	// Return version from initial response if available.
+	if deployResp.ContainerService != nil && deployResp.ContainerService.CurrentDeployment != nil {
+		return int(aws.ToInt32(deployResp.ContainerService.CurrentDeployment.Version)), nil
+	}
+
+	return 0, fmt.Errorf("lightsail deployment did not become active within 5 minutes")
+}
+
+// teardownLightsail deletes a Lightsail container service and all associated resources.
+// WHY: Lightsail teardown is simpler than ECS — one API call removes everything.
+func (p *AWSProvider) teardownLightsail(
+	ctx context.Context,
+	clients *awsclient.AWSClients,
+	serviceName string,
+) error {
+	log := slog.With(
+		slog.String("component", "lightsail"),
+		slog.String("service", serviceName),
+	)
+
+	log.Info("deleting Lightsail container service")
+
+	_, err := clients.Lightsail.DeleteContainerService(ctx, &lightsail.DeleteContainerServiceInput{
+		ServiceName: aws.String(serviceName),
+	})
+	if err != nil {
+		return fmt.Errorf("delete lightsail container service: %w", err)
+	}
+
+	log.Info("Lightsail container service deleted successfully")
+	return nil
+}
+
+// getLightsailStatus retrieves the current status of a Lightsail deployment.
+// WHY: Status output shape should match ECS deployments for consistent UX.
+func (p *AWSProvider) getLightsailStatus(
+	ctx context.Context,
+	clients *awsclient.AWSClients,
+	serviceName string,
+) (status string, urls []string, power string, nodes int, err error) {
+	getResp, err := clients.Lightsail.GetContainerServices(ctx, &lightsail.GetContainerServicesInput{
+		ServiceName: aws.String(serviceName),
+	})
+	if err != nil {
+		return "", nil, "", 0, fmt.Errorf("get lightsail service status: %w", err)
+	}
+
+	if len(getResp.ContainerServices) == 0 {
+		return "", nil, "", 0, fmt.Errorf("lightsail service not found: %s", serviceName)
+	}
+
+	svc := getResp.ContainerServices[0]
+
+	// Map Lightsail state to deployment status.
+	switch svc.State {
+	case lstypes.ContainerServiceStateRunning:
+		status = state.DeploymentStatusRunning
+	case lstypes.ContainerServiceStateDeploying, lstypes.ContainerServiceStatePending:
+		status = state.DeploymentStatusDeploying
+	case lstypes.ContainerServiceStateDisabled, lstypes.ContainerServiceStateDeleting:
+		status = state.DeploymentStatusStopped
+	default:
+		status = "unknown"
+	}
+
+	// Get public URL.
+	if svc.Url != nil {
+		urls = []string{aws.ToString(svc.Url)}
+	}
+
+	power = string(svc.Power)
+	nodes = int(aws.ToInt32(svc.Scale))
+
+	return status, urls, power, nodes, nil
 }

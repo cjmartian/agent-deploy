@@ -22,6 +22,10 @@ type Plan struct {
 	// DomainName is the custom domain name for the deployment (P1.29). Empty means ALB DNS only.
 	// WHY: Custom domains provide user-friendly URLs instead of ALB-generated names.
 	DomainName string `json:"domain_name,omitempty"`
+	// Backend specifies which AWS backend to use: "ecs-fargate" or "lightsail" (P1.34).
+	// WHY: Lightsail offers $7-25/mo deployments vs $65+/mo with ECS Fargate.
+	// The planner auto-selects based on workload signals (users, scaling needs, etc.).
+	Backend string `json:"backend,omitempty"`
 }
 
 // PlanStatus constants.
@@ -79,6 +83,23 @@ const (
 	// ALB DNS resources for Route 53 alias record deletion (P1.33).
 	ResourceALBDNSName      = "alb_dns_name"       // ALB DNS name (e.g., "dualstack-alb-123.elb.amazonaws.com")
 	ResourceALBHostedZoneID = "alb_hosted_zone_id" // ALB's canonical hosted zone ID (region-specific)
+)
+
+// Backend constants define which AWS backend is used for deployment.
+// WHY: Lightsail offers simpler, cheaper deployments for small apps ($7-25/mo)
+// compared to ECS Fargate ($65+/mo). The planner auto-selects based on workload.
+const (
+	BackendECSFargate = "ecs-fargate"
+	BackendLightsail  = "lightsail"
+)
+
+// Lightsail resource type constants for Infrastructure.Resources map keys.
+// WHY: Track Lightsail-specific resources separately from ECS resources.
+const (
+	ResourceLightsailService  = "lightsail_service"  // Lightsail container service name
+	ResourceLightsailEndpoint = "lightsail_endpoint" // Public HTTPS endpoint URL
+	ResourceLightsailPower    = "lightsail_power"    // Power level (nano, micro, small, etc.)
+	ResourceLightsailNodes    = "lightsail_nodes"    // Number of nodes (1-20)
 )
 
 // Deployment represents an application deployed onto infrastructure.

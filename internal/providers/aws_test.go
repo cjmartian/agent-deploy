@@ -71,6 +71,128 @@ func TestPlanInfra(t *testing.T) {
 	}
 }
 
+// TestPlanInfra_LightsailBackendSelection tests the Lightsail vs ECS Fargate backend selection (P1.34).
+// WHY: Lightsail provides $7-25/mo deployments for simple apps vs $65+/mo with ECS Fargate.
+func TestPlanInfra_LightsailBackendSelection(t *testing.T) {
+	// Set higher budget limit for test.
+	t.Setenv("AGENT_DEPLOY_PER_DEPLOYMENT_BUDGET", "500")
+
+	store, err := state.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	provider := NewAWSProvider(store)
+
+	tests := []struct {
+		name            string
+		input           planInfraInput
+		expectedBackend string
+		expectLowCost   bool // True if cost should be <= $25/mo (Lightsail)
+	}{
+		{
+			name: "small app selects Lightsail",
+			input: planInfraInput{
+				AppDescription: "Simple blog",
+				ExpectedUsers:  50,
+				LatencyMS:      200,
+				Region:         "us-east-1",
+			},
+			expectedBackend: state.BackendLightsail,
+			expectLowCost:   true,
+		},
+		{
+			name: "high user count selects ECS Fargate",
+			input: planInfraInput{
+				AppDescription: "High traffic API",
+				ExpectedUsers:  1000,
+				LatencyMS:      100,
+				Region:         "us-east-1",
+			},
+			expectedBackend: state.BackendECSFargate,
+			expectLowCost:   false,
+		},
+		{
+			name: "production keyword selects ECS Fargate",
+			input: planInfraInput{
+				AppDescription: "Production API server",
+				ExpectedUsers:  100,
+				LatencyMS:      200,
+				Region:         "us-east-1",
+			},
+			expectedBackend: state.BackendECSFargate,
+			expectLowCost:   false,
+		},
+		{
+			name: "auto-scaling selects ECS Fargate",
+			input: planInfraInput{
+				AppDescription: "Scalable service",
+				ExpectedUsers:  100,
+				LatencyMS:      200,
+				Region:         "us-east-1",
+				MinCount:       1,
+				MaxCount:       4,
+			},
+			expectedBackend: state.BackendECSFargate,
+			expectLowCost:   false,
+		},
+		{
+			name: "medium users selects Lightsail",
+			input: planInfraInput{
+				AppDescription: "Internal tool",
+				ExpectedUsers:  200,
+				LatencyMS:      500,
+				Region:         "us-east-1",
+			},
+			expectedBackend: state.BackendLightsail,
+			expectLowCost:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, output, err := provider.planInfra(context.Background(), nil, tt.input)
+			if err != nil {
+				t.Fatalf("planInfra: %v", err)
+			}
+
+			// Get plan to check backend.
+			plan, err := store.GetPlan(output.PlanID)
+			if err != nil {
+				t.Fatalf("GetPlan: %v", err)
+			}
+
+			if plan.Backend != tt.expectedBackend {
+				t.Errorf("Backend = %q, want %q", plan.Backend, tt.expectedBackend)
+			}
+
+			// Check cost is appropriate for backend.
+			if tt.expectLowCost && plan.EstimatedCostMo > 25.0 {
+				t.Errorf("Expected low cost (<= $25/mo), got $%.2f", plan.EstimatedCostMo)
+			}
+
+			// Verify services list matches backend.
+			hasLightsail := false
+			hasECSFargate := false
+			for _, svc := range output.Services {
+				if strings.Contains(svc, "Lightsail") {
+					hasLightsail = true
+				}
+				if svc == "ECS Fargate" {
+					hasECSFargate = true
+				}
+			}
+
+			if tt.expectedBackend == state.BackendLightsail && !hasLightsail {
+				t.Error("Services should include Lightsail for Lightsail backend")
+			}
+			if tt.expectedBackend == state.BackendECSFargate && !hasECSFargate {
+				t.Error("Services should include ECS Fargate for ECS Fargate backend")
+			}
+		})
+	}
+}
+
 // TestPlanInfra_AutoScalingCostRange tests that planInfra returns cost range when auto-scaling is configured (P1.22).
 // WHY: Users need to understand min/max costs before committing to auto-scaling deployments.
 func TestPlanInfra_AutoScalingCostRange(t *testing.T) {
@@ -200,16 +322,18 @@ func TestPlanInfra_PerRequestSpendingOverride(t *testing.T) {
 
 	t.Run("override_allows_lower_budget", func(t *testing.T) {
 		// Create a plan with low cost that would normally pass.
+		// WHY: With Lightsail (P1.34), small apps cost $7/mo (nano tier).
+		// Use a $5 budget to test that even Lightsail can be rejected.
 		input := planInfraInput{
 			AppDescription:         "Small app",
 			ExpectedUsers:          10,
 			LatencyMS:              200,
 			Region:                 "us-east-1",
-			PerDeploymentBudgetUSD: 10.0, // Very tight budget
+			PerDeploymentBudgetUSD: 5.0, // Below Lightsail Nano $7/mo
 		}
 
 		_, _, err := provider.planInfra(context.Background(), nil, input)
-		// Should fail because even a small app costs more than $10/mo.
+		// Should fail because even Lightsail Nano costs $7/mo.
 		if err == nil {
 			t.Error("Expected error for plan exceeding per-request spending limit")
 		}

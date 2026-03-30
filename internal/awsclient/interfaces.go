@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
 	"github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
+	"github.com/aws/aws-sdk-go-v2/service/lightsail"
 	"github.com/aws/aws-sdk-go-v2/service/route53"
 )
 
@@ -148,6 +149,26 @@ type Route53API interface {
 	GetChange(ctx context.Context, params *route53.GetChangeInput, optFns ...func(*route53.Options)) (*route53.GetChangeOutput, error)
 }
 
+// LightsailAPI defines the Lightsail API methods used by agent-deploy for low-cost deployments (P1.34).
+// WHY: Lightsail containers provide $7-25/mo deployments vs $65+/mo with ECS Fargate,
+// making it ideal for personal projects and small applications.
+type LightsailAPI interface {
+	// Container service operations
+	CreateContainerService(ctx context.Context, params *lightsail.CreateContainerServiceInput, optFns ...func(*lightsail.Options)) (*lightsail.CreateContainerServiceOutput, error)
+	GetContainerServices(ctx context.Context, params *lightsail.GetContainerServicesInput, optFns ...func(*lightsail.Options)) (*lightsail.GetContainerServicesOutput, error)
+	UpdateContainerService(ctx context.Context, params *lightsail.UpdateContainerServiceInput, optFns ...func(*lightsail.Options)) (*lightsail.UpdateContainerServiceOutput, error)
+	DeleteContainerService(ctx context.Context, params *lightsail.DeleteContainerServiceInput, optFns ...func(*lightsail.Options)) (*lightsail.DeleteContainerServiceOutput, error)
+
+	// Container deployment operations
+	CreateContainerServiceDeployment(ctx context.Context, params *lightsail.CreateContainerServiceDeploymentInput, optFns ...func(*lightsail.Options)) (*lightsail.CreateContainerServiceDeploymentOutput, error)
+	GetContainerServiceDeployments(ctx context.Context, params *lightsail.GetContainerServiceDeploymentsInput, optFns ...func(*lightsail.Options)) (*lightsail.GetContainerServiceDeploymentsOutput, error)
+
+	// Certificate operations for custom DNS
+	CreateCertificate(ctx context.Context, params *lightsail.CreateCertificateInput, optFns ...func(*lightsail.Options)) (*lightsail.CreateCertificateOutput, error)
+	GetCertificates(ctx context.Context, params *lightsail.GetCertificatesInput, optFns ...func(*lightsail.Options)) (*lightsail.GetCertificatesOutput, error)
+	DeleteCertificate(ctx context.Context, params *lightsail.DeleteCertificateInput, optFns ...func(*lightsail.Options)) (*lightsail.DeleteCertificateOutput, error)
+}
+
 // AWSClients holds all AWS service clients used by the provider.
 // This struct can be populated with either real clients or mocks for testing.
 type AWSClients struct {
@@ -160,4 +181,5 @@ type AWSClients struct {
 	AutoScaling    AutoScalingAPI
 	ACM            ACMAPI
 	Route53        Route53API
+	Lightsail      LightsailAPI // P1.34: Low-cost container deployments
 }
