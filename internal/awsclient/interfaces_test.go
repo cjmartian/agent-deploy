@@ -22,6 +22,8 @@ func TestMocksImplementInterfaces(t *testing.T) {
 	// P1.37: Static site mocks
 	var _ S3API = (*mocks.S3Mock)(nil)
 	var _ CloudFrontAPI = (*mocks.CloudFrontMock)(nil)
+	// P1.38: Background worker mocks
+	var _ SQSAPI = (*mocks.SQSMock)(nil)
 }
 
 // TestAWSClientsStruct verifies the AWSClients struct can hold all interfaces.

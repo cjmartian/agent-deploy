@@ -118,6 +118,19 @@ const (
 	ResourceStaticSiteIsSPA     = "static_is_spa"         // "true" if single-page app (SPA routing)
 )
 
+// Background worker resource type constants for Infrastructure.Resources map keys (P1.38).
+// WHY: Track SQS queues and worker-specific IAM roles for background worker workloads.
+const (
+	BackendBackgroundWorker  = "background-worker" // Backend type for workers
+	ResourceSQSQueue         = "sqs_queue"         // Main SQS queue URL
+	ResourceSQSQueueARN      = "sqs_queue_arn"     // Main queue ARN
+	ResourceSQSDLQ           = "sqs_dlq"           // Dead letter queue URL
+	ResourceSQSDLQARN        = "sqs_dlq_arn"       // DLQ ARN
+	ResourceWorkerRole       = "worker_role"       // IAM role ARN for queue access
+	ResourceWorkerRoleName   = "worker_role_name"  // IAM role name (for cleanup)
+	ResourceWorkerPolicyARN  = "worker_policy_arn" // IAM policy ARN (for cleanup)
+)
+
 // Deployment represents an application deployed onto infrastructure.
 type Deployment struct {
 	ID          string    `json:"id"`

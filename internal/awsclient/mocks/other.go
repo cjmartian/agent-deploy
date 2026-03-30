@@ -70,6 +70,15 @@ func (m *IAMMock) DeleteRole(ctx context.Context, params *iam.DeleteRoleInput, o
 	return &iam.DeleteRoleOutput{}, nil
 }
 
+// P1.38: Inline policy methods for worker SQS permissions
+func (m *IAMMock) PutRolePolicy(ctx context.Context, params *iam.PutRolePolicyInput, optFns ...func(*iam.Options)) (*iam.PutRolePolicyOutput, error) {
+	return &iam.PutRolePolicyOutput{}, nil
+}
+
+func (m *IAMMock) DeleteRolePolicy(ctx context.Context, params *iam.DeleteRolePolicyInput, optFns ...func(*iam.Options)) (*iam.DeleteRolePolicyOutput, error) {
+	return &iam.DeleteRolePolicyOutput{}, nil
+}
+
 // ECRMock is a mock implementation of awsclient.ECRAPI for testing.
 type ECRMock struct {
 	CreateRepositoryFunc      func(ctx context.Context, params *ecr.CreateRepositoryInput, optFns ...func(*ecr.Options)) (*ecr.CreateRepositoryOutput, error)

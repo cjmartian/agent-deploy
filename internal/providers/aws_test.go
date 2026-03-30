@@ -4323,3 +4323,163 @@ t.Errorf("isHashedAsset(%q) = %v, want %v", tt.filename, got, tt.wantHash)
 })
 }
 }
+
+// TestSelectBackend_BackgroundWorker tests worker keyword detection (P1.38).
+func TestSelectBackend_BackgroundWorker(t *testing.T) {
+tests := []struct {
+name            string
+appDescription  string
+expectedUsers   int
+autoScaling     bool
+wantBackend     string
+}{
+{
+name:           "background worker keyword",
+appDescription: "Background worker that processes emails",
+expectedUsers:  100,
+wantBackend:    state.BackendBackgroundWorker,
+},
+{
+name:           "queue consumer",
+appDescription: "Queue consumer for image processing",
+expectedUsers:  50,
+wantBackend:    state.BackendBackgroundWorker,
+},
+{
+name:           "SQS consumer",
+appDescription: "SQS consumer service",
+expectedUsers:  200,
+wantBackend:    state.BackendBackgroundWorker,
+},
+{
+name:           "processes messages",
+appDescription: "Service that processes messages from a queue",
+expectedUsers:  100,
+wantBackend:    state.BackendBackgroundWorker,
+},
+{
+name:           "job processor",
+appDescription: "Background job processor",
+expectedUsers:  50,
+wantBackend:    state.BackendBackgroundWorker,
+},
+{
+name:           "email sender",
+appDescription: "Email sender worker",
+expectedUsers:  100,
+wantBackend:    state.BackendBackgroundWorker,
+},
+{
+name:           "event handler",
+appDescription: "Event handler for webhooks",
+expectedUsers:  100,
+wantBackend:    state.BackendBackgroundWorker,
+},
+{
+name:           "regular web service",
+appDescription: "My web API service",
+expectedUsers:  100,
+wantBackend:    state.BackendLightsail,
+},
+{
+name:           "static site not confused with worker",
+appDescription: "Static React portfolio site",
+expectedUsers:  100,
+wantBackend:    state.BackendStaticSite,
+},
+}
+
+for _, tt := range tests {
+t.Run(tt.name, func(t *testing.T) {
+got := selectBackend(tt.expectedUsers, tt.autoScaling, tt.appDescription)
+if got != tt.wantBackend {
+t.Errorf("selectBackend(%q) = %q, want %q", tt.appDescription, got, tt.wantBackend)
+}
+})
+}
+}
+
+// TestPlanInfra_BackgroundWorker tests planning for background workers (P1.38).
+func TestPlanInfra_BackgroundWorker(t *testing.T) {
+t.Setenv("AGENT_DEPLOY_PER_DEPLOYMENT_BUDGET", "100")
+
+store, err := state.NewStore(t.TempDir())
+if err != nil {
+t.Fatalf("NewStore: %v", err)
+}
+
+provider := NewAWSProvider(store)
+
+tests := []struct {
+name             string
+description      string
+wantBackend      string
+wantWorkloadType string
+wantServices     []string
+wantCostLessThan float64
+}{
+{
+name:             "background worker plan",
+description:      "Background worker that processes messages from SQS",
+wantBackend:      state.BackendBackgroundWorker,
+wantWorkloadType: "background-worker",
+wantServices:     []string{"SQS", "Fargate"},
+wantCostLessThan: 15.0,
+},
+{
+name:             "queue consumer",
+description:      "Queue consumer for batch processing",
+wantBackend:      state.BackendBackgroundWorker,
+wantWorkloadType: "background-worker",
+wantServices:     []string{"SQS"},
+wantCostLessThan: 15.0,
+},
+}
+
+for _, tt := range tests {
+t.Run(tt.name, func(t *testing.T) {
+input := planInfraInput{
+AppDescription: tt.description,
+ExpectedUsers:  100,
+LatencyMS:      200,
+Region:         "us-east-1",
+}
+
+_, output, err := provider.planInfra(context.Background(), nil, input)
+if err != nil {
+t.Fatalf("planInfra: %v", err)
+}
+
+plan, err := store.GetPlan(output.PlanID)
+if err != nil {
+t.Fatalf("GetPlan: %v", err)
+}
+
+if plan.Backend != tt.wantBackend {
+t.Errorf("Backend = %v, want %v", plan.Backend, tt.wantBackend)
+}
+if plan.WorkloadType != tt.wantWorkloadType {
+t.Errorf("WorkloadType = %v, want %v", plan.WorkloadType, tt.wantWorkloadType)
+}
+
+// Check services contain expected ones
+for _, wantSvc := range tt.wantServices {
+found := false
+for _, svc := range plan.Services {
+if strings.Contains(svc, wantSvc) || svc == wantSvc {
+found = true
+break
+}
+}
+if !found {
+t.Errorf("Services %v missing expected service %q", plan.Services, wantSvc)
+}
+}
+
+// Check cost is reasonable for workers
+if plan.EstimatedCostMo > tt.wantCostLessThan {
+t.Errorf("EstimatedCostMo = %.2f, want < %.2f", plan.EstimatedCostMo, tt.wantCostLessThan)
+}
+})
+}
+}

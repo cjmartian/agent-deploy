@@ -43,6 +43,8 @@ import (
 	route53types "github.com/aws/aws-sdk-go-v2/service/route53/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 	"github.com/cjmartian/agent-deploy/internal/awsclient"
 	apperrors "github.com/cjmartian/agent-deploy/internal/errors"
 	"github.com/cjmartian/agent-deploy/internal/id"
@@ -714,6 +716,24 @@ func (p *AWSProvider) planInfra(ctx context.Context, _ *mcp.CallToolRequest, in 
 		slog.Info("selected static site backend",
 			slog.String("component", "aws_plan_infra"),
 			logging.Cost(estimatedCost))
+	} else if backend == state.BackendBackgroundWorker {
+		// P1.38: Background worker: SQS + Fargate (no ALB)
+		// SQS: ~$0.40/million requests (usually free tier)
+		// Fargate: ~$10/mo for nano (0.25 vCPU, 512MB)
+		services = []string{"SQS Queue", "SQS Dead Letter Queue", "ECS Fargate (worker)", "CloudWatch Logs"}
+		estimatedCost = 10.0 // Fargate nano + SQS (usually free tier)
+		costEstimate = &spending.CostEstimate{
+			TotalMonthlyUSD: estimatedCost,
+			Region:          in.Region,
+			UsingFallback:   false,
+			Services: []spending.ServiceCost{
+				{Service: "SQS Queue", Description: "Message queue + dead letter queue", MonthlyCost: 0.5},
+				{Service: "Fargate Worker", Description: "0.25 vCPU, 512MB container", MonthlyCost: 9.5},
+			},
+		}
+		slog.Info("selected background worker backend",
+			slog.String("component", "aws_plan_infra"),
+			logging.Cost(estimatedCost))
 	} else if backend == state.BackendLightsail {
 		// Lightsail: simple fixed pricing based on power level.
 		power := selectLightsailPower(in.ExpectedUsers)
@@ -894,6 +914,10 @@ func (p *AWSProvider) planInfra(ctx context.Context, _ *mcp.CallToolRequest, in 
 	if backend == state.BackendStaticSite {
 		plan.WorkloadType = "static-site"
 	}
+	// P1.38: Set workload type for background workers
+	if backend == state.BackendBackgroundWorker {
+		plan.WorkloadType = "background-worker"
+	}
 
 	if err := p.store.CreatePlan(plan); err != nil {
 		return nil, planInfraOutput{}, fmt.Errorf("save plan: %w", err)
@@ -918,6 +942,13 @@ func (p *AWSProvider) planInfra(ctx context.Context, _ *mcp.CallToolRequest, in 
 			in.AppDescription, in.Region, estimatedCost, plan.ID,
 		)
 		summaryBuilder += "💡 Static site hosting detected — using S3 + CloudFront for lowest cost (~$1-5/mo)\n\n"
+	} else if backend == state.BackendBackgroundWorker {
+		// P1.38: Background worker summary
+		summaryBuilder = fmt.Sprintf(
+			"Proposed plan for %q: Background worker (SQS + Fargate) in %s. Estimated cost: $%.2f/mo. Plan ID: %s (expires in 24h).\n\n",
+			in.AppDescription, in.Region, estimatedCost, plan.ID,
+		)
+		summaryBuilder += "💡 Background worker detected — using SQS queue + Fargate (no ALB, ~$10/mo)\n\n"
 	} else if backend == state.BackendLightsail {
 		power := selectLightsailPower(in.ExpectedUsers)
 		nodes := calculateLightsailNodes(in.ExpectedUsers)
@@ -1255,6 +1286,41 @@ func (p *AWSProvider) createInfra(ctx context.Context, _ *mcp.CallToolRequest, i
 			InfraID: infraID,
 			Status:  state.InfraStatusReady,
 		}, nil
+	} else if plan.Backend == state.BackendBackgroundWorker {
+		// P1.38: Background worker path: SQS queue + IAM role (no VPC/ALB)
+		slog.Info("provisioning background worker infrastructure",
+			slog.String("component", "aws_create_infra"),
+			logging.InfraID(infraID))
+
+		err := p.createBackgroundWorkerInfra(ctx, cfg, plan, infra)
+		if err != nil {
+			if statusErr := p.store.SetInfraStatus(infraID, state.InfraStatusFailed); statusErr != nil {
+				slog.Error("failed to set infra status", logging.InfraID(infraID), logging.Err(statusErr))
+			}
+			return nil, createInfraOutput{}, fmt.Errorf("%w: provision worker infrastructure: %w", apperrors.ErrProvisioningFailed, err)
+		}
+
+		// Save updated infra resources
+		for k, v := range infra.Resources {
+			if err := p.store.UpdateInfraResource(infraID, k, v); err != nil {
+				slog.Error("failed to save worker resource", logging.InfraID(infraID), slog.String("resource", k), logging.Err(err))
+			}
+		}
+
+		// Set status to ready
+		if err := p.store.SetInfraStatus(infraID, state.InfraStatusReady); err != nil {
+			return nil, createInfraOutput{}, fmt.Errorf("set infra status: %w", err)
+		}
+
+		queueURL := infra.Resources[state.ResourceSQSQueue]
+		slog.Info("background worker infrastructure ready",
+			slog.String("component", "aws_create_infra"),
+			logging.InfraID(infraID),
+			slog.String("queue_url", queueURL))
+
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("Background worker infrastructure %s is ready. SQS queue: %s", infra.ID, queueURL)}},
+		}, createInfraOutput{InfraID: infra.ID, Status: state.InfraStatusReady}, nil
 	}
 
 	// ECS Fargate path: provision VPC, ECS cluster, ALB, etc.
@@ -1870,6 +1936,33 @@ func (p *AWSProvider) teardown(ctx context.Context, _ *mcp.CallToolRequest, in t
 		}
 
 		slog.Info("static site torn down",
+			slog.String("component", "aws_teardown"),
+			logging.DeploymentID(in.DeploymentID))
+
+		return nil, teardownOutput{
+			DeploymentID: in.DeploymentID,
+			Status:       "destroyed",
+		}, nil
+	}
+
+	// P1.38: Background worker teardown
+	if _, ok := infra.Resources[state.ResourceSQSQueue]; ok {
+		err := p.teardownBackgroundWorker(ctx, cfg, infra)
+		if err != nil {
+			slog.Warn("background worker teardown had errors",
+				slog.String("component", "aws_teardown"),
+				logging.Err(err))
+		}
+
+		// Update state
+		if err := p.store.UpdateDeploymentStatus(in.DeploymentID, state.DeploymentStatusStopped, nil); err != nil {
+			slog.Error("failed to update deployment status during teardown", "deploymentID", in.DeploymentID, "error", err)
+		}
+		if err := p.store.SetInfraStatus(infra.ID, state.InfraStatusDestroyed); err != nil {
+			slog.Error("failed to set infra status during teardown", "infraID", infra.ID, "error", err)
+		}
+
+		slog.Info("background worker torn down",
 			slog.String("component", "aws_teardown"),
 			logging.DeploymentID(in.DeploymentID))
 
@@ -4567,7 +4660,25 @@ var lightsailPowerResources = map[lstypes.ContainerServicePowerName]struct{ VCPU
 func selectBackend(expectedUsers int, autoScalingEnabled bool, appDescription string) string {
 	descLower := strings.ToLower(appDescription)
 	
-	// P1.37: Static site detection - check FIRST before other backends
+	// P1.38: Background worker detection - check FIRST before other backends
+	// Workers use SQS queues instead of HTTP endpoints
+	workerKeywords := []string{
+		"background worker", "background job", "job processor",
+		"queue consumer", "message consumer", "sqs consumer",
+		"processes messages", "consumes messages", "message handler",
+		"queue worker", "job queue", "task queue",
+		"email sender", "email processor", "email worker",
+		"image processor", "video processor", "file processor",
+		"webhook handler", "event handler", "event processor",
+		"async worker", "async processor", "background processor",
+	}
+	for _, kw := range workerKeywords {
+		if strings.Contains(descLower, kw) {
+			return state.BackendBackgroundWorker
+		}
+	}
+	
+	// P1.37: Static site detection - check SECOND before container backends
 	// Static sites use S3+CloudFront instead of containers
 	staticKeywords := []string{
 		"static site", "static files", "static website",
@@ -5736,4 +5847,392 @@ func (p *AWSProvider) teardownStaticSite(
 		slog.String("infra_id", infra.ID))
 
 	return nil
+}
+
+// =============================================================================
+// Background Worker Infrastructure (P1.38)
+// =============================================================================
+
+// provisionWorkerQueue creates SQS queue and dead letter queue for background workers (P1.38).
+// WHY: Workers need a message queue to pull work from. DLQ captures failed messages after 3 retries.
+func (p *AWSProvider) provisionWorkerQueue(
+ctx context.Context,
+sqsClient awsclient.SQSAPI,
+infraID string,
+fifo bool,
+) (queueURL, queueARN, dlqURL, dlqARN string, err error) {
+queueName := fmt.Sprintf("agent-deploy-%s", infraID[:12])
+dlqName := fmt.Sprintf("agent-deploy-%s-dlq", infraID[:12])
+
+if fifo {
+queueName += ".fifo"
+dlqName += ".fifo"
+}
+
+// Create DLQ first (main queue needs its ARN for redrive policy)
+dlqAttrs := map[string]string{
+"MessageRetentionPeriod": "1209600", // 14 days
+}
+if fifo {
+dlqAttrs["FifoQueue"] = "true"
+}
+
+dlqOut, err := sqsClient.CreateQueue(ctx, &sqs.CreateQueueInput{
+QueueName:  aws.String(dlqName),
+Attributes: dlqAttrs,
+})
+if err != nil {
+return "", "", "", "", fmt.Errorf("create DLQ: %w", err)
+}
+dlqURL = aws.ToString(dlqOut.QueueUrl)
+
+// Get DLQ ARN
+dlqAttrOut, err := sqsClient.GetQueueAttributes(ctx, &sqs.GetQueueAttributesInput{
+QueueUrl:       aws.String(dlqURL),
+AttributeNames: []sqstypes.QueueAttributeName{sqstypes.QueueAttributeNameQueueArn},
+})
+if err != nil {
+return "", "", "", "", fmt.Errorf("get DLQ ARN: %w", err)
+}
+dlqARN = dlqAttrOut.Attributes[string(sqstypes.QueueAttributeNameQueueArn)]
+
+slog.Info("created dead letter queue",
+slog.String("component", "aws_provider"),
+slog.String("dlq_url", dlqURL),
+slog.String("dlq_arn", dlqARN))
+
+// Create main queue with redrive policy
+redrivePolicy := fmt.Sprintf(`{"maxReceiveCount":"3","deadLetterTargetArn":"%s"}`, dlqARN)
+queueAttrs := map[string]string{
+"RedrivePolicy":          redrivePolicy,
+"VisibilityTimeout":      "300", // 5 minutes default
+"MessageRetentionPeriod": "345600", // 4 days
+}
+if fifo {
+queueAttrs["FifoQueue"] = "true"
+queueAttrs["ContentBasedDeduplication"] = "true"
+}
+
+queueOut, err := sqsClient.CreateQueue(ctx, &sqs.CreateQueueInput{
+QueueName:  aws.String(queueName),
+Attributes: queueAttrs,
+})
+if err != nil {
+return "", "", "", "", fmt.Errorf("create queue: %w", err)
+}
+queueURL = aws.ToString(queueOut.QueueUrl)
+
+// Get main queue ARN
+queueAttrOut, err := sqsClient.GetQueueAttributes(ctx, &sqs.GetQueueAttributesInput{
+QueueUrl:       aws.String(queueURL),
+AttributeNames: []sqstypes.QueueAttributeName{sqstypes.QueueAttributeNameQueueArn},
+})
+if err != nil {
+return "", "", "", "", fmt.Errorf("get queue ARN: %w", err)
+}
+queueARN = queueAttrOut.Attributes[string(sqstypes.QueueAttributeNameQueueArn)]
+
+slog.Info("created worker queue",
+slog.String("component", "aws_provider"),
+slog.String("queue_url", queueURL),
+slog.String("queue_arn", queueARN))
+
+return queueURL, queueARN, dlqURL, dlqARN, nil
+}
+
+// createWorkerRole creates an IAM role with SQS permissions for background workers (P1.38).
+// WHY: Workers need IAM permissions to receive/delete messages from their queue.
+func (p *AWSProvider) createWorkerRole(
+ctx context.Context,
+iamClient awsclient.IAMAPI,
+queueARN string,
+dlqARN string,
+infraID string,
+) (roleARN string, roleName string, policyARN string, err error) {
+roleName = fmt.Sprintf("agent-deploy-worker-%s", infraID[:12])
+policyName := fmt.Sprintf("agent-deploy-worker-policy-%s", infraID[:12])
+
+// Trust policy for ECS tasks
+trustPolicy := `{
+"Version": "2012-10-17",
+"Statement": [{
+"Effect": "Allow",
+"Principal": {"Service": "ecs-tasks.amazonaws.com"},
+"Action": "sts:AssumeRole"
+}]
+}`
+
+// Create role
+roleOut, err := iamClient.CreateRole(ctx, &iam.CreateRoleInput{
+RoleName:                 aws.String(roleName),
+AssumeRolePolicyDocument: aws.String(trustPolicy),
+Description:              aws.String("IAM role for agent-deploy background worker"),
+Tags: []iamtypes.Tag{
+{Key: aws.String("agent-deploy"), Value: aws.String("worker")},
+{Key: aws.String("infra-id"), Value: aws.String(infraID)},
+},
+})
+if err != nil {
+return "", "", "", fmt.Errorf("create worker role: %w", err)
+}
+roleARN = aws.ToString(roleOut.Role.Arn)
+
+// Worker policy - SQS permissions
+workerPolicy := fmt.Sprintf(`{
+"Version": "2012-10-17",
+"Statement": [
+{
+"Effect": "Allow",
+"Action": [
+"sqs:ReceiveMessage",
+"sqs:DeleteMessage",
+"sqs:GetQueueAttributes",
+"sqs:ChangeMessageVisibility"
+],
+"Resource": ["%s", "%s"]
+},
+{
+"Effect": "Allow",
+"Action": [
+"logs:CreateLogStream",
+"logs:PutLogEvents"
+],
+"Resource": "*"
+}
+]
+}`, queueARN, dlqARN)
+
+// Create and attach inline policy
+_, err = iamClient.PutRolePolicy(ctx, &iam.PutRolePolicyInput{
+RoleName:       aws.String(roleName),
+PolicyName:     aws.String(policyName),
+PolicyDocument: aws.String(workerPolicy),
+})
+if err != nil {
+return "", "", "", fmt.Errorf("attach worker policy: %w", err)
+}
+
+// Also attach basic execution role for CloudWatch logs
+_, err = iamClient.AttachRolePolicy(ctx, &iam.AttachRolePolicyInput{
+RoleName:  aws.String(roleName),
+PolicyArn: aws.String("arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"),
+})
+if err != nil {
+slog.Warn("failed to attach ECS execution policy, worker may have limited access",
+slog.String("component", "aws_provider"),
+logging.Err(err))
+}
+
+slog.Info("created worker IAM role",
+slog.String("component", "aws_provider"),
+slog.String("role_arn", roleARN),
+slog.String("role_name", roleName))
+
+// Wait for role to propagate
+time.Sleep(10 * time.Second)
+
+return roleARN, roleName, policyName, nil
+}
+
+// createBackgroundWorkerInfra provisions SQS queue and worker role (P1.38).
+// WHY: Background workers need queue + IAM role before container deployment.
+// Unlike web services, workers have no ALB, no public endpoint.
+func (p *AWSProvider) createBackgroundWorkerInfra(
+ctx context.Context,
+cfg aws.Config,
+plan *state.Plan,
+infra *state.Infrastructure,
+) error {
+clients := p.getClients(cfg)
+if clients.SQS == nil || clients.IAM == nil {
+return fmt.Errorf("SQS or IAM client not initialized")
+}
+
+// Check if FIFO queue is needed (from description)
+fifo := strings.Contains(strings.ToLower(plan.AppDescription), "fifo") ||
+strings.Contains(strings.ToLower(plan.AppDescription), "ordered")
+
+// 1. Provision SQS queue and DLQ
+queueURL, queueARN, dlqURL, dlqARN, err := p.provisionWorkerQueue(ctx, clients.SQS, infra.ID, fifo)
+if err != nil {
+return fmt.Errorf("provision worker queue: %w", err)
+}
+infra.Resources[state.ResourceSQSQueue] = queueURL
+infra.Resources[state.ResourceSQSQueueARN] = queueARN
+infra.Resources[state.ResourceSQSDLQ] = dlqURL
+infra.Resources[state.ResourceSQSDLQARN] = dlqARN
+
+// 2. Create worker IAM role with SQS permissions
+roleARN, roleName, policyName, err := p.createWorkerRole(ctx, clients.IAM, queueARN, dlqARN, infra.ID)
+if err != nil {
+// Rollback: delete queues
+_, _ = clients.SQS.DeleteQueue(ctx, &sqs.DeleteQueueInput{QueueUrl: aws.String(queueURL)})
+_, _ = clients.SQS.DeleteQueue(ctx, &sqs.DeleteQueueInput{QueueUrl: aws.String(dlqURL)})
+return fmt.Errorf("create worker role: %w", err)
+}
+infra.Resources[state.ResourceWorkerRole] = roleARN
+infra.Resources[state.ResourceWorkerRoleName] = roleName
+infra.Resources[state.ResourceWorkerPolicyARN] = policyName
+
+// 3. Create CloudWatch log group (workers need logging)
+logGroupName := fmt.Sprintf("/ecs/agent-deploy-%s", infra.ID[:12])
+_, err = clients.CloudWatchLogs.CreateLogGroup(ctx, &cloudwatchlogs.CreateLogGroupInput{
+LogGroupName: aws.String(logGroupName),
+Tags: map[string]string{
+"agent-deploy": "worker",
+"infra-id":     infra.ID,
+},
+})
+if err != nil && !strings.Contains(err.Error(), "ResourceAlreadyExistsException") {
+slog.Warn("failed to create log group",
+slog.String("component", "aws_provider"),
+logging.Err(err))
+}
+infra.Resources[state.ResourceLogGroup] = logGroupName
+
+slog.Info("created background worker infrastructure",
+slog.String("component", "aws_provider"),
+slog.String("infra_id", infra.ID),
+slog.String("queue_url", queueURL))
+
+return nil
+}
+
+// getWorkerQueueMetrics retrieves SQS queue metrics for status reporting (P1.38).
+// WHY: Workers don't have URLs; status shows queue depth instead.
+func (p *AWSProvider) getWorkerQueueMetrics(
+ctx context.Context,
+sqsClient awsclient.SQSAPI,
+queueURL string,
+dlqURL string,
+) (available, inFlight, dlqCount int, err error) {
+// Get main queue attributes
+attrs, err := sqsClient.GetQueueAttributes(ctx, &sqs.GetQueueAttributesInput{
+QueueUrl: aws.String(queueURL),
+AttributeNames: []sqstypes.QueueAttributeName{
+sqstypes.QueueAttributeNameApproximateNumberOfMessages,
+sqstypes.QueueAttributeNameApproximateNumberOfMessagesNotVisible,
+},
+})
+if err != nil {
+return 0, 0, 0, fmt.Errorf("get queue attributes: %w", err)
+}
+
+if v, ok := attrs.Attributes[string(sqstypes.QueueAttributeNameApproximateNumberOfMessages)]; ok {
+fmt.Sscanf(v, "%d", &available)
+}
+if v, ok := attrs.Attributes[string(sqstypes.QueueAttributeNameApproximateNumberOfMessagesNotVisible)]; ok {
+fmt.Sscanf(v, "%d", &inFlight)
+}
+
+// Get DLQ message count
+if dlqURL != "" {
+dlqAttrs, err := sqsClient.GetQueueAttributes(ctx, &sqs.GetQueueAttributesInput{
+QueueUrl: aws.String(dlqURL),
+AttributeNames: []sqstypes.QueueAttributeName{
+sqstypes.QueueAttributeNameApproximateNumberOfMessages,
+},
+})
+if err == nil {
+if v, ok := dlqAttrs.Attributes[string(sqstypes.QueueAttributeNameApproximateNumberOfMessages)]; ok {
+fmt.Sscanf(v, "%d", &dlqCount)
+}
+}
+}
+
+return available, inFlight, dlqCount, nil
+}
+
+// teardownBackgroundWorker removes SQS queues and worker IAM role (P1.38).
+// WHY: Clean teardown must delete queues and IAM resources.
+func (p *AWSProvider) teardownBackgroundWorker(
+ctx context.Context,
+cfg aws.Config,
+infra *state.Infrastructure,
+) error {
+clients := p.getClients(cfg)
+
+// 1. Delete SQS queues
+if queueURL := infra.Resources[state.ResourceSQSQueue]; queueURL != "" && clients.SQS != nil {
+_, err := clients.SQS.DeleteQueue(ctx, &sqs.DeleteQueueInput{
+QueueUrl: aws.String(queueURL),
+})
+if err != nil {
+slog.Warn("failed to delete SQS queue",
+slog.String("component", "aws_provider"),
+slog.String("queue_url", queueURL),
+logging.Err(err))
+} else {
+slog.Info("deleted SQS queue",
+slog.String("component", "aws_provider"),
+slog.String("queue_url", queueURL))
+}
+}
+
+if dlqURL := infra.Resources[state.ResourceSQSDLQ]; dlqURL != "" && clients.SQS != nil {
+_, err := clients.SQS.DeleteQueue(ctx, &sqs.DeleteQueueInput{
+QueueUrl: aws.String(dlqURL),
+})
+if err != nil {
+slog.Warn("failed to delete DLQ",
+slog.String("component", "aws_provider"),
+slog.String("dlq_url", dlqURL),
+logging.Err(err))
+} else {
+slog.Info("deleted DLQ",
+slog.String("component", "aws_provider"),
+slog.String("dlq_url", dlqURL))
+}
+}
+
+// 2. Delete worker IAM role and policy
+if roleName := infra.Resources[state.ResourceWorkerRoleName]; roleName != "" && clients.IAM != nil {
+// Delete inline policy first
+if policyName := infra.Resources[state.ResourceWorkerPolicyARN]; policyName != "" {
+_, _ = clients.IAM.DeleteRolePolicy(ctx, &iam.DeleteRolePolicyInput{
+RoleName:   aws.String(roleName),
+PolicyName: aws.String(policyName),
+})
+}
+
+// Detach managed policies
+_, _ = clients.IAM.DetachRolePolicy(ctx, &iam.DetachRolePolicyInput{
+RoleName:  aws.String(roleName),
+PolicyArn: aws.String("arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"),
+})
+
+// Delete role
+_, err := clients.IAM.DeleteRole(ctx, &iam.DeleteRoleInput{
+RoleName: aws.String(roleName),
+})
+if err != nil {
+slog.Warn("failed to delete worker role",
+slog.String("component", "aws_provider"),
+slog.String("role_name", roleName),
+logging.Err(err))
+} else {
+slog.Info("deleted worker IAM role",
+slog.String("component", "aws_provider"),
+slog.String("role_name", roleName))
+}
+}
+
+// 3. Delete CloudWatch log group
+if logGroup := infra.Resources[state.ResourceLogGroup]; logGroup != "" && clients.CloudWatchLogs != nil {
+_, err := clients.CloudWatchLogs.DeleteLogGroup(ctx, &cloudwatchlogs.DeleteLogGroupInput{
+LogGroupName: aws.String(logGroup),
+})
+if err != nil {
+slog.Warn("failed to delete log group",
+slog.String("component", "aws_provider"),
+slog.String("log_group", logGroup),
+logging.Err(err))
+}
+}
+
+slog.Info("completed background worker teardown",
+slog.String("component", "aws_provider"),
+slog.String("infra_id", infra.ID))
+
+return nil
 }
