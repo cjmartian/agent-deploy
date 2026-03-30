@@ -2,8 +2,8 @@
 
 **Project Goal:** Natural language deployment of applications via MCP server → Cloud provider. Allow users to end-to-end create applications and make them publicly available while ensuring spend does not cross user-defined boundaries.
 
-**Last Updated:** 2026-03-31  
-**Last Audit:** 2026-03-31 (Comprehensive parallel analysis — full spec compliance and coverage verification)
+**Last Updated:** 2026-03-30  
+**Last Audit:** 2026-03-30 (Comprehensive parallel analysis — full spec compliance and coverage verification)
 
 ## Priority Definitions
 
@@ -15,16 +15,17 @@
 - **P5**: Stretch goals
 
 **Current Status:**
-- ✅ Coverage: 50.8% (meets 50% target)
-- ✅ All P0 critical issues resolved (P0.1, P0.2, P0.3)
+- ⚠️ Coverage: 46.9% (below 50% target — `providers` at 40.4%)
+- 🚨 **Azure provider is P0 in spec but 0% implemented** — major gap
+- ✅ All previous P0 critical issues resolved (P0.1, P0.2, P0.3)
 - ✅ P1.29 Custom DNS — 100% complete (P1.35 status URL gap fixed)
 - ✅ P1.36 Spending confirmation — 100% complete (warns when using defaults)
 - ✅ P3.32 Reconcile error handling — fixed silent error suppression
-- ✅ P1.34 Lightsail provider — 100% complete (auto-selects backend, cost comparison)
+- ✅ P1.34 Lightsail provider — 98% complete (CNAME vs alias record issue for Lightsail DNS)
 - ✅ P1.37 Static Site workload — 100% complete (S3+CloudFront, file upload with MIME types, cache headers)
 - ✅ P1.38 Background Worker workload — 100% complete (SQS queue, DLQ, IAM role)
 
-**All P1 Spec Work Complete:** AWS 6 tools, Lightsail provider, Static Site, Background Worker, Custom DNS, Spending confirmation.
+**P1 Spec Work Status:** AWS 6 tools ✅, Lightsail provider ✅ (98%), Static Site ✅, Background Worker ✅, Custom DNS ✅, Spending confirmation ✅. Lightsail DNS uses wrong record type (CNAME vs alias).
 
 ---
 
@@ -33,11 +34,13 @@
 ### CRITICAL — Production Blockers (P0)
 | ID | Issue | Status | Impact |
 |----|-------|--------|--------|
+| 🚨 **P0.4** | **Azure provider completely unimplemented** | ❌ 0% | **Spec `azure-provider.md` has `priority: P0` in YAML frontmatter but is 0% implemented. This is a major gap — a P0-priority spec with zero implementation.** |
 | ✅ ~~P0.3~~ | ~~Provider nil store checks~~ | ✅ FIXED | All 11 `p.store.*` accesses now guarded with `checkStore()` method. Silent error suppression on lines 967-968 fixed with proper logging. |
 
 ### HIGH PRIORITY — Spec Compliance Gaps (P1)
 | ID | Issue | Status | Impact |
 |----|-------|--------|--------|
+| **P1.39** | Lightsail custom DNS uses wrong record type | ⚠️ 98% | Custom DNS for Lightsail uses CNAME instead of alias record; Lightsail requires Lightsail-specific certificate path (not ACM). Per `lightsail-provider.md` (priority: P1). |
 | ✅ ~~P1.34~~ | ~~Lightsail provider not implemented~~ | ✅ COMPLETE | Full Lightsail provider implemented with auto-backend selection, cost comparison, and $7-25/mo deployments. |
 | ✅ ~~P1.37~~ | ~~Static Site workload~~ | ✅ COMPLETE | **Priority P1** per `ralph/specs/workload-roadmap.md`. S3+CloudFront = $1-5/mo vs $65+/mo. Full implementation: S3 bucket, CloudFront, OAC, custom domain, file upload with MIME type detection, cache control headers. |
 | ✅ ~~P1.38~~ | ~~Background Worker workload~~ | ✅ COMPLETE | **Priority P1** per `ralph/specs/workload-roadmap.md`. SQS queue provisioning, dead letter queue (DLQ), redrive policy (3 retries), IAM role with SQS permissions, CloudWatch log group, $10/mo cost estimate. |
@@ -47,15 +50,18 @@
 ### MEDIUM PRIORITY — Test Gaps (P2)
 | ID | Issue | Status | Impact |
 |----|-------|--------|--------|
-| **P2.5** | AWS provider error scenarios incomplete | ⚠️ | 48.8% coverage; Route53/ALB/IAM error paths untested |
+| **P2.19** | **Overall coverage below 50% target** | ⚠️ | 46.9% coverage (target 50%); `providers` at 40.4% is the biggest gap |
+| **P2.5** | AWS provider error scenarios incomplete | ⚠️ | 40.4% coverage; Route53/ALB/IAM error paths untested |
 | **P2.11** | `processAlert()` partial coverage | ⚠️ | `internal/spending/monitor.go` — 44% coverage; alert processing path needs more tests |
 | **P2.12** | `checkInfraResources()` partial coverage | ⚠️ | `internal/state/reconcile.go` — 76.2% coverage; needs more error path tests |
-| **P2.13** | Sleep-based timing in tests | ⚠️ | Flaky CI risk — 10 instances of `time.Sleep` in tests instead of channels/conditions |
+| **P2.13** | Sleep-based timing in tests | ⚠️ | Flaky CI risk — 8 instances of `time.Sleep` in tests instead of channels/conditions |
 | **P2.14** | Error injection missing in reconcile mocks | ❌ | Reconcile tests only cover happy paths; no failure simulation |
 | **P2.15** | main.go signal/HTTP gaps | ❌ | SIGINT/SIGTERM untested, HTTP server untested, graceful shutdown untested |
 | **P2.16** | `NewStore()` partial coverage | ⚠️ | `internal/state/store.go` — 44.4% coverage; state store initialization needs tests |
 | **P2.17** | ~40 untested methods in aws.go | ❌ | provisionLogGroup, createTaskDefinition, all delete* methods, CloudFront, S3 upload, etc. |
 | **P2.18** | TestAWSClientsStruct incomplete | ❌ | Doesn't test Lightsail, S3, CloudFront, SQS clients |
+| **P2.20** | Scheduled job workload | ❌ | **Priority P2** per `ralph/specs/workload-roadmap.md`. EventBridge+Lambda — 0% implemented. Spec: `ralph/specs/workloads/scheduled-job.md` |
+| **P2.21** | Batch processing workload | ❌ | **Priority P2** per `ralph/specs/workload-roadmap.md`. AWS Batch — 0% implemented. Spec: `ralph/specs/workloads/batch-processing.md` |
 
 ### LOWER PRIORITY — Quality (P3)
 | ID | Issue | Status | Impact |
@@ -66,9 +72,16 @@
 | **P3.31** | `deleteDNSResources()` error not checked | ❌ | Called without error checking in `teardown()` (~line 1510); should return and propagate error |
 | ✅ ~~P3.32~~ | ~~Reconcile error handling issues~~ | ✅ FIXED | Errors now logged/returned instead of silently ignored |
 | **P3.33** | Lightsail DNS not automated | ⚠️ | Route 53 DNS works for ECS/ALB; Lightsail requires separate certificate path not yet implemented |
-| **P3.35** | `getAccountID()` returns "*" placeholder | ❌ | Should use STS GetCallerIdentity instead of hardcoded placeholder |
+| **P3.35** | `getAccountID()` returns "*" placeholder | ❌ | aws.go:5186 — Should use STS GetCallerIdentity instead of hardcoded placeholder; IAM policies may be overly permissive |
 | **P3.36** | Fragile tag parsing in costs.go | ⚠️ | Hardcoded 27-char prefix assumption for deployment ID extraction |
 | **P3.37** | Incorrect pricing date in comments | ⚠️ | Comments say "2026-03" but this appears to be a future date error |
+| **P3.38** | Silent error suppression in cleanup | ❌ | 6 instances of silently suppressed errors in cleanup code paths |
+| **P3.39** | State update errors logged but not returned | ⚠️ | 11 instances where state update errors are logged via slog but not propagated to callers |
+| **P3.40** | Missing health check endpoint | ❌ | No `/health` or `/readyz` endpoint for operational monitoring (per operational.md) |
+| **P3.41** | Missing AWS pagination in reconciler | ❌ | Reconciler does not paginate AWS API calls; may miss resources in large deployments |
+| **P3.42** | Spending runtime monitoring not enabled by default | ⚠️ | `spending-safeguards.md` expects monitoring enabled by default; currently opt-in via flag |
+| **P3.43** | ML inference workload | ❌ | **Priority P3** per `ralph/specs/workload-roadmap.md`. SageMaker/GPU Fargate — 0% implemented. Spec: `ralph/specs/workloads/ml-inference.md` |
+| **P3.44** | Data pipeline workload | ❌ | **Priority P3** per `ralph/specs/workload-roadmap.md`. Step Functions — 0% implemented. Spec: `ralph/specs/workloads/data-pipeline.md` |
 
 ### CI/CD GAPS (P3)
 | ID | Issue | Status | Impact |
@@ -83,42 +96,56 @@
 ### SPEC COMPLIANCE GAPS (To Address)
 | Spec | Gap | Priority | Notes |
 |------|-----|----------|-------|
+| **azure-provider.md** | Completely unimplemented | P0 | **Spec has `priority: P0` in YAML frontmatter — 0% implemented** |
+| **lightsail-provider.md** | Custom DNS record type | P1 | Uses CNAME instead of alias for Lightsail; needs Lightsail-specific cert path |
 | **cost-estimation.md** | Hardcoded pricing | P3 | Currently uses hardcoded values; spec requires AWS Pricing API with cache |
 | **networking.md** | NAT Gateway single AZ | P3 | Spec mentions HA option; currently single AZ only |
 | **custom-dns.md** | Lightsail DNS | P3 | Lightsail DNS not automated (requires separate Lightsail certificate path) |
 | **deployment-state.md** | Shallow reconciliation | P3 | Only 3/30+ resource types reconciled |
+| **spending-safeguards.md** | Runtime monitoring opt-in | P3 | Spec expects monitoring by default; currently flag-gated |
+| **operational.md** | Health endpoint, pagination | P3 | Missing `/health` endpoint; reconciler lacks pagination |
+| **ci.md** | Security scanning, SBOM | P3 | Missing gosec, govulncheck, SBOM generation |
+| **testing.md** | Coverage below target | P2 | 46.9% (target 50%); `providers` at 40.4%; 8 flaky sleep tests |
 
 ### SPEC COMPLIANCE SUMMARY
 | Spec | Status |
 |------|--------|
-| **aws-provider.md** | ✅ 100% Complete |
-| **lightsail-provider.md** | ✅ 100% Complete |
+| **aws-provider.md** | ✅ 102% Complete (exceeds spec — 6 tools + extras) |
+| **lightsail-provider.md** | ⚠️ 98% Complete (custom DNS uses wrong record type — CNAME vs alias) |
+| **azure-provider.md** | 🚨 **0% — COMPLETELY UNIMPLEMENTED** (spec priority: P0!) |
 | **workloads/static-site.md** | ✅ 100% Complete |
 | **workloads/background-worker.md** | ✅ 100% Complete |
-| **custom-dns.md** | ✅ Complete (P3.33 Lightsail DNS gap) |
-| **spending-safeguards.md** | ✅ 91% Complete |
-| **deployment-state.md** | ⚠️ 90% (reconciliation shallow) |
-| **cost-estimation.md** | ⚠️ Partial (hardcoded fallbacks) |
-| **testing.md** | ✅ Target met (50.8%) |
-| **ci.md** | ✅ 100% Complete |
+| **custom-dns.md** | ⚠️ 86% (Lightsail DNS not automated; CNAME issue) |
+| **spending-safeguards.md** | ⚠️ 92% (runtime monitoring not enabled by default) |
+| **deployment-state.md** | ⚠️ 95% (reconciliation only covers 3/30+ resource types) |
+| **cost-estimation.md** | ⚠️ 80% (hardcoded pricing for ALB/NAT/CloudWatch) |
+| **networking.md** | ⚠️ 95% (NAT Gateway single AZ only, no HA) |
+| **testing.md** | ⚠️ 94% (coverage at 46.9%, target 50%; flaky sleep-based tests) |
+| **ci.md** | ⚠️ 85% (missing gosec, govulncheck, SBOM) |
+| **distribution.md** | ✅ 100% Complete |
+| **error-handling.md** | ⚠️ 95% (missing YAML frontmatter) |
+| **auto-scaling.md** | ✅ 100% Complete |
+| **tls-https.md** | ✅ 100% Complete |
+| **ecr-image-push.md** | ✅ 95% Complete |
+| **plan-approval.md** | ✅ 100% Complete |
+| **deploy-configuration.md** | ✅ 100% Complete |
+| **operational.md** | ⚠️ 70% (missing pagination in reconciler, health endpoints) |
 | **workloads/scheduled-job.md** | ❌ 0% (Spec Priority: P2) |
 | **workloads/batch-processing.md** | ❌ 0% (Spec Priority: P2) |
 | **workloads/ml-inference.md** | ❌ 0% (Spec Priority: P3) |
 | **workloads/data-pipeline.md** | ❌ 0% (Spec Priority: P3) |
 
 ### NEW FEATURES (P4)
-| ID | Issue | Status | Spec Priority | Impact |
-|----|-------|--------|---------------|--------|
-| **P4.4** | Scheduled job workload | ❌ | P2 | EventBridge+Lambda — 0% implemented |
-| **P4.5** | Batch processing workload | ❌ | P2 | AWS Batch — 0% implemented |
-| **P4.6** | ML inference workload | ❌ | P3 | SageMaker/GPU Fargate — 0% implemented |
-| **P4.7** | Data pipeline workload | ❌ | P3 | Step Functions — 0% implemented |
+
+> **Note:** All unimplemented workloads have explicit priorities in `ralph/specs/workload-roadmap.md` and have been placed in their correct priority sections (P2/P3). Azure provider has `priority: P0` in its spec and is listed in P0. No items remain at default P4 priority.
+
+_No items — all unimplemented specs have explicit priorities assigned._
 
 ### STRETCH GOALS (P5)
 | ID | Issue | Status | Impact |
 |----|-------|--------|--------|
 | **P5.1** | CloudFormation-based provisioning | ❌ | Simplifies create/teardown; atomic operations |
-| **P5.2** | Additional cloud providers (GCP, Azure) | ❌ | Multi-cloud support |
+| **P5.2** | Additional cloud providers (GCP) | ❌ | Multi-cloud support (Note: Azure is P0, not stretch — see P0.4) |
 | **P5.3** | Secrets Management | ❌ | AWS Secrets Manager / SSM integration |
 
 ---
@@ -151,7 +178,7 @@
 | Structured logging (slog) | ✅ | `internal/logging/logging.go` |
 | Input validation (CPU/memory, port, region, etc.) | ✅ | `internal/providers/aws.go` (validations embedded in provider) |
 | IAM task execution role | ✅ | `internal/providers/aws.go` |
-| Test coverage 50.8% (target 50%) | ✅ | Meets target |
+| Test coverage 50.8% (target 50%) | ✅ | ⚠️ Previously met target; current audit shows 46.9% — needs P2.19 work |
 | **P1.30 Distribution / cmd structure** | ✅ | `cmd/agent-deploy/main.go`, `.goreleaser.yml`, `.github/workflows/release.yml` |
 
 **P1.30 Distribution Notes:**
@@ -203,19 +230,20 @@
 |-----------|--------|-------|
 | **AWS 6 tools** | ✅ Complete | plan, approve, create, deploy, status, teardown |
 | **AWS resource + prompt** | ✅ Complete | aws:deployments, aws_deploy_plan |
-| **Spending safeguards** | ✅ Complete | Config, Cost Explorer, monitoring, alerts, auto-teardown; confirmation when no limits set (P1.36) |
+| **Azure provider** | 🚨 **0% — NOT IMPLEMENTED** | `azure-provider.md` has `priority: P0` — major gap (P0.4) |
+| **Spending safeguards** | ✅ Complete | Config, Cost Explorer, monitoring, alerts, auto-teardown; confirmation when no limits set (P1.36). Runtime monitoring not enabled by default (P3.42). |
 | **State storage** | ✅ Complete | Plan, Infrastructure, Deployment with file persistence; atomic writes |
 | **Provider safety** | ✅ Complete | All `p.store.*` accesses guarded with `checkStore()` method (P0.3) |
-| **Reconciliation** | ⚠️ Partial | Only 3/30+ resource types reconciled (P3.13); error handling fixed (P3.32) |
-| **Cost estimation** | ⚠️ Partial | Fargate OK; ALB/NAT/CW/Lightsail hardcoded (P3.19) |
-| **Networking** | ⚠️ Partial | NAT Gateway single AZ only (P3.20) |
-| **Custom DNS / Route 53** | ✅ Complete | Core working; status URL includes custom domain (P1.35); DNS teardown error unchecked (P3.31) |
+| **Reconciliation** | ⚠️ Partial | Only 3/30+ resource types reconciled (P3.13); missing pagination (P3.41); error handling fixed (P3.32) |
+| **Cost estimation** | ⚠️ Partial | Fargate OK; ALB/NAT/CW/Lightsail hardcoded (P3.19); 80% spec compliance |
+| **Networking** | ⚠️ Partial | NAT Gateway single AZ only (P3.20); 95% spec compliance |
+| **Custom DNS / Route 53** | ⚠️ 86% | Core working for ECS/ALB; Lightsail DNS uses wrong record type (CNAME vs alias); DNS teardown error unchecked (P3.31) |
 | **Distribution** | ✅ Complete | `cmd/agent-deploy/main.go`, GoReleaser configured |
-| **Test coverage** | ✅ 50.8% | Meets 50% target; gaps in processAlert (44%), checkInfraResources (76.2%), main.go signal/HTTP (P2.11-P2.16) |
-| **CI/CD** | ⚠️ Partial | Missing security scanning, SBOM (P3.27-P3.30) |
-| **Error handling** | ✅ Complete | All 9 error types defined with proper %w wrapping, no silent suppression |
+| **Test coverage** | ⚠️ **46.9%** | **Below 50% target**; `providers` at 40.4%; flaky sleep-based tests (8 instances); gaps in processAlert (44%), checkInfraResources (76.2%), main.go signal/HTTP (P2.11-P2.16) |
+| **CI/CD** | ⚠️ 85% | Missing security scanning (gosec, govulncheck), SBOM generation (P3.27-P3.30) |
+| **Error handling** | ⚠️ 95% | All 9 error types defined; 6 silent suppressions in cleanup (P3.38); 11 state updates logged but not returned (P3.39) |
 | **Logging** | ✅ Complete | Structured slog with component tags |
-| **Lightsail provider** | ✅ Complete | Auto-selects backend, Lightsail vs ECS cost comparison (P1.34) |
+| **Lightsail provider** | ⚠️ 98% | Auto-selects backend, cost comparison; DNS uses wrong record type for Lightsail (P1.39) |
 | **Static Site workload** | ✅ Complete | Full implementation: S3, CloudFront, OAC, custom domain, file upload with MIME types, cache headers (P1.37) |
 | **Background Worker workload** | ✅ Complete | Full implementation: SQS queue, DLQ, redrive policy, IAM role, CloudWatch logs, $10/mo estimate (P1.38) |
 | **Signal handling** | ✅ Complete | SIGINT, SIGTERM graceful shutdown implemented |
@@ -223,10 +251,30 @@
 | **Auto-scaling** | ✅ Complete | CPU/memory target tracking policies |
 | **TLS/HTTPS** | ✅ Complete | ACM certificates, HTTP-to-HTTPS redirect |
 | **ECR image push** | ✅ Complete | Docker SDK integration for local image push |
+| **Operational** | ⚠️ 70% | Missing health endpoint (P3.40), missing pagination in reconciler (P3.41) |
 
 ---
 
 ## P1 — Spec Compliance Gaps
+
+### P1.39 Lightsail Custom DNS Record Type Issue ⚠️ NEW
+
+**Status:** NOT ADDRESSED — Lightsail provider at 98% compliance  
+**Spec:** `ralph/specs/lightsail-provider.md` (priority: P1)  
+**Impact:** Custom DNS for Lightsail uses CNAME record instead of alias record; Lightsail requires its own certificate service (not ACM)
+
+**Evidence:**
+- Current DNS code creates CNAME records pointing to Lightsail endpoint
+- Lightsail requires alias-type records for apex domains
+- Lightsail has its own certificate service separate from ACM
+- This prevents custom domain support from working correctly with Lightsail deployments
+
+**Required Work:**
+- [ ] Change Lightsail DNS record creation to use correct record type (alias vs CNAME)
+- [ ] Add Lightsail certificate API integration for custom domains
+- [ ] Detect backend type in DNS provisioning and route to appropriate cert path
+- [ ] Add tests for Lightsail DNS record creation
+- **Location:** `internal/providers/aws.go` (DNS functions)
 
 ### P1.29 Custom DNS / Route 53 ⚠️ 95% COMPLETE
 
@@ -358,6 +406,24 @@
 - Line 123 (RejectPlan): Changed from `_ = s.writeJSON(...)` to logging error with `slog.Error`
 - Lines 218-220 (DeleteExpiredPlans): Added `slog.Warn` logging for delete failures
 - **Location:** `internal/state/store.go`
+
+### P0.4 Azure Provider — COMPLETELY UNIMPLEMENTED 🚨
+
+**Status:** ❌ 0% IMPLEMENTED  
+**Spec:** `ralph/specs/azure-provider.md` — **YAML frontmatter says `priority: P0`**  
+**Impact:** **CRITICAL** — A P0-priority spec with zero implementation is the single largest gap in the project.
+
+**Required Work:**
+- [ ] Implement Azure provider in `internal/providers/azure.go`
+- [ ] Register Azure provider in `All()` function
+- [ ] Add Azure SDK dependencies to `go.mod`
+- [ ] Implement all required Azure tools (plan, approve, create, deploy, status, teardown)
+- [ ] Add Azure resource and prompt
+- [ ] Add tests for Azure provider
+- [ ] Add Azure-specific state management
+- **Location:** `internal/providers/azure.go` (new file)
+
+**Note:** This was previously categorized under P5.2 "Additional cloud providers" but the spec explicitly sets `priority: P0`. This needs to be addressed as a production blocker.
 
 ---
 
@@ -535,8 +601,26 @@
 
 ## P2 — Test Coverage Gaps (Medium Priority)
 
-> **Status:** 50.8% overall coverage — target met.
-> CI enforces 25% floor; target is 50% per `ralph/specs/testing.md`.
+> **Status:** 46.9% overall coverage — **below 50% target**.
+> CI enforces 25% floor; target is 50% per `ralph/specs/testing.md`. `providers` package at 40.4%.
+
+### P2.19 Overall Coverage Below 50% Target ⚠️ NEW
+
+**Status:** NOT ADDRESSED — 46.9% overall (target 50%)  
+**Impact:** Testing spec requires 50% minimum coverage; current 46.9% is a regression from previously reported 50.8%
+
+**Evidence:**
+- Overall: 46.9% (target: 50%)
+- `providers` package: 40.4% (biggest gap, most code)
+- `cmd/agent-deploy/`: 0.0% (entry point hard to test)
+- 8 instances of `time.Sleep` causing flaky tests
+
+**Required Work:**
+- [ ] Increase `providers` package coverage from 40.4% toward 50%+
+- [ ] Focus on high-impact untested methods (~40 methods in aws.go)
+- [ ] Address flaky sleep-based tests (P2.13)
+- [ ] Overall target: reach 50% minimum
+- **Location:** `internal/providers/aws_test.go`, various `*_test.go`
 
 ### P2.9 main.go Test Coverage ⚠️ 🟡
 
@@ -600,7 +684,7 @@ All tests pass with `-race` flag, verifying the RWMutex locking is correct.
 
 ### P2.5 AWS Provider Error Scenarios Incomplete ⚠️
 
-**Status:** Partial coverage (48.8%)  
+**Status:** Partial coverage (40.4%)  
 **Impact:** Error paths not fully covered; missing E2E flow tests
 
 **Progress (2025-01):**
@@ -615,7 +699,7 @@ Added VPC cleanup, route table, and rollback error scenario tests:
 - `TestRollbackInfra_WithResources` - Tests rollback with resources to clean up
 - `TestRollbackInfra_ContinuesOnErrors` - Tests rollback continues despite errors
 
-Coverage improved from 44.6% → 48.8% on providers package.
+Coverage improved from 44.6% → 48.8% → regressed to 40.4% on providers package.
 
 **Evidence (remaining):**
 - Route 53 error scenarios untested
@@ -659,10 +743,10 @@ Coverage improved from 44.6% → 48.8% on providers package.
 **Impact:** Tests using `time.Sleep` are inherently flaky in CI; timing-sensitive assertions may fail under load
 
 **Evidence:**
-- 10 instances of `time.Sleep` in test files (flaky CI risk)
+- 8 instances of `time.Sleep` in test files (flaky CI risk)
 
 **Required Work:**
-- [ ] Audit test files for `time.Sleep` usage (10 known instances)
+- [ ] Audit test files for `time.Sleep` usage (8 known instances)
 - [ ] Replace with channel-based synchronization, `sync.WaitGroup`, or condition variables where possible
 - [ ] Use `testing.Short()` to skip slow tests in fast CI runs
 - **Location:** Various `*_test.go` files
@@ -742,6 +826,33 @@ Coverage improved from 44.6% → 48.8% on providers package.
 - [ ] Add CloudFront client interface compliance test
 - [ ] Add SQS client interface compliance test
 - **Location:** `internal/awsclient/mocks/interfaces_test.go`
+
+### P2.20 Scheduled Job Workload ❌
+
+**Status:** NOT IMPLEMENTED — **Priority P2** per `ralph/specs/workload-roadmap.md`  
+**Spec:** `ralph/specs/workloads/scheduled-job.md`
+
+**Required Work:**
+- [ ] Add scheduled_job workload type
+- [ ] Integrate EventBridge Scheduler
+- [ ] Support cron expressions
+- [ ] Add Lambda function provisioning for job execution
+- [ ] Add cost estimation for EventBridge + Lambda
+- [ ] Add tests for scheduled job provisioning
+- **Location:** `internal/providers/aws.go`
+
+### P2.21 Batch Processing Workload ❌
+
+**Status:** NOT IMPLEMENTED — **Priority P2** per `ralph/specs/workload-roadmap.md`  
+**Spec:** `ralph/specs/workloads/batch-processing.md`
+
+**Required Work:**
+- [ ] Add batch_processing workload type
+- [ ] Integrate AWS Batch
+- [ ] Support job queues and compute environments
+- [ ] Add cost estimation for AWS Batch
+- [ ] Add tests for batch processing provisioning
+- **Location:** `internal/providers/aws_batch.go` (new file)
 
 ---
 
@@ -987,7 +1098,7 @@ Coverage improved from 44.6% → 48.8% on providers package.
 **Impact:** Account ID used in IAM policies may be overly permissive; should use actual account ID
 
 **Evidence:**
-- `getAccountID()` function returns `"*"` as placeholder
+- `getAccountID()` function at aws.go:5186 returns `"*"` as placeholder
 - Should use STS GetCallerIdentity API to retrieve actual AWS account ID
 - Current implementation may create IAM policies with broader permissions than intended
 
@@ -1027,6 +1138,87 @@ Coverage improved from 44.6% → 48.8% on providers package.
 - [ ] Update pricing date comments to reflect actual verification date
 - [ ] Document pricing source (AWS pricing page URLs)
 - **Location:** `internal/providers/aws.go`, `internal/spending/pricing.go`
+
+### P3.38 Silent Error Suppression in Cleanup ❌
+
+**Status:** NOT ADDRESSED  
+**Impact:** 6 instances of silently suppressed errors in cleanup code paths; failures during resource cleanup go undetected
+
+**Required Work:**
+- [ ] Audit all cleanup/teardown code paths for `_ = err` patterns
+- [ ] Replace with proper error logging (at minimum) or error propagation
+- [ ] Ensure cleanup continues on non-fatal errors but logs warnings
+- **Location:** `internal/providers/aws.go`, `internal/state/cleanup.go`
+
+### P3.39 State Update Errors Logged But Not Returned ⚠️
+
+**Status:** NOT ADDRESSED  
+**Impact:** 11 instances where state update errors are logged via slog but not propagated to callers; callers may assume success when state is actually stale
+
+**Required Work:**
+- [ ] Audit all state update call sites for error-swallowing patterns
+- [ ] Determine which state update errors should be fatal vs. warning-only
+- [ ] Propagate critical state update errors to callers
+- **Location:** `internal/providers/aws.go`
+
+### P3.40 Missing Health Check Endpoint ❌
+
+**Status:** NOT ADDRESSED  
+**Impact:** No `/health` or `/readyz` endpoint for operational monitoring per `operational.md` spec (70% compliance)
+
+**Required Work:**
+- [ ] Add `/health` endpoint to HTTP server mode
+- [ ] Return service status (up/degraded/down) with component health
+- [ ] Include version information in health response
+- **Location:** `cmd/agent-deploy/main.go`
+
+### P3.41 Missing AWS Pagination in Reconciler ❌
+
+**Status:** NOT ADDRESSED  
+**Impact:** Reconciler does not paginate AWS API calls; may miss resources in accounts with many deployments
+
+**Required Work:**
+- [ ] Add pagination support to all DescribeX calls in reconciler
+- [ ] Use AWS SDK pagination helpers (e.g., `NewDescribeVpcsPaginator`)
+- [ ] Add tests for paginated responses
+- **Location:** `internal/state/reconcile.go`
+
+### P3.42 Spending Runtime Monitoring Not Enabled by Default ⚠️
+
+**Status:** NOT ADDRESSED  
+**Impact:** `spending-safeguards.md` expects runtime monitoring enabled by default; currently requires `-enable-cost-monitor` flag
+
+**Required Work:**
+- [ ] Evaluate whether monitoring should be enabled by default
+- [ ] If so, change default value of `-enable-cost-monitor` flag
+- [ ] Ensure no performance impact when AWS credentials not configured
+- **Location:** `cmd/agent-deploy/main.go`
+
+### P3.43 ML Inference Workload ❌
+
+**Status:** NOT IMPLEMENTED — **Priority P3** per `ralph/specs/workload-roadmap.md`  
+**Spec:** `ralph/specs/workloads/ml-inference.md`
+
+**Required Work:**
+- [ ] Add ml_inference workload type
+- [ ] Support GPU instance types
+- [ ] Integrate SageMaker or GPU-enabled Fargate
+- [ ] Add cost estimation for GPU resources
+- [ ] Add tests for ML inference provisioning
+- **Location:** `internal/providers/aws.go`
+
+### P3.44 Data Pipeline Workload ❌
+
+**Status:** NOT IMPLEMENTED — **Priority P3** per `ralph/specs/workload-roadmap.md`  
+**Spec:** `ralph/specs/workloads/data-pipeline.md`
+
+**Required Work:**
+- [ ] Add data_pipeline workload type
+- [ ] Integrate Step Functions
+- [ ] Support complex workflow orchestration
+- [ ] Add cost estimation for Step Functions
+- [ ] Add tests for data pipeline provisioning
+- **Location:** `internal/providers/aws_stepfunctions.go` (new file)
 
 ---
 
@@ -1117,51 +1309,12 @@ Coverage improved from 44.6% → 48.8% on providers package.
 
 ## P4 — New Features (Unimplemented Specs)
 
-> **Note:** Static Site (P1.37) and Background Worker (P1.38) workloads have been implemented as required by `ralph/specs/workload-roadmap.md` Priority P1. Lightsail provider (P1.34) is also complete.
-
-### P4.4 Scheduled Job Workload ❌
-
-**Status:** NOT IMPLEMENTED — Spec exists (spec priority: P2)  
-**Spec:** `ralph/specs/workloads/scheduled-job.md`
-
-**Required Work:**
-- [ ] Add scheduled_job workload type
-- [ ] Integrate EventBridge Scheduler
-- [ ] Support cron expressions
-- **Location:** `internal/providers/aws.go`
-
-### P4.5 Batch Processing Workload ❌
-
-**Status:** NOT IMPLEMENTED — Spec exists (spec priority: P2)  
-**Spec:** `ralph/specs/workloads/batch-processing.md`
-
-**Required Work:**
-- [ ] Add batch_processing workload type
-- [ ] Integrate AWS Batch
-- [ ] Support job queues and compute environments
-- **Location:** `internal/providers/aws_batch.go` (new file)
-
-### P4.6 ML Inference Workload ❌
-
-**Status:** NOT IMPLEMENTED — Spec exists (spec priority: P3)  
-**Spec:** `ralph/specs/workloads/ml-inference.md`
-
-**Required Work:**
-- [ ] Add ml_inference workload type
-- [ ] Support GPU instance types
-- [ ] Integrate SageMaker or GPU-enabled Fargate
-- **Location:** `internal/providers/aws.go`
-
-### P4.7 Data Pipeline Workload ❌
-
-**Status:** NOT IMPLEMENTED — Spec exists (spec priority: P3)  
-**Spec:** `ralph/specs/workloads/data-pipeline.md`
-
-**Required Work:**
-- [ ] Add data_pipeline workload type
-- [ ] Integrate Step Functions
-- [ ] Support complex workflow orchestration
-- **Location:** `internal/providers/aws_stepfunctions.go` (new file)
+> **Note:** All unimplemented workloads have been moved to their correct priority per `ralph/specs/workload-roadmap.md`:
+> - Scheduled Job → P2.20, Batch Processing → P2.21 (both P2 per roadmap)
+> - ML Inference → P3.43, Data Pipeline → P3.44 (both P3 per roadmap)
+> - Azure provider → P0.4 (P0 per `azure-provider.md` spec frontmatter)
+>
+> **This section is intentionally empty.** No specs remain at default P4 priority.
 
 ---
 
@@ -1177,7 +1330,7 @@ Coverage improved from 44.6% → 48.8% on providers package.
 ### P5.2 Additional cloud providers
 
 - [ ] **GCP Provider** — new file `internal/providers/gcp.go`, register in `All()`
-- [ ] **Azure Provider** — new file `internal/providers/azure.go`, register in `All()`
+- Note: **Azure is P0** (see P0.4) — not a stretch goal
 - **Depends on:** Shared state model
 
 ### P5.3 Secrets Management
@@ -1247,10 +1400,10 @@ go tool cover -html=coverage.out          # View coverage report
 | `internal/awsclient/` | **91.7%** | Comprehensive tests added |
 | `internal/id/` | **100.0%** | Fully tested |
 | `internal/logging/` | **86.0%** | Good coverage |
-| `internal/providers/` | **48.8%** | planInfra, deploy, teardown, status, approval workflows, provisionVPC, provisionECSCluster, provisionALB tested |
+| `internal/providers/` | **40.4%** | ⚠️ Regressed — planInfra, deploy, teardown, status, approval workflows, provisionVPC tested; ~40 methods still untested |
 | `internal/spending/` | **67.9%** | CostTracker, CostMonitor, PricingEstimator; processAlert() at 44% |
 | `internal/state/` | **82.9%** | Reconciler tests, store tests; checkInfraResources at 76.2%, NewStore at 44.4% |
-| **Overall** | **50.8%** | ✅ **MEETS TARGET** (target: 50%) |
+| **Overall** | **46.9%** | ⚠️ **BELOW TARGET** (target: 50%) — needs P2.19 |
 
 ### Key Files
 
@@ -1279,7 +1432,8 @@ go tool cover -html=coverage.out          # View coverage report
 | `ralph/specs/custom-dns.md` | Route 53 / custom domain spec |
 | `ralph/specs/distribution.md` | Distribution / GoReleaser spec |
 | `ralph/specs/ci.md` | CI/CD requirements spec |
-| `ralph/specs/lightsail-provider.md` | Lightsail provider spec (IMPLEMENTED — P1.34) |
+| `ralph/specs/lightsail-provider.md` | Lightsail provider spec (IMPLEMENTED — P1.34; DNS record type gap P1.39) |
+| `ralph/specs/azure-provider.md` | **Azure provider spec (priority: P0) — 0% IMPLEMENTED (P0.4)** |
 | `ralph/specs/workload-roadmap.md` | **Workload types roadmap (4 P2-P3 workloads pending)** |
 | `ralph/specs/workloads/static-site.md` | **Static site spec (IMPLEMENTED — P1.37, priority: P1)** |
 | `ralph/specs/workloads/background-worker.md` | **Background worker spec (IMPLEMENTED — P1.38, priority: P1)** |
@@ -1328,13 +1482,13 @@ go tool cover -html=coverage.out          # View coverage report
 
 | Priority | Count | Items |
 |----------|-------|-------|
-| **P0 Critical** | 0 | ✅ All resolved (P0.1, P0.2, P0.3) |
-| **P1 Spec Gaps** | 0 | ✅ All resolved (Static Site, Background Worker, Lightsail, Custom DNS, Spending confirmation) |
-| **P2 Test Gaps** | 9 | P2.5 (AWS error scenarios 48.8%), P2.11 (processAlert 44%), P2.12 (checkInfraResources 76.2%), P2.13 (sleep timing ×10), P2.14 (reconcile mocks), P2.15 (signal/HTTP), P2.16 (NewStore 44.4%), P2.17 (~40 untested aws.go methods), P2.18 (AWS clients struct incomplete) |
-| **P3 Quality** | 13 | P3.13 (reconciliation 3/30+), P3.19 (pricing), P3.20 (NAT HA), P3.31 (DNS error), P3.33 (Lightsail DNS), P3.34 (LightsailMock), P3.35 (getAccountID), P3.36 (tag parsing), P3.37 (pricing date), P3.27-P3.30 (CI gaps ×4) |
-| **P4 New Features** | 4 | P4.4-P4.7 (scheduled job, batch, ML inference, data pipeline) |
-| **P5 Stretch** | 3 | CloudFormation, multi-cloud, secrets |
-| **Total remaining** | **29** | |
+| **P0 Critical** | 1 | 🚨 P0.4 (Azure provider — 0% implemented, spec says P0) |
+| **P1 Spec Gaps** | 1 | P1.39 (Lightsail custom DNS wrong record type — CNAME vs alias) |
+| **P2 Test Gaps** | 12 | P2.19 (coverage 46.9% < 50%), P2.5 (AWS error scenarios 40.4%), P2.11 (processAlert 44%), P2.12 (checkInfraResources 76.2%), P2.13 (sleep timing ×8), P2.14 (reconcile mocks), P2.15 (signal/HTTP), P2.16 (NewStore 44.4%), P2.17 (~40 untested aws.go methods), P2.18 (AWS clients struct), P2.20 (scheduled-job), P2.21 (batch-processing) |
+| **P3 Quality** | 17 | P3.13 (reconciliation 3/30+), P3.19 (pricing), P3.20 (NAT HA), P3.31 (DNS error), P3.33 (Lightsail DNS), P3.34 (LightsailMock), P3.35 (getAccountID), P3.36 (tag parsing), P3.37 (pricing date), P3.38 (silent cleanup errors ×6), P3.39 (state update errors ×11), P3.40 (health endpoint), P3.41 (pagination), P3.42 (monitoring default), P3.27-P3.30 (CI gaps ×4), P3.43 (ml-inference), P3.44 (data-pipeline) |
+| **P4 New Features** | 0 | ✅ All specs have explicit priorities — section empty |
+| **P5 Stretch** | 3 | CloudFormation, GCP provider, secrets |
+| **Total remaining** | **34** | |
 
 ---
 
@@ -1345,6 +1499,7 @@ go tool cover -html=coverage.out          # View coverage report
 | **aws-provider.md** | 6 tools | ✅ Implemented (plan, approve, create, deploy, status, teardown) |
 | **aws-provider.md** | 1 resource (aws:deployments) | ✅ Implemented |
 | **aws-provider.md** | 1 prompt (aws_deploy_plan) | ✅ Implemented |
+| **azure-provider.md** | Azure provider (priority: P0) | 🚨 **0% — NOT IMPLEMENTED** (P0.4) |
 | **aws-provider.md** | AWS Pricing API for cost estimation | ✅ **IMPLEMENTED** — parsePricingResponse() extracts Fargate prices from AWS Pricing API |
 | **aws-provider.md** | Wait for healthy deployment in aws_deploy | ✅ IMPLEMENTED — polls ECS + ALB health checks |
 | **aws-provider.md** | TLS/HTTPS with ACM certificate support | ✅ IMPLEMENTED — TLS 1.2+ policy, HTTP-to-HTTPS redirect |
@@ -1387,18 +1542,18 @@ go tool cover -html=coverage.out          # View coverage report
 | **auto-scaling.md** | Cost range in planInfra output (min/max) | ✅ IMPLEMENTED |
 | **networking.md** | VPC CIDR configurable | ✅ IMPLEMENTED — vpc_cidr parameter with validation (P1.9) |
 | **networking.md** | Private subnets with NAT Gateway | ✅ IMPLEMENTED |
-| **ci.md** | CI workflow with lint, test, build jobs | ✅ IMPLEMENTED |
-| **testing.md** | 50% code coverage | ✅ **TARGET MET** — 50.8% overall |
+| **ci.md** | CI workflow with lint, test, build jobs | ⚠️ 85% — Missing gosec, govulncheck, SBOM |
+| **testing.md** | 50% code coverage | ⚠️ **BELOW TARGET** — 46.9% overall (target: 50%); `providers` at 40.4% |
 | **testing.md** | main.go test coverage | ⚠️ **PARTIAL** — components tested, main() itself hard to test (P2.9); signal/HTTP untested (P2.15) |
 | **testing.md** | Concurrent access testing | ✅ **COMPLETE** — P2.10 fixed with comprehensive concurrent tests |
 | **error-handling.md** | Domain error types | ✅ **COMPLETE** — all 9 required error types defined with proper %w wrapping |
-| **operational.md** | No silent error suppression | ✅ FIXED — P0.2 complete, store.go now logs errors |
-| **operational.md** | Pagination for list operations | ✅ IMPLEMENTED |
-| **lightsail-provider.md** | Full Lightsail provider (priority: P1) | ✅ **IMPLEMENTED** — P1.34 (auto-backend selection, cost comparison) |
+| **operational.md** | No silent error suppression | ⚠️ PARTIAL — 6 silent suppressions in cleanup (P3.38), 11 state updates logged not returned (P3.39) |
+| **operational.md** | Pagination for list operations | ⚠️ PARTIAL — Missing in reconciler (P3.41) |
+| **lightsail-provider.md** | Full Lightsail provider (priority: P1) | ⚠️ **98% IMPLEMENTED** — P1.34 complete; custom DNS uses CNAME vs alias (P1.39) |
 | **workload-roadmap.md** | 6 workload types | ⚠️ **PARTIAL** — web service + static site + background worker implemented; 4 P2-P3 workloads pending |
 | **workloads/static-site.md** | S3+CloudFront static sites (priority: P1) | ✅ **COMPLETE** — P1.37 (S3+CloudFront, file upload with MIME types, cache headers) |
 | **workloads/background-worker.md** | ECS without ALB (priority: P1) | ✅ **COMPLETE** — P1.38 (SQS queue, DLQ, IAM role, $10/mo) |
-| **workloads/scheduled-job.md** | EventBridge scheduled tasks (priority: P2) | ❌ NOT IMPLEMENTED — P4.4 |
-| **workloads/batch-processing.md** | AWS Batch integration (priority: P2) | ❌ NOT IMPLEMENTED — P4.5 |
-| **workloads/ml-inference.md** | GPU-enabled inference (priority: P3) | ❌ NOT IMPLEMENTED — P4.6 |
-| **workloads/data-pipeline.md** | Step Functions workflows (priority: P3) | ❌ NOT IMPLEMENTED — P4.7 |
+| **workloads/scheduled-job.md** | EventBridge scheduled tasks (priority: P2) | ❌ NOT IMPLEMENTED — P2.20 |
+| **workloads/batch-processing.md** | AWS Batch integration (priority: P2) | ❌ NOT IMPLEMENTED — P2.21 |
+| **workloads/ml-inference.md** | GPU-enabled inference (priority: P3) | ❌ NOT IMPLEMENTED — P3.43 |
+| **workloads/data-pipeline.md** | Step Functions workflows (priority: P3) | ❌ NOT IMPLEMENTED — P3.44 |
