@@ -1,0 +1,27 @@
+P1.35 Fix: Custom DNS Status URL Gap
+
+## Problem
+The aws_status tool only showed the raw ALB DNS name, not the custom
+domain configured by the user. Per spec, custom domain should appear
+in the URL list.
+
+## Solution
+1. Added CustomDomain field to statusOutput struct:
+   - Uses omitempty so field is excluded when not configured
+   - Provides explicit access to custom domain in JSON response
+
+2. Updated getALBURLs() to include custom domain:
+   - Checks infra.Resources[ResourceDomainName]
+   - Prepends custom domain URL (makes it primary URL)
+   - ALB DNS URL remains as secondary/fallback
+
+3. Status method populates CustomDomain field
+
+## Testing
+- TestStatusOutput_CustomDomain: Verifies JSON output contains field
+- TestStatusOutput_NoCustomDomain: Verifies omitempty works correctly
+
+## Files Changed
+- internal/providers/aws.go
+- internal/providers/aws_test.go
+- IMPLEMENTATION_PLAN.md
