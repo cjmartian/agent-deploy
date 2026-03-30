@@ -82,6 +82,17 @@ func (p *AWSProvider) getClients(cfg aws.Config) *awsclient.AWSClients {
 
 func (p *AWSProvider) Name() string { return "aws" }
 
+// checkStore validates that the store is initialized.
+// Returns ErrInvalidState if the store is nil, preventing nil pointer panics.
+// WHY: If store initialization fails or is deferred, provider methods must not panic.
+// Instead they should return a clear error that can be handled by callers.
+func (p *AWSProvider) checkStore() error {
+	if p.store == nil {
+		return fmt.Errorf("%w: state store is not initialized", apperrors.ErrInvalidState)
+	}
+	return nil
+}
+
 // Teardown tears down all AWS resources for a deployment.
 // This is the public API for programmatic teardown (e.g., auto-teardown from cost monitor).
 func (p *AWSProvider) Teardown(ctx context.Context, deploymentID string) error {
@@ -598,6 +609,11 @@ func CalculateSubnetLayout(vpcCIDR string) (*SubnetLayout, error) {
 
 // planInfra analyzes requirements and creates an infrastructure plan with cost estimate.
 func (p *AWSProvider) planInfra(ctx context.Context, _ *mcp.CallToolRequest, in planInfraInput) (*mcp.CallToolResult, planInfraOutput, error) {
+	// P0.3: Guard against nil store to prevent panic.
+	if err := p.checkStore(); err != nil {
+		return nil, planInfraOutput{}, err
+	}
+
 	// Validate input.
 	if strings.TrimSpace(in.AppDescription) == "" {
 		return nil, planInfraOutput{}, fmt.Errorf("app_description is required and cannot be empty")
@@ -854,6 +870,11 @@ func (p *AWSProvider) planInfra(ctx context.Context, _ *mcp.CallToolRequest, in 
 // approvePlan allows the user to approve or reject an infrastructure plan after review.
 // Per spec ralph/specs/plan-approval.md: explicit approval is required before provisioning.
 func (p *AWSProvider) approvePlan(_ context.Context, _ *mcp.CallToolRequest, in approvePlanInput) (*mcp.CallToolResult, approvePlanOutput, error) {
+	// P0.3: Guard against nil store to prevent panic.
+	if err := p.checkStore(); err != nil {
+		return nil, approvePlanOutput{}, err
+	}
+
 	// Validate input.
 	if strings.TrimSpace(in.PlanID) == "" {
 		return nil, approvePlanOutput{}, fmt.Errorf("plan_id is required and cannot be empty")
@@ -905,6 +926,11 @@ func (p *AWSProvider) approvePlan(_ context.Context, _ *mcp.CallToolRequest, in 
 
 // createInfra provisions AWS infrastructure according to an approved plan.
 func (p *AWSProvider) createInfra(ctx context.Context, _ *mcp.CallToolRequest, in createInfraInput) (*mcp.CallToolResult, createInfraOutput, error) {
+	// P0.3: Guard against nil store to prevent panic.
+	if err := p.checkStore(); err != nil {
+		return nil, createInfraOutput{}, err
+	}
+
 	// Validate plan_id format (P1.31).
 	if strings.TrimSpace(in.PlanID) == "" {
 		return nil, createInfraOutput{}, fmt.Errorf("plan_id is required and cannot be empty")
@@ -964,8 +990,19 @@ func (p *AWSProvider) createInfra(ctx context.Context, _ *mcp.CallToolRequest, i
 			logging.Err(costErr))
 
 		// Sum estimated costs from running deployments.
-		deployments, _ := p.store.ListDeployments()
-		plans, _ := p.store.ListPlans()
+		// P0.3: Log errors instead of silently ignoring with _, _
+		deployments, listDeployErr := p.store.ListDeployments()
+		if listDeployErr != nil {
+			slog.Warn("could not list deployments for cost estimate",
+				slog.String("component", "aws_create_infra"),
+				logging.Err(listDeployErr))
+		}
+		plans, listPlanErr := p.store.ListPlans()
+		if listPlanErr != nil {
+			slog.Warn("could not list plans for cost estimate",
+				slog.String("component", "aws_create_infra"),
+				logging.Err(listPlanErr))
+		}
 		planCosts := make(map[string]float64)
 		for _, pl := range plans {
 			planCosts[pl.ID] = pl.EstimatedCostMo
@@ -1196,6 +1233,11 @@ func (p *AWSProvider) createInfra(ctx context.Context, _ *mcp.CallToolRequest, i
 
 // deploy deploys an application onto provisioned infrastructure.
 func (p *AWSProvider) deploy(ctx context.Context, _ *mcp.CallToolRequest, in deployInput) (*mcp.CallToolResult, deployOutput, error) {
+	// P0.3: Guard against nil store to prevent panic.
+	if err := p.checkStore(); err != nil {
+		return nil, deployOutput{}, err
+	}
+
 	// Validate infra_id format (P1.31).
 	if strings.TrimSpace(in.InfraID) == "" {
 		return nil, deployOutput{}, fmt.Errorf("infra_id is required and cannot be empty")
@@ -1416,6 +1458,11 @@ func (p *AWSProvider) deploy(ctx context.Context, _ *mcp.CallToolRequest, in dep
 
 // status gets the current status of a deployment.
 func (p *AWSProvider) status(ctx context.Context, _ *mcp.CallToolRequest, in statusInput) (*mcp.CallToolResult, statusOutput, error) {
+	// P0.3: Guard against nil store to prevent panic.
+	if err := p.checkStore(); err != nil {
+		return nil, statusOutput{}, err
+	}
+
 	// Validate deployment_id format (P1.31).
 	if strings.TrimSpace(in.DeploymentID) == "" {
 		return nil, statusOutput{}, fmt.Errorf("deployment_id is required and cannot be empty")
@@ -1482,6 +1529,11 @@ func (p *AWSProvider) status(ctx context.Context, _ *mcp.CallToolRequest, in sta
 
 // teardown tears down all AWS resources for a deployment.
 func (p *AWSProvider) teardown(ctx context.Context, _ *mcp.CallToolRequest, in teardownInput) (*mcp.CallToolResult, teardownOutput, error) {
+	// P0.3: Guard against nil store to prevent panic.
+	if err := p.checkStore(); err != nil {
+		return nil, teardownOutput{}, err
+	}
+
 	// Validate deployment_id format (P1.31).
 	if strings.TrimSpace(in.DeploymentID) == "" {
 		return nil, teardownOutput{}, fmt.Errorf("deployment_id is required and cannot be empty")
@@ -3092,6 +3144,11 @@ type deploymentInfo struct {
 }
 
 func (p *AWSProvider) deploymentsResource(_ context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+	// P0.3: Guard against nil store to prevent panic.
+	if err := p.checkStore(); err != nil {
+		return nil, err
+	}
+
 	u, err := url.Parse(req.Params.URI)
 	if err != nil {
 		return nil, err

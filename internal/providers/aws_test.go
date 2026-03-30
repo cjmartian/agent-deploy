@@ -3731,3 +3731,102 @@ func TestRollbackInfra_ContinuesOnErrors(t *testing.T) {
 		t.Errorf("deleteAttempts = %d, want 2 (should continue after failures)", deleteAttempts)
 	}
 }
+
+// TestNilStoreGuard verifies that provider methods return ErrInvalidState when store is nil.
+// WHY: P0.3 — Provider methods must not panic with nil pointer dereference if store is nil.
+// This test ensures graceful error handling instead of runtime panic.
+func TestNilStoreGuard(t *testing.T) {
+	// Create provider with nil store to simulate failed store initialization.
+	provider := &AWSProvider{store: nil}
+	ctx := context.Background()
+
+	t.Run("planInfra", func(t *testing.T) {
+		_, _, err := provider.planInfra(ctx, nil, planInfraInput{
+			AppDescription: "test",
+			Region:         "us-east-1",
+			ExpectedUsers:  100,
+		})
+		if err == nil {
+			t.Fatal("expected error for nil store, got nil")
+		}
+		if !strings.Contains(err.Error(), "state store is not initialized") {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("approvePlan", func(t *testing.T) {
+		_, _, err := provider.approvePlan(ctx, nil, approvePlanInput{
+			PlanID:    "plan-01HZ123456789ABCDEFGHJKMNP",
+			Confirmed: true,
+		})
+		if err == nil {
+			t.Fatal("expected error for nil store, got nil")
+		}
+		if !strings.Contains(err.Error(), "state store is not initialized") {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("createInfra", func(t *testing.T) {
+		_, _, err := provider.createInfra(ctx, nil, createInfraInput{
+			PlanID: "plan-01HZ123456789ABCDEFGHJKMNP",
+		})
+		if err == nil {
+			t.Fatal("expected error for nil store, got nil")
+		}
+		if !strings.Contains(err.Error(), "state store is not initialized") {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("deploy", func(t *testing.T) {
+		_, _, err := provider.deploy(ctx, nil, deployInput{
+			InfraID:  "infra-01HZ123456789ABCDEFGHJKMNP",
+			ImageRef: "nginx:latest",
+		})
+		if err == nil {
+			t.Fatal("expected error for nil store, got nil")
+		}
+		if !strings.Contains(err.Error(), "state store is not initialized") {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("status", func(t *testing.T) {
+		_, _, err := provider.status(ctx, nil, statusInput{
+			DeploymentID: "deploy-01HZ123456789ABCDEFGHJKMNP",
+		})
+		if err == nil {
+			t.Fatal("expected error for nil store, got nil")
+		}
+		if !strings.Contains(err.Error(), "state store is not initialized") {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("teardown", func(t *testing.T) {
+		_, _, err := provider.teardown(ctx, nil, teardownInput{
+			DeploymentID: "deploy-01HZ123456789ABCDEFGHJKMNP",
+		})
+		if err == nil {
+			t.Fatal("expected error for nil store, got nil")
+		}
+		if !strings.Contains(err.Error(), "state store is not initialized") {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("deploymentsResource", func(t *testing.T) {
+		_, err := provider.deploymentsResource(ctx, &mcp.ReadResourceRequest{
+			Params: &mcp.ReadResourceParams{
+				URI: "aws://deployments",
+			},
+		})
+		if err == nil {
+			t.Fatal("expected error for nil store, got nil")
+		}
+		if !strings.Contains(err.Error(), "state store is not initialized") {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+}

@@ -1,3 +1,8 @@
+---
+priority: P1
+reason: Current minimum deployment cost ($65/mo) is prohibitive for personal projects. This is the highest priority new feature.
+---
+
 # Lightsail Container Provider Specification
 
 ## Overview
