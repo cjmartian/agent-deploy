@@ -18,10 +18,10 @@
 - ✅ Coverage: 52.9% (meets 50% target)
 - ✅ All P0 critical issues resolved (P0.1, P0.2, P0.3)
 - ✅ P1.29 Custom DNS — 100% complete (P1.35 status URL gap fixed)
+- ✅ P1.36 Spending confirmation — 100% complete (warns when using defaults)
 - 🔴 P1.34 Lightsail provider — spec has `priority: P1` in YAML frontmatter, 0% implemented
 - 🔴 P1.37 Static Site workload — workload-roadmap.md priority P1, 0% implemented
 - 🔴 P1.38 Background Worker workload — workload-roadmap.md priority P1, 0% implemented
-- 🟡 P1.36: Spending confirmation gap — silently applies defaults without user confirmation
 - 🟡 P3.32: Reconcile error handling — errors silently ignored in multiple reconcile functions
 
 ---
@@ -40,7 +40,7 @@
 | 🚨 **P1.37** | **Static Site workload not implemented** | ❌ | **Priority P1** per `ralph/specs/workload-roadmap.md`. S3+CloudFront = $1-5/mo vs $65+/mo. No CloudFront, no S3 bucket provisioning code exists. |
 | 🚨 **P1.38** | **Background Worker workload not implemented** | ❌ | **Priority P1** per `ralph/specs/workload-roadmap.md`. SQS+Lambda/Fargate without ALB. No SQS, no worker patterns implemented. |
 | ✅ ~~P1.35~~ | ~~Custom DNS status URL gap~~ | ✅ FIXED | Custom domain now included in `aws_status` URL list and `custom_domain` field. |
-| **P1.36** | **Spending confirmation gap** | ❌ | Spec requires "allow with confirmation" when no limits configured; implementation silently applies defaults without user confirmation. |
+| ✅ ~~P1.36~~ | ~~Spending confirmation gap~~ | ✅ FIXED | Plan output now includes `requires_confirmation` when using default limits. |
 
 ### MEDIUM PRIORITY — Test Gaps (P2)
 | ID | Issue | Status | Impact |
@@ -366,22 +366,21 @@
 - Added tests: `TestStatusOutput_CustomDomain`, `TestStatusOutput_NoCustomDomain`
 - **Location:** `internal/providers/aws.go`, `internal/providers/aws_test.go`
 
-### P1.36 Spending Confirmation Gap ❌
+### P1.36 Spending Confirmation Gap ✅ COMPLETE
 
-**Status:** NOT ADDRESSED  
+**Status:** FIXED  
 **Spec:** `ralph/specs/spending-safeguards.md`  
-**Impact:** Spec requires "allow with confirmation" when no spending limits configured; implementation silently applies defaults
+**Impact:** Spec requires "allow with confirmation" when no spending limits configured; now properly warns user
 
-**Evidence:**
-- When no spending config exists, system applies default limits without asking user
-- Spec says: user should be prompted to confirm deployment when no budget limits are set
-- Current behavior skips confirmation step, reducing user awareness of potential costs
-
-**Required Work:**
-- [ ] When no spending limits configured, return a confirmation prompt to the user before proceeding
-- [ ] Add `requires_confirmation` field to plan output when defaults are being applied
-- [ ] Add test: plan with no spending config triggers confirmation flow
-- **Location:** `internal/spending/check.go`, `internal/providers/aws.go`
+**Resolution:**
+- Added `LimitsWithSource` struct with `ExplicitlyConfigured` flag
+- Added `LoadLimitsWithSource()` function to detect if limits came from config file or env vars
+- Added `RequiresConfirmation` and `ConfirmationReason` fields to `planInfraOutput`
+- When no explicit config exists, sets `requires_confirmation: true` with explanation
+- Per-request spending override counts as explicit configuration (no confirmation needed)
+- Plan summary now includes warning when using default limits
+- Added tests: `TestLoadLimitsWithSource_NoConfig`, `TestLoadLimitsWithSource_WithConfigFile`, `TestLoadLimitsWithSource_WithEnvVars`
+- **Location:** `internal/spending/config.go`, `internal/providers/aws.go`, `internal/spending/config_test.go`
 
 ### P1.37 Static Site Workload ❌
 

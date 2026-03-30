@@ -168,6 +168,10 @@ type planInfraOutput struct {
 	CostRange *costRange `json:"cost_range,omitempty"`
 	// Custom domain (P1.29): Show custom domain in plan output if configured.
 	CustomDomain string `json:"custom_domain,omitempty"`
+	// Spending confirmation (P1.36): Warn when using default limits.
+	// WHY: Spec requires user confirmation when no spending limits are explicitly configured.
+	RequiresConfirmation bool   `json:"requires_confirmation,omitempty"`
+	ConfirmationReason   string `json:"confirmation_reason,omitempty"`
 }
 
 // costRange represents the minimum and maximum monthly cost range for auto-scaling deployments.
@@ -754,7 +758,15 @@ func (p *AWSProvider) planInfra(ctx context.Context, _ *mcp.CallToolRequest, in 
 
 	// Check spending limits before creating plan.
 	// WHY: Check against max cost when auto-scaling is enabled to prevent budget overruns.
-	limits, _ := spending.LoadLimits()
+	limitsWithSource, _ := spending.LoadLimitsWithSource()
+	limits := limitsWithSource.Limits
+
+	// P1.36: Track if confirmation is needed (using default limits without explicit config).
+	requiresConfirmation := !limitsWithSource.ExplicitlyConfigured
+	var confirmationReason string
+	if requiresConfirmation {
+		confirmationReason = "No spending limits configured. Using defaults: $100/mo monthly budget, $25/deployment limit. Configure limits in ~/.agent-deploy/config.json or via AGENT_DEPLOY_* environment variables."
+	}
 
 	// Per-request spending override (P1.21): Use provided limit if valid.
 	// WHY: Allow deployment-specific budget caps that may be tighter than global limits.
@@ -765,6 +777,9 @@ func (p *AWSProvider) planInfra(ctx context.Context, _ *mcp.CallToolRequest, in 
 			return nil, planInfraOutput{}, fmt.Errorf("per_deployment_budget_usd ($%.2f) exceeds global per-deployment limit ($%.2f)", in.PerDeploymentBudgetUSD, limits.PerDeploymentUSD)
 		}
 		perDeploymentLimit = in.PerDeploymentBudgetUSD
+		// Per-request override counts as explicit configuration.
+		requiresConfirmation = false
+		confirmationReason = ""
 		slog.Info("using per-request spending override",
 			slog.String("component", "aws_plan_infra"),
 			logging.Cost(perDeploymentLimit))
@@ -843,6 +858,10 @@ func (p *AWSProvider) planInfra(ctx context.Context, _ *mcp.CallToolRequest, in 
 	if costEstimate.Disclaimer != "" {
 		summaryBuilder += "Note: " + costEstimate.Disclaimer + "\n\n"
 	}
+	// P1.36: Add warning when using default limits.
+	if requiresConfirmation {
+		summaryBuilder += "⚠️ WARNING: No spending limits configured. Using defaults ($100/mo budget, $25/deployment). Configure limits to remove this warning.\n\n"
+	}
 	summaryBuilder += "⚠️ Review the cost estimate above. Call aws_approve_plan with plan_id and confirmed: true to approve, then aws_create_infra to provision infrastructure."
 
 	// Format estimated cost display.
@@ -854,11 +873,13 @@ func (p *AWSProvider) planInfra(ctx context.Context, _ *mcp.CallToolRequest, in 
 	}
 
 	output := planInfraOutput{
-		PlanID:          plan.ID,
-		Services:        services,
-		EstimatedCostMo: estimatedCostDisplay,
-		Summary:         summaryBuilder,
-		CostRange:       costRangeOutput,
+		PlanID:               plan.ID,
+		Services:             services,
+		EstimatedCostMo:      estimatedCostDisplay,
+		Summary:              summaryBuilder,
+		CostRange:            costRangeOutput,
+		RequiresConfirmation: requiresConfirmation,
+		ConfirmationReason:   confirmationReason,
 	}
 	// P1.29: Include custom domain in output if configured.
 	if domainName != "" {

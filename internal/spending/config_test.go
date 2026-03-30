@@ -288,3 +288,95 @@ func TestLimits_JSONSerialization(t *testing.T) {
 		t.Errorf("Decoded = %+v, want %+v", decoded, original)
 	}
 }
+
+// TestLoadLimitsWithSource_NoConfig tests that ExplicitlyConfigured is false when no config exists.
+// WHY: P1.36 - Spec requires confirmation when using defaults, not explicit user config.
+func TestLoadLimitsWithSource_NoConfig(t *testing.T) {
+	// Create a temporary home directory without config file.
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	// Clear env vars.
+	t.Setenv("AGENT_DEPLOY_MONTHLY_BUDGET", "")
+	t.Setenv("AGENT_DEPLOY_PER_DEPLOYMENT_BUDGET", "")
+	t.Setenv("AGENT_DEPLOY_ALERT_THRESHOLD", "")
+
+	result, err := LoadLimitsWithSource()
+	if err != nil {
+		t.Fatalf("LoadLimitsWithSource: %v", err)
+	}
+
+	if result.ExplicitlyConfigured {
+		t.Error("ExplicitlyConfigured should be false when no config exists")
+	}
+
+	// Should still get default limits.
+	defaults := DefaultLimits()
+	if result.Limits != defaults {
+		t.Errorf("Limits = %+v, want %+v (defaults)", result.Limits, defaults)
+	}
+}
+
+// TestLoadLimitsWithSource_WithConfigFile tests that ExplicitlyConfigured is true when config file exists.
+func TestLoadLimitsWithSource_WithConfigFile(t *testing.T) {
+	// Create a temporary home directory with config file.
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	configDir := filepath.Join(tmpHome, ".agent-deploy")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	config := Config{
+		SpendingLimits: Limits{
+			MonthlyBudgetUSD:      500.0,
+			PerDeploymentUSD:      100.0,
+			AlertThresholdPercent: 75,
+		},
+	}
+	configData, _ := json.Marshal(config)
+	configPath := filepath.Join(configDir, "config.json")
+	if err := os.WriteFile(configPath, configData, 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Clear env vars.
+	t.Setenv("AGENT_DEPLOY_MONTHLY_BUDGET", "")
+	t.Setenv("AGENT_DEPLOY_PER_DEPLOYMENT_BUDGET", "")
+	t.Setenv("AGENT_DEPLOY_ALERT_THRESHOLD", "")
+
+	result, err := LoadLimitsWithSource()
+	if err != nil {
+		t.Fatalf("LoadLimitsWithSource: %v", err)
+	}
+
+	if !result.ExplicitlyConfigured {
+		t.Error("ExplicitlyConfigured should be true when config file exists")
+	}
+}
+
+// TestLoadLimitsWithSource_WithEnvVars tests that ExplicitlyConfigured is true when env vars are set.
+func TestLoadLimitsWithSource_WithEnvVars(t *testing.T) {
+	// Create a temporary home directory without config file.
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	// Set env var.
+	t.Setenv("AGENT_DEPLOY_MONTHLY_BUDGET", "200")
+	t.Setenv("AGENT_DEPLOY_PER_DEPLOYMENT_BUDGET", "")
+	t.Setenv("AGENT_DEPLOY_ALERT_THRESHOLD", "")
+
+	result, err := LoadLimitsWithSource()
+	if err != nil {
+		t.Fatalf("LoadLimitsWithSource: %v", err)
+	}
+
+	if !result.ExplicitlyConfigured {
+		t.Error("ExplicitlyConfigured should be true when env vars are set")
+	}
+
+	if result.Limits.MonthlyBudgetUSD != 200.0 {
+		t.Errorf("MonthlyBudgetUSD = %v, want 200.0", result.Limits.MonthlyBudgetUSD)
+	}
+}

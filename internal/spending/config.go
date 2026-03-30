@@ -19,6 +19,13 @@ type Limits struct {
 	AlertThresholdPercent int     `json:"alert_threshold_percent"`
 }
 
+// LimitsWithSource includes spending limits and whether they were explicitly configured.
+// WHY: P1.36 - Spec requires confirmation when using defaults, not explicit user config.
+type LimitsWithSource struct {
+	Limits
+	ExplicitlyConfigured bool // True if limits came from config file or env vars
+}
+
 // DefaultLimits returns reasonable defaults when no configuration is set.
 func DefaultLimits() Limits {
 	return Limits{
@@ -31,7 +38,16 @@ func DefaultLimits() Limits {
 // LoadLimits loads spending limits from environment variables and config file.
 // Environment variables take precedence over config file values.
 func LoadLimits() (Limits, error) {
+	result, err := LoadLimitsWithSource()
+	return result.Limits, err
+}
+
+// LoadLimitsWithSource loads spending limits and indicates whether they were explicitly configured.
+// WHY: P1.36 - Spec requires confirmation when no limits are explicitly configured.
+// Returns ExplicitlyConfigured=true if limits came from config file or environment variables.
+func LoadLimitsWithSource() (LimitsWithSource, error) {
 	limits := DefaultLimits()
+	explicitlyConfigured := false
 
 	// Try to load from config file.
 	if err := loadFromConfigFile(&limits); err != nil {
@@ -42,26 +58,35 @@ func LoadLimits() (Limits, error) {
 			log.Warn("could not load config file, using defaults",
 				slog.String("reason", err.Error()))
 		}
+	} else {
+		// Config file loaded successfully.
+		explicitlyConfigured = true
 	}
 
 	// Override with environment variables.
 	if v := os.Getenv("AGENT_DEPLOY_MONTHLY_BUDGET"); v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil {
 			limits.MonthlyBudgetUSD = f
+			explicitlyConfigured = true
 		}
 	}
 	if v := os.Getenv("AGENT_DEPLOY_PER_DEPLOYMENT_BUDGET"); v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil {
 			limits.PerDeploymentUSD = f
+			explicitlyConfigured = true
 		}
 	}
 	if v := os.Getenv("AGENT_DEPLOY_ALERT_THRESHOLD"); v != "" {
 		if i, err := strconv.Atoi(v); err == nil {
 			limits.AlertThresholdPercent = i
+			explicitlyConfigured = true
 		}
 	}
 
-	return limits, nil
+	return LimitsWithSource{
+		Limits:               limits,
+		ExplicitlyConfigured: explicitlyConfigured,
+	}, nil
 }
 
 // Config represents the full configuration file structure.
