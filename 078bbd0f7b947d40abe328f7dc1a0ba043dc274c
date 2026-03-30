@@ -1,0 +1,38 @@
+P1.37 Static Site Workload - Complete Implementation
+
+This commit completes the static site workload (P1.37), bringing it from ~80% to 100%.
+
+## What was implemented:
+1. **File Upload System** (internal/providers/aws.go lines 5287-5485)
+   - uploadDirectoryToS3(): Recursive directory walking, skips hidden files
+   - getContentType(): Maps 25+ extensions to MIME types with charset
+   - getCacheControl(): Smart caching (HTML no-cache, hashed immutable, etc.)
+   - isHashedAsset(): Detects Vite/Webpack hash patterns in filenames
+
+2. **Import Cycle Fix** (internal/awsclient/mocks/)
+   - Removed awsclient import from cloudfront.go and s3.go mocks
+   - Interface compliance now verified in interfaces_test.go
+   - Resolves test compilation failure from circular import
+
+3. **New Test Coverage** (internal/providers/aws_test.go)
+   - TestGetContentType: 19 MIME type mappings
+   - TestGetCacheControl: 10 cache header patterns
+   - TestIsHashedAsset: 11 hash detection cases
+
+## Technical decisions:
+- Placeholder index.html still created if sourceDir is empty/missing
+- Cache-Control headers per spec: HTML always revalidates, hashed assets immutable
+- MIME charset included for text types (html, css, js, json)
+- Hidden files (starting with .) skipped during upload
+
+## Files modified:
+- internal/providers/aws.go (imports + new functions)
+- internal/providers/aws_test.go (new tests)
+- internal/awsclient/mocks/cloudfront.go (import cycle fix)
+- internal/awsclient/mocks/s3.go (import cycle fix)
+- internal/awsclient/interfaces_test.go (S3/CloudFront mock checks)
+- go.mod, go.sum (explicit S3/CloudFront dependencies)
+- IMPLEMENTATION_PLAN.md (P1.37 marked complete)
+
+## Remaining P1 work:
+- P1.38 Background Worker (SQS + Fargate/Lambda) - 0% implemented
