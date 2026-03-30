@@ -1,0 +1,62 @@
+P1.38 Background Worker Workload - Complete Implementation
+
+This commit implements the background worker workload (P1.38), bringing it from 0% to 100%.
+
+## What was implemented:
+
+### 1. Backend Selection (internal/providers/aws.go)
+- Added worker keywords detection in selectBackend()
+- Keywords: 'background worker', 'queue consumer', 'message processor',
+  'job processor', 'email sender', 'event handler', 'async worker', etc.
+- Returns BackendBackgroundWorker for matching descriptions
+
+### 2. SQS Queue Infrastructure
+- provisionWorkerQueue(): Creates main queue + DLQ
+- Queue naming: agent-deploy-{infraID[:12]}
+- DLQ naming: agent-deploy-{infraID[:12]}-dlq
+- Redrive policy: maxReceiveCount=3 before DLQ
+- MessageRetentionPeriod: 4 days (queue), 14 days (DLQ)
+- VisibilityTimeout: 5 minutes
+- FIFO queue support (detected from description)
+
+### 3. IAM Role Creation
+- createWorkerRole(): Creates role with SQS permissions
+- Trust policy for ECS tasks
+- Inline policy with: ReceiveMessage, DeleteMessage, GetQueueAttributes, ChangeMessageVisibility
+- Attaches AmazonECSTaskExecutionRolePolicy for CloudWatch
+
+### 4. Cost Estimation
+- ~$10/mo (Fargate nano + SQS free tier)
+- Services: SQS Queue ($0.50), Fargate Worker ($9.50)
+- Summary includes cost breakdown in plan output
+
+### 5. Teardown
+- teardownBackgroundWorker(): Cleans up all resources
+- Deletes SQS queue and DLQ
+- Deletes inline IAM policy
+- Detaches managed policy
+- Deletes IAM role
+- Deletes CloudWatch log group
+
+### 6. AWS Client Updates
+- SQSAPI interface with 9 methods
+- SQSMock for testing
+- Added PutRolePolicy/DeleteRolePolicy to IAMAPI
+
+## Files Modified:
+- internal/providers/aws.go (imports, selectBackend, planInfra, createInfra, teardown, new functions)
+- internal/awsclient/interfaces.go (SQSAPI interface, IAMAPI updates, AWSClients)
+- internal/awsclient/interfaces_test.go (SQS mock check)
+- internal/awsclient/mocks/sqs.go (new file)
+- internal/awsclient/mocks/other.go (IAM policy methods)
+- internal/state/types.go (BackendBackgroundWorker, resource constants)
+- internal/providers/aws_test.go (worker tests)
+- go.mod, go.sum (sqs dependency)
+
+## Test Coverage:
+- TestSelectBackend_BackgroundWorker: 9 cases covering all keywords
+- TestPlanInfra_BackgroundWorker: validates plan creation and cost
+
+## Both P1 Workloads Complete:
+- P1.37 Static Site: S3 + CloudFront ($3/mo)
+- P1.38 Background Worker: SQS + Fargate ($10/mo)
