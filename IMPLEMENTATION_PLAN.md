@@ -2,25 +2,16 @@
 
 **Project Goal:** Natural language deployment of applications via MCP server → Cloud provider. Allow users to end-to-end create applications and make them publicly available while ensuring spend does not cross user-defined boundaries.
 
-**Last Updated:** 2026-03-29  
-**Last Audit:** 2026-03-29 (Comprehensive codebase audit — spec gap analysis, test gap analysis, quality issues verified)  
-**Last Review:** 2026-03-29 (P1.32 Route53 client issue confirmed as false positive — uses lazy initialization pattern)
+**Last Updated:** 2025-07-24  
+**Last Audit:** 2025-07-24 (Deep audit — 30+ explore agents across ralph/specs/* and internal/* source)
 
-**Session Summary (2026-03-29):**
-Completed 12 items in this session:
-- P3.12: State transition validation — Added validateInfraTransition() and validateDeploymentTransition() with full state machine validation
-- P2.5 (progress): AWS teardown tests — Added 9 tests for deleteVPCResources, deleteRouteTable, rollbackInfra
-- P3.21: Cleanup service race condition — Added sync.Once for concurrent Stop() safety
-- P2.10: Concurrent access patterns — Added 4 comprehensive concurrent tests for Store
-- P3.18: Config error logging — Added warning log for config file parse errors  
-- P3.24: Exponential backoff — Added backoffWithJitter() for certificate validation polling
-- P3.25: isLocalImage validation — Verified implementation adequate, added 8 edge case tests
-- P3.22: Deployment status updates — Verified current behavior is correct
-- P3.23: Certificate ARN storage — Added rollback on storage failure to prevent orphaned certs
-- P3.14: Main.go startup error handling — Added defer shutdown() with sync.Once for idempotent cleanup on any exit path
-- P2.9: main.go tests — Added 9 component tests (Version, flags, logging, etc.)
-
-Coverage: 53.0% (meets 50% target)
+**Current Status:**
+- ✅ Coverage: 52.9% (meets 50% target)
+- ✅ All previous P0 critical issues resolved
+- 🔴 New P0.3: Provider nil store checks — 62 unguarded `p.store.*` accesses risk panics
+- 🔴 P1.34 Lightsail provider — spec has explicit `priority: P1` in YAML frontmatter, 0% implemented
+- 🟡 P1.29 Custom DNS — 95% complete, status URL gap discovered
+- 🟡 P1.35–P1.36: New spec compliance gaps found (DNS status URL, spending confirmation)
 
 ---
 
@@ -29,47 +20,50 @@ Coverage: 53.0% (meets 50% target)
 ### CRITICAL — Production Blockers (P0)
 | ID | Issue | Impact |
 |----|-------|--------|
-| ~~**P0.1**~~ | ~~Non-atomic file writes in store.go~~ | ✅ FIXED — Atomic writes using temp file + rename |
-| ~~**P0.2**~~ | ~~Silent error suppression in store.go~~ | ✅ FIXED — Error logging added at lines 86, 123, 218-220 |
+| 🚨 **P0.3** | **Provider nil store checks** | 62 direct `p.store.*` accesses without nil guard — panics if store initialization fails |
 
 ### HIGH PRIORITY — Spec Compliance Gaps (P1)
 | ID | Issue | Impact |
 |----|-------|--------|
-| ~~**P1.31**~~ | ~~Missing input validations~~ | ✅ FIXED — Added ValidateID(), ValidateImageRef(), ValidateAppDescription(), ValidateExpectedUsers(), ValidateLatencyMS(), ValidateCertificateARNRegion() |
+| 🚨 **P1.34** | **Lightsail provider not implemented** | **HIGHEST PRIORITY** — Spec has `priority: P1` in YAML frontmatter. Would enable $7-25/mo deployments vs $65+/mo with ECS. Current minimum cost prohibitive for personal projects. |
+| **P1.35** | **Custom DNS status URL gap** | Spec requires custom domain in `aws_status` URL list; `statusOutput` missing `custom_domain` field; `getALBURLs()` never returns custom domain |
+| **P1.36** | **Spending confirmation gap** | Spec requires "allow with confirmation" when no limits configured; implementation silently applies defaults without user confirmation |
 
 ### MEDIUM PRIORITY — Test Gaps (P2)
 | ID | Issue | Impact |
 |----|-------|--------|
+| **P2.5** | AWS provider error scenarios incomplete | 48.8% coverage; Route53/ALB/IAM/ECR/CloudWatch error paths untested |
 | **P2.9** | main.go test coverage | Entry point components tested; main() itself architecturally hard to test |
-| ~~**P2.10**~~ | ~~Concurrent access patterns untested~~ | ✅ COMPLETE — comprehensive concurrent tests added with -race flag verification |
-| **P2.5** | AWS provider error scenarios incomplete | 48.7% coverage; Route53/ALB/IAM/ECR/CloudWatch error paths and E2E flows untested |
+| **P2.11** | `processAlert()` untested | `internal/spending/monitor.go` — alert processing path has zero test coverage |
+| **P2.12** | `checkInfraResources()` untested | `internal/state/reconcile.go` — infrastructure resource checking has zero test coverage |
+| **P2.13** | Sleep-based timing in tests | Flaky CI risk — tests use `time.Sleep` instead of channels/conditions for synchronization |
+| **P2.14** | Error injection missing in reconcile mocks | Reconcile tests only cover happy paths; no failure simulation |
 
 ### LOWER PRIORITY — Quality (P3)
 | ID | Issue | Impact |
 |----|-------|--------|
-| **P3.13** | Shallow reconciliation (3/19 resource types) | Orphaned resources (subnets, NAT GW, SGs, etc.) may not be detected; SyncedCount misleading |
-| ~~**P3.12**~~ | ~~Missing state transitions~~ | ✅ FIXED — Added validateInfraTransition() and validateDeploymentTransition() with full state machine validation |
-| ~~**P3.14**~~ | ~~Main.go startup error handling~~ | ✅ FIXED — Added defer shutdown() with sync.Once for idempotent cleanup on any exit path |
-| ~~**P3.18**~~ | ~~Silent error suppression in config.go:36~~ | ✅ FIXED — Added warning log when config file exists but fails to parse |
-| **P3.19** | Hardcoded ALB/NAT/CloudWatch pricing | Cost estimation inaccurate when Pricing API unavailable |
-| **P3.20** | NAT Gateway single AZ | NAT Gateway only created in first public subnet; no redundancy across AZs; single point of failure for private subnet traffic |
-| ~~**P3.21**~~ | ~~Cleanup service race condition~~ | ✅ FIXED — Added sync.Once protection around channel close |
-| ~~**P3.22**~~ | ~~Deployment status update failures silently ignored~~ | ✅ VERIFIED (behavior correct) — Logs error with slog.Error and returns primary error; correct pattern to avoid masking primary failure |
-| ~~**P3.23**~~ | ~~Certificate ARN storage failures silently ignored~~ | ✅ FIXED — Now rolls back by deleting created certificate if ARN storage fails; prevents orphaned certificates |
-| ~~**P3.24**~~ | ~~No exponential backoff in certificate validation~~ | ✅ FIXED — Added backoffWithJitter() with exponential backoff (1s→15s for validation, 5s→30s for issuance) |
-| ~~**P3.25**~~ | ~~isLocalImage() validation incomplete~~ | ✅ VERIFIED (implementation adequate) — Handles ECR URIs, 8 major public registries, custom registries via '.' or ':' detection, localhost:port, and IP:port patterns |
-| ~~**P3.26**~~ | ~~Race condition in monitor_test.go~~ | ✅ FIXED — Added mutex synchronization for callCount |
+| **P3.13** | Shallow reconciliation (3/19 resource types) | Orphaned resources (subnets, NAT GW, SGs, etc.) may not be detected |
+| **P3.19** | Hardcoded ALB/NAT/CloudWatch pricing | Cost estimation inaccurate; Pricing API not wired into EstimateCosts() |
+| **P3.20** | NAT Gateway single AZ | Single point of failure for private subnet traffic; no HA |
+| **P3.31** | `deleteDNSResources()` error not checked | Called without error checking in `teardown()` (~line 1510); should return and propagate error |
+
+### CI/CD GAPS (P3)
+| ID | Issue | Impact |
+|----|-------|--------|
+| **P3.27** | Missing security scanning in CI | No gosec linter, no govulncheck |
+| **P3.28** | Missing dependency audit in CI | No `go mod verify` check |
+| **P3.29** | No SBOM generation | No software bill of materials for releases |
+| **P3.30** | No goreleaser --validate check | .goreleaser.yml syntax not validated pre-release |
 
 ### NEW FEATURES (P4)
 | ID | Issue | Impact |
 |----|-------|--------|
-| **P4.1** | Lightsail provider not implemented | Spec exists at `ralph/specs/lightsail-provider.md`; would enable $7-25/mo deployments vs $65+/mo with ECS |
-| **P4.2** | Static site workload not implemented | Spec at `ralph/specs/workloads/static-site.md`; S3+CloudFront = $1-5/mo vs $65+/mo |
-| **P4.3** | Background worker workload not implemented | Spec at `ralph/specs/workloads/background-worker.md` |
-| **P4.4** | Scheduled job workload not implemented | Spec at `ralph/specs/workloads/scheduled-job.md` |
-| **P4.5** | Batch processing workload not implemented | Spec at `ralph/specs/workloads/batch-processing.md` |
-| **P4.6** | ML inference workload not implemented | Spec at `ralph/specs/workloads/ml-inference.md` |
-| **P4.7** | Data pipeline workload not implemented | Spec at `ralph/specs/workloads/data-pipeline.md` |
+| **P4.2** | Static site workload not implemented | S3+CloudFront = $1-5/mo vs $65+/mo |
+| **P4.3** | Background worker workload not implemented | SQS+Lambda/Fargate without ALB |
+| **P4.4** | Scheduled job workload not implemented | EventBridge+Lambda |
+| **P4.5** | Batch processing workload not implemented | AWS Batch |
+| **P4.6** | ML inference workload not implemented | SageMaker/GPU Fargate |
+| **P4.7** | Data pipeline workload not implemented | Step Functions |
 
 ### STRETCH GOALS (P5)
 | ID | Issue | Impact |
@@ -77,18 +71,18 @@ Coverage: 53.0% (meets 50% target)
 | **P5.1** | CloudFormation-based provisioning | Simplifies create/teardown; atomic operations |
 | **P5.2** | Additional cloud providers (GCP, Azure) | Multi-cloud support |
 | **P5.3** | Secrets Management | AWS Secrets Manager / SSM integration |
-| **P5.4** | CI enhancements | Go version validation, goreleaser check, security scanning |
 
 ---
 
-## ✅ Completed (Previously Resolved Items)
+## ✅ Completed (All Verified)
 
 <details>
 <summary>Click to expand completed items</summary>
 
+### Core Features
 | Component | Status | Location |
 |-----------|--------|----------|
-| MCP server (stdio + HTTP) | ✅ | `internal/main.go` |
+| MCP server (stdio + HTTP) | ✅ | `cmd/agent-deploy/main.go` |
 | Provider interface | ✅ | `internal/providers/provider.go` |
 | **AWS 6 tools** | ✅ | `internal/providers/aws.go` — plan, approve, create, deploy, status, teardown |
 | **AWS resource (aws:deployments)** | ✅ | `internal/providers/aws.go` |
@@ -96,7 +90,7 @@ Coverage: 53.0% (meets 50% target)
 | State model (Plan, Infrastructure, Deployment) | ✅ | `internal/state/types.go` |
 | State storage with file persistence | ✅ | `internal/state/store.go` |
 | Spending safeguards (config, Cost Explorer, monitoring, alerts) | ✅ | `internal/spending/` |
-| Auto-teardown when budget exceeded | ✅ | `internal/main.go`, `internal/providers/` |
+| Auto-teardown when budget exceeded | ✅ | `cmd/agent-deploy/main.go`, `internal/providers/` |
 | Auto-scaling (CPU/memory target tracking) | ✅ | `internal/providers/aws.go` |
 | TLS/HTTPS (ACM validation, HTTP redirect) | ✅ | `internal/providers/aws.go` |
 | ECR image push (Docker SDK) | ✅ | `internal/providers/aws.go` |
@@ -108,7 +102,7 @@ Coverage: 53.0% (meets 50% target)
 | Structured logging (slog) | ✅ | `internal/logging/logging.go` |
 | Input validation (CPU/memory, port, region, etc.) | ✅ | `internal/providers/aws.go` (validations embedded in provider) |
 | IAM task execution role | ✅ | `internal/providers/aws.go` |
-| Test coverage 53.0% (target 50%) | ✅ | Meets target |
+| Test coverage 52.9% (target 50%) | ✅ | Meets target |
 | **P1.30 Distribution / cmd structure** | ✅ | `cmd/agent-deploy/main.go`, `.goreleaser.yml`, `.github/workflows/release.yml` |
 
 **P1.30 Distribution Notes:**
@@ -160,22 +154,28 @@ Coverage: 53.0% (meets 50% target)
 |-----------|--------|-------|
 | **AWS 6 tools** | ✅ Complete | plan, approve, create, deploy, status, teardown |
 | **AWS resource + prompt** | ✅ Complete | aws:deployments, aws_deploy_plan |
-| **Spending safeguards** | ✅ Working | Config, Cost Explorer, monitoring, alerts, auto-teardown |
+| **Spending safeguards** | ⚠️ Gap | Config, Cost Explorer, monitoring, alerts, auto-teardown working; missing confirmation when no limits set (P1.36) |
 | **State storage** | ✅ Complete | Plan, Infrastructure, Deployment with file persistence |
-| **Reconciliation** | ⚠️ Partial | Only 3/19 resource types reconciled (VPC, ECS Cluster, ALB) |
-| **Cost estimation** | ⚠️ Partial | Fargate via Pricing API; ALB/NAT/CW use hardcoded fallback |
-| **Custom DNS / Route 53** | ✅ Complete | Route 53 hosted zone lookup, ACM auto-provisioning, DNS alias A records |
-| **Distribution / cmd structure** | ✅ Complete | Entry point at `cmd/agent-deploy/main.go`, GoReleaser configured |
-| **Test coverage** | ✅ 53.0% | Meets 50% target |
+| **Provider safety** | 🔴 Risk | 62 unguarded `p.store.*` accesses — nil panic risk (P0.3) |
+| **Reconciliation** | ⚠️ Partial | Only 3/19 resource types reconciled (P3.13) |
+| **Cost estimation** | ⚠️ Partial | Fargate OK; ALB/NAT/CW hardcoded (P3.19) |
+| **Networking** | ⚠️ Partial | NAT Gateway single AZ only (P3.20) |
+| **Custom DNS / Route 53** | ⚠️ 95% | Core working; status URL missing custom domain (P1.35); DNS teardown error unchecked (P3.31) |
+| **Distribution** | ✅ Complete | `cmd/agent-deploy/main.go`, GoReleaser configured |
+| **Test coverage** | ✅ 52.9% | Meets 50% target; gaps in processAlert, checkInfraResources (P2.11-P2.14) |
+| **CI/CD** | ⚠️ Partial | Missing security scanning, SBOM (P3.27-P3.30) |
+| **Error handling** | ✅ Complete | All 9 error types defined, no silent suppression |
+| **Logging** | ✅ Complete | Structured slog with component tags |
+| **Lightsail provider** | 🔴 Missing | 0% implemented — spec has `priority: P1` (P1.34) |
 
 ---
 
-## P1 — Spec Compliance Gaps (Completed)
+## P1 — Spec Compliance Gaps
 
-### P1.29 Custom DNS / Route 53 ✅ COMPLETE
+### P1.29 Custom DNS / Route 53 ⚠️ 95% COMPLETE
 
 **Spec:** `ralph/specs/custom-dns.md`  
-**Status:** Fully implemented
+**Status:** Core implementation complete; **status URL gap remaining** (see P1.35)
 
 **Implementation:**
 - [x] Added `domain_name` parameter to `aws_plan_infra` tool
@@ -193,6 +193,11 @@ Coverage: 53.0% (meets 50% target)
 - [x] Added DNS cleanup to `teardown`
 - [x] Added tests: `TestValidateDomainName`, `TestExtractParentDomain`, `TestPlanInfra_DomainName`
 - **Location:** `internal/providers/aws.go`, `internal/state/types.go`, `go.mod`
+
+**Remaining Gap (P1.35):**
+- [ ] Add `custom_domain` field to `statusOutput` so `aws_status` URL list includes the custom domain
+- [ ] Update `getALBURLs()` to also return the custom domain when configured
+- **Location:** `internal/providers/aws.go`
 
 ### P1.9 VPC CIDR Configuration ✅ COMPLETE
 
@@ -263,6 +268,21 @@ Coverage: 53.0% (meets 50% target)
 
 ## P0 — Critical Production Blockers (Must Fix)
 
+### P0.3 Provider Nil Store Checks ❌
+
+**Status:** NOT ADDRESSED  
+**Impact:** **CRITICAL** — 62 direct accesses to `p.store.*` without nil checks. If store initialization fails or is deferred, any provider method call will panic with nil pointer dereference.
+
+**Evidence:**
+- 62 occurrences of `p.store.` in `internal/providers/aws.go` — none guarded
+- Store is assigned during provider construction but no defensive checks in methods
+
+**Required Work:**
+- [ ] Add nil check for `p.store` at the entry of each public provider method (or centralized guard)
+- [ ] Return `ErrInvalidState` when store is nil instead of panicking
+- [ ] Add test: provider method with nil store returns error gracefully
+- **Location:** `internal/providers/aws.go`
+
 ### P0.1 Non-Atomic File Writes ✅ COMPLETE
 
 **Status:** FIXED  
@@ -314,16 +334,51 @@ Coverage: 53.0% (meets 50% target)
 - [x] Added tests: `TestResourceDNSConstants`, `TestInfraResources_ALBDNSData`
 - **Location:** `internal/providers/aws.go`, `internal/state/types.go`
 
+### P1.35 Custom DNS Status URL Gap ❌
+
+**Status:** NOT ADDRESSED  
+**Spec:** `ralph/specs/custom-dns.md`  
+**Impact:** Spec requires custom domain in `aws_status` URL list; users cannot see their custom domain in status output
+
+**Evidence:**
+- `statusOutput` struct has no `custom_domain` field
+- `getALBURLs()` only returns ALB DNS names, never the configured custom domain
+- When user deploys with `domain_name: "app.example.com"`, `aws_status` only shows the raw ALB URL
+
+**Required Work:**
+- [ ] Add `custom_domain` field to `statusOutput` struct
+- [ ] Update `getALBURLs()` (or status method) to include the custom domain URL when configured
+- [ ] Pull domain from stored state (`ResourceDomainName`)
+- [ ] Add test: status output includes custom domain when configured
+- **Location:** `internal/providers/aws.go`
+
+### P1.36 Spending Confirmation Gap ❌
+
+**Status:** NOT ADDRESSED  
+**Spec:** `ralph/specs/spending-safeguards.md`  
+**Impact:** Spec requires "allow with confirmation" when no spending limits configured; implementation silently applies defaults
+
+**Evidence:**
+- When no spending config exists, system applies default limits without asking user
+- Spec says: user should be prompted to confirm deployment when no budget limits are set
+- Current behavior skips confirmation step, reducing user awareness of potential costs
+
+**Required Work:**
+- [ ] When no spending limits configured, return a confirmation prompt to the user before proceeding
+- [ ] Add `requires_confirmation` field to plan output when defaults are being applied
+- [ ] Add test: plan with no spending config triggers confirmation flow
+- **Location:** `internal/spending/check.go`, `internal/providers/aws.go`
+
 ---
 
 ## P2 — Test Coverage Gaps (Medium Priority)
 
-> **Status:** 50.1% overall coverage — target met.
+> **Status:** 52.9% overall coverage — target met.
 > CI enforces 25% floor; target is 50% per `ralph/specs/testing.md`.
 
 ### P2.9 main.go Test Coverage ⚠️ 🟡
 
-**Status:** SIGNIFICANT PROGRESS — 50.1% overall coverage achieved  
+**Status:** SIGNIFICANT PROGRESS — 52.9% overall coverage achieved  
 **Impact:** Entry point components now tested; main() function itself remains architecturally challenging to test
 
 **New Tests Added:**
@@ -383,7 +438,7 @@ All tests pass with `-race` flag, verifying the RWMutex locking is correct.
 
 ### P2.5 AWS Provider Error Scenarios Incomplete ⚠️
 
-**Status:** Partial coverage (48.7%)  
+**Status:** Partial coverage (48.8%)  
 **Impact:** Error paths not fully covered; missing E2E flow tests
 
 **Progress (2025-01):**
@@ -398,7 +453,7 @@ Added VPC cleanup, route table, and rollback error scenario tests:
 - `TestRollbackInfra_WithResources` - Tests rollback with resources to clean up
 - `TestRollbackInfra_ContinuesOnErrors` - Tests rollback continues despite errors
 
-Coverage improved from 44.6% → 48.7% on providers package.
+Coverage improved from 44.6% → 48.8% on providers package.
 
 **Evidence (remaining):**
 - Route 53 error scenarios untested
@@ -415,6 +470,48 @@ Coverage improved from 44.6% → 48.7% on providers package.
 - [x] Test rollback with non-empty infrastructure
 - [ ] Test context/deadline handling
 - **Location:** `internal/providers/aws_test.go`
+
+### P2.11 processAlert() Untested ❌
+
+**Status:** NOT ADDRESSED  
+**Impact:** Alert processing logic in cost monitor has zero test coverage; bugs in alerting would go undetected
+
+**Required Work:**
+- [ ] Add tests for `processAlert()` covering: threshold exceeded, threshold not exceeded, edge cases
+- [ ] Test alert callback invocation and error handling
+- **Location:** `internal/spending/monitor.go`, `internal/spending/monitor_test.go`
+
+### P2.12 checkInfraResources() Untested ❌
+
+**Status:** NOT ADDRESSED  
+**Impact:** Infrastructure resource checking in reconciler untested; reconciliation bugs could cause false positives/negatives
+
+**Required Work:**
+- [ ] Add tests for `checkInfraResources()` with various resource states
+- [ ] Test with missing resources, stale resources, and healthy resources
+- **Location:** `internal/state/reconcile.go`, `internal/state/reconcile_test.go`
+
+### P2.13 Sleep-Based Timing in Tests ⚠️
+
+**Status:** NOT ADDRESSED  
+**Impact:** Tests using `time.Sleep` are inherently flaky in CI; timing-sensitive assertions may fail under load
+
+**Required Work:**
+- [ ] Audit test files for `time.Sleep` usage
+- [ ] Replace with channel-based synchronization, `sync.WaitGroup`, or condition variables where possible
+- [ ] Use `testing.Short()` to skip slow tests in fast CI runs
+- **Location:** Various `*_test.go` files
+
+### P2.14 Error Injection Missing in Reconcile Mocks ❌
+
+**Status:** NOT ADDRESSED  
+**Impact:** Reconcile tests only cover happy paths; error resilience unverified
+
+**Required Work:**
+- [ ] Add mock configurations that return errors for AWS Describe* calls
+- [ ] Test reconciler behavior when AWS API calls fail (partial results, timeouts, access denied)
+- [ ] Verify reconciler logs warnings and continues rather than panicking
+- **Location:** `internal/state/reconcile_test.go`
 
 ---
 
@@ -577,6 +674,44 @@ Coverage improved from 44.6% → 48.7% on providers package.
 - [ ] Document cost impact (additional NAT Gateway hourly charges)
 - **Location:** `internal/providers/aws.go:1624`
 
+### P3.31 deleteDNSResources() Error Not Checked ❌
+
+**Status:** NOT ADDRESSED  
+**Impact:** DNS cleanup errors silently swallowed during teardown; orphaned DNS records and certificates may persist
+
+**Evidence:**
+- `deleteDNSResources()` is called in `teardown()` (~line 1510) without checking the returned error
+- If DNS deletion fails, teardown reports success but leaves orphaned Route 53 records and ACM certificates
+- These orphaned resources could cause conflicts on re-deployment or accumulate costs
+
+**Required Work:**
+- [ ] Check error return from `deleteDNSResources()` in `teardown()`
+- [ ] Log warning and continue teardown (don't block on DNS errors, but don't ignore them)
+- [ ] Add test: teardown with DNS deletion error still completes but logs warning
+- **Location:** `internal/providers/aws.go` (teardown function)
+
+### P3.27-P3.30 CI/CD Gaps ❌
+
+**Status:** NOT IMPLEMENTED  
+**Impact:** Missing security hardening and release validation
+
+**Gaps Identified:**
+| ID | Gap | Required Work |
+|----|-----|---------------|
+| **P3.27** | Missing security scanning | Add `gosec` linter to CI workflow |
+| **P3.28** | Missing dependency audit | Add `go mod verify` to CI |
+| **P3.29** | No SBOM generation | Add Software Bill of Materials for releases |
+| **P3.30** | No goreleaser validation | Add `goreleaser --validate` pre-release check |
+
+**Location:** `.github/workflows/ci.yml`, `.github/workflows/release.yml`
+
+---
+
+### ✅ Completed P3 Items (moved to collapsed section)
+
+<details>
+<summary>Click to expand completed P3 items</summary>
+
 ### ~~P3.21 Cleanup Service Race Condition~~ ✅ COMPLETE
 
 **Status:** COMPLETE  
@@ -645,25 +780,25 @@ Coverage improved from 44.6% → 48.7% on providers package.
 **Status:** ✅ VERIFIED (implementation adequate)  
 **Impact:** Implementation is comprehensive with 27 test cases passing
 
-**Evidence:**
-- Only checks for `localhost/` and common registry prefixes
-- Does not handle all valid Docker image reference formats
-- May incorrectly classify some images
-
-**Required Work:**
-- [ ] Add comprehensive Docker image reference parsing
-- [ ] Handle all valid image reference formats (with/without tags, digests, ports)
+**Analysis:**
+- Handles ECR URIs, 8 major public registries, custom registries via '.' or ':' detection
+- Handles localhost:port, IP:port patterns
+- Implementation is adequate for real-world use cases
 - **Location:** `internal/providers/aws.go` (isLocalImage function)
+
+**No work required** — implementation covers all practical scenarios.
+
+</details>
 
 ---
 
-## P4 — New Features (Unimplemented Specs)
+## P1.34 — Lightsail Provider (Highest Priority New Feature)
 
-### P4.1 Lightsail Provider ❌
+### P1.34 Lightsail Provider ❌
 
 **Status:** NOT IMPLEMENTED — Spec exists  
 **Spec:** `ralph/specs/lightsail-provider.md`  
-**Impact:** Would enable significantly cheaper deployments ($7-25/mo vs $65+/mo with ECS)
+**Impact:** HIGHEST PRIORITY — Would enable $7-25/mo deployments vs $65+/mo with ECS. Current minimum cost is prohibitive for personal projects, demos, and low-traffic apps.
 
 **Benefits:**
 - Simpler deployment model for small apps
@@ -672,11 +807,21 @@ Coverage improved from 44.6% → 48.7% on providers package.
 - Good for side projects, MVPs, low-traffic sites
 
 **Required Work:**
-- [ ] Implement Lightsail provider with 6 tools matching AWS pattern
-- [ ] Add lightsail_plan_infra, lightsail_approve_plan, lightsail_create_infra tools
-- [ ] Add lightsail_deploy, lightsail_status, lightsail_teardown tools
-- [ ] Add state management for Lightsail resources
-- **Location:** `internal/providers/lightsail.go` (new file)
+- [ ] Add `Backend` field to `state.Plan` and Lightsail resource constants to `state/types.go`
+- [ ] Add `selectBackend()` to `planInfra()` — auto-select Lightsail for low-traffic/budget workloads
+- [ ] Add Lightsail client interface and mock to `internal/awsclient/`
+- [ ] Implement `createLightsailInfra()` — CreateContainerService + wait for READY
+- [ ] Implement `deployToLightsail()` — CreateContainerServiceDeployment with image handling
+- [ ] Implement `teardownLightsail()` — DeleteContainerService
+- [ ] Update `status()` to handle Lightsail backend
+- [ ] Add Lightsail cost estimation (fixed pricing, no API needed)
+- [ ] Add tests for all new functions
+- [ ] Add `github.com/aws/aws-sdk-go-v2/service/lightsail` dependency
+- **Location:** `internal/providers/aws.go` (integrated into existing provider)
+
+---
+
+## P4 — New Features (Unimplemented Specs)
 
 ### P4.2 Static Site Workload ❌
 
@@ -836,10 +981,10 @@ go tool cover -html=coverage.out          # View coverage report
 | `internal/awsclient/` | **91.7%** | Comprehensive tests added |
 | `internal/id/` | **100.0%** | Fully tested |
 | `internal/logging/` | **86.0%** | Good coverage |
-| `internal/providers/` | **42.6%** | planInfra, deploy, teardown, status, approval workflows, provisionVPC, provisionECSCluster, provisionALB tested |
-| `internal/spending/` | **67.7%** | CostTracker, CostMonitor, PricingEstimator tests added |
-| `internal/state/` | **82.0%** | Reconciler tests added, comprehensive coverage |
-| **Overall** | **49.3%** | ⚠️ **SLIGHTLY BELOW TARGET** (target: 50%) |
+| `internal/providers/` | **48.8%** | planInfra, deploy, teardown, status, approval workflows, provisionVPC, provisionECSCluster, provisionALB tested |
+| `internal/spending/` | **67.9%** | CostTracker, CostMonitor, PricingEstimator tests added |
+| `internal/state/` | **82.9%** | Reconciler tests added, comprehensive coverage |
+| **Overall** | **52.9%** | ✅ **MEETS TARGET** (target: 50%) |
 
 ### Key Files
 
@@ -868,7 +1013,7 @@ go tool cover -html=coverage.out          # View coverage report
 | `ralph/specs/custom-dns.md` | Route 53 / custom domain spec |
 | `ralph/specs/distribution.md` | Distribution / GoReleaser spec |
 | `ralph/specs/ci.md` | CI/CD requirements spec |
-| `ralph/specs/lightsail-provider.md` | **Lightsail provider spec (NOT IMPLEMENTED — P4.1)** |
+| `ralph/specs/lightsail-provider.md` | **Lightsail provider spec (NOT IMPLEMENTED — P1.34, HIGHEST PRIORITY)** |
 | `ralph/specs/workload-roadmap.md` | **Workload types roadmap (NOT IMPLEMENTED — P4.2-P4.7)** |
 | `ralph/specs/workloads/` | **6 workload specs (static-site, background-worker, etc.)** |
 
@@ -914,13 +1059,13 @@ go tool cover -html=coverage.out          # View coverage report
 
 | Priority | Count | Items |
 |----------|-------|-------|
-| ~~**P0 Critical**~~ | ~~2~~ 0 | ~~P0.1 (non-atomic writes), P0.2 (silent error suppression)~~ ✅ ALL FIXED |
-| ~~**P1 Spec Gaps**~~ | ~~1~~ 0 | ~~P1.31 (missing input validations)~~ ✅ ALL FIXED |
-| **P2 Test Gaps** | 2 | P2.9 (main.go components ⚠️), ~~P2.10 (concurrent access)~~ ✅, P2.5 (AWS error scenarios) |
-| **P3 Quality** | 8 | ~~P3.12~~ ✅, P3.13-P3.14, ~~P3.18~~, P3.19-P3.24 (reconciliation, ~~state transitions~~ ✅, error handling, ~~config errors~~ ✅, pricing, NAT Gateway, cleanup race, status updates, cert storage, cert backoff), ~~P3.25~~ ✅ |
-| **P4 New Features** | 7 | P4.1 (Lightsail), P4.2-P4.7 (workload types) |
-| **P5 Stretch** | 4 | CloudFormation, multi-cloud, secrets, CI enhancements |
-| **Total remaining** | **22** | |
+| **P0 Critical** | 1 | **P0.3 (provider nil store checks)** |
+| **P1 Spec Gaps** | 3 | **P1.34 (Lightsail — HIGHEST PRIORITY)**, P1.35 (DNS status URL), P1.36 (spending confirmation) |
+| **P2 Test Gaps** | 6 | P2.5 (AWS error scenarios), P2.9 (main.go), P2.11 (processAlert), P2.12 (checkInfraResources), P2.13 (sleep timing), P2.14 (reconcile mocks) |
+| **P3 Quality** | 8 | P3.13 (reconciliation), P3.19 (pricing), P3.20 (NAT HA), P3.31 (DNS error handling), P3.27-P3.30 (CI gaps) |
+| **P4 New Features** | 6 | P4.2-P4.7 (workload types) |
+| **P5 Stretch** | 3 | CloudFormation, multi-cloud, secrets |
+| **Total remaining** | **27** | |
 
 ---
 
@@ -953,6 +1098,7 @@ go tool cover -html=coverage.out          # View coverage report
 | **custom-dns.md** | Route 53 hosted zone lookup | ✅ IMPLEMENTED — P1.29 |
 | **custom-dns.md** | ACM certificate auto-provisioning | ✅ IMPLEMENTED — P1.29 |
 | **custom-dns.md** | DNS alias A record creation | ✅ IMPLEMENTED — P1.29 |
+| **custom-dns.md** | Custom domain in status URL list | ⚠️ **MISSING** — P1.35 (statusOutput lacks custom_domain field) |
 | **custom-dns.md** | DNS resource tracking in state | ✅ IMPLEMENTED — P3.15 |
 | **distribution.md** | Move main.go to cmd/agent-deploy/ | ✅ IMPLEMENTED |
 | **distribution.md** | GoReleaser + release workflow | ✅ IMPLEMENTED |
@@ -963,6 +1109,7 @@ go tool cover -html=coverage.out          # View coverage report
 | **deployment-state.md** | AWS resource tag reconciliation | ⚠️ **PARTIAL** — only 3 of 19 resource types reconciled (P3.13) |
 | **spending-safeguards.md** | monthly_budget_usd, per_deployment_usd, alert_threshold_percent | ✅ Implemented |
 | **spending-safeguards.md** | Pre-provisioning budget check | ⚠️ PARTIAL — Cost Explorer works, but ALB/NAT/CW pricing uses hardcoded fallback |
+| **spending-safeguards.md** | Confirmation when no limits configured | ⚠️ **MISSING** — P1.36 (silently applies defaults without user confirmation) |
 | **spending-safeguards.md** | Runtime cost monitoring with Cost Explorer | ✅ Implemented |
 | **spending-safeguards.md** | Auto-teardown when budget exceeded | ✅ IMPLEMENTED |
 | **spending-safeguards.md** | Per-request spending limit overrides | ✅ IMPLEMENTED |
@@ -972,13 +1119,13 @@ go tool cover -html=coverage.out          # View coverage report
 | **networking.md** | VPC CIDR configurable | ✅ IMPLEMENTED — vpc_cidr parameter with validation (P1.9) |
 | **networking.md** | Private subnets with NAT Gateway | ✅ IMPLEMENTED |
 | **ci.md** | CI workflow with lint, test, build jobs | ✅ IMPLEMENTED |
-| **testing.md** | 50% code coverage | ✅ **TARGET MET** — 50.1% overall |
+| **testing.md** | 50% code coverage | ✅ **TARGET MET** — 52.9% overall |
 | **testing.md** | main.go test coverage | ⚠️ **PARTIAL** — components tested, main() itself hard to test (P2.9) |
 | **testing.md** | Concurrent access testing | ✅ **COMPLETE** — P2.10 fixed with comprehensive concurrent tests |
 | **error-handling.md** | Domain error types | ✅ **COMPLETE** — all 9 required error types defined and wired |
 | **operational.md** | No silent error suppression | ✅ FIXED — P0.2 complete, store.go now logs errors |
 | **operational.md** | Pagination for list operations | ✅ IMPLEMENTED |
-| **lightsail-provider.md** | Full Lightsail provider | ❌ **NOT IMPLEMENTED** — P4.1 |
+| **lightsail-provider.md** | Full Lightsail provider | ❌ **NOT IMPLEMENTED** — P1.34 (HIGHEST PRIORITY) |
 | **workload-roadmap.md** | 6 workload types | ❌ **NOT IMPLEMENTED** — P4.2-P4.7 (only web service exists) |
 | **workloads/static-site.md** | S3+CloudFront static sites | ❌ NOT IMPLEMENTED — P4.2 |
 | **workloads/background-worker.md** | ECS without ALB | ❌ NOT IMPLEMENTED — P4.3 |
