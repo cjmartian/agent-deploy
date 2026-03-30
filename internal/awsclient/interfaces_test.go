@@ -19,6 +19,9 @@ func TestMocksImplementInterfaces(t *testing.T) {
 	var _ AutoScalingAPI = (*mocks.AutoScalingMock)(nil)
 	var _ ACMAPI = (*mocks.ACMMock)(nil)
 	var _ Route53API = (*mocks.Route53Mock)(nil)
+	// P1.37: Static site mocks
+	var _ S3API = (*mocks.S3Mock)(nil)
+	var _ CloudFrontAPI = (*mocks.CloudFrontMock)(nil)
 }
 
 // TestAWSClientsStruct verifies the AWSClients struct can hold all interfaces.

@@ -26,6 +26,9 @@ type Plan struct {
 	// WHY: Lightsail offers $7-25/mo deployments vs $65+/mo with ECS Fargate.
 	// The planner auto-selects based on workload signals (users, scaling needs, etc.).
 	Backend string `json:"backend,omitempty"`
+	// WorkloadType is the detected or specified workload type (web-service, static-site, etc.) (P1.37).
+	// WHY: Different workload types require different infrastructure shapes and cost models.
+	WorkloadType string `json:"workload_type,omitempty"`
 }
 
 // PlanStatus constants.
@@ -91,6 +94,7 @@ const (
 const (
 	BackendECSFargate = "ecs-fargate"
 	BackendLightsail  = "lightsail"
+	BackendStaticSite = "s3-cloudfront" // P1.37: S3 + CloudFront for static sites
 )
 
 // Lightsail resource type constants for Infrastructure.Resources map keys.
@@ -100,6 +104,18 @@ const (
 	ResourceLightsailEndpoint = "lightsail_endpoint" // Public HTTPS endpoint URL
 	ResourceLightsailPower    = "lightsail_power"    // Power level (nano, micro, small, etc.)
 	ResourceLightsailNodes    = "lightsail_nodes"    // Number of nodes (1-20)
+)
+
+// Static site resource type constants for Infrastructure.Resources map keys (P1.37).
+// WHY: Track S3 and CloudFront resources for static site workloads.
+const (
+	ResourceS3Bucket            = "s3_bucket"             // S3 bucket name
+	ResourceCloudFrontDist      = "cloudfront_dist"       // CloudFront distribution ID
+	ResourceCloudFrontDomain    = "cloudfront_domain"     // CloudFront distribution domain name
+	ResourceCloudFrontOAC       = "cloudfront_oac"        // Origin Access Control ID
+	ResourceStaticSiteBuildCmd  = "static_build_cmd"      // Build command used (npm run build, etc.)
+	ResourceStaticSiteOutputDir = "static_output_dir"     // Build output directory (dist, build, etc.)
+	ResourceStaticSiteIsSPA     = "static_is_spa"         // "true" if single-page app (SPA routing)
 )
 
 // Deployment represents an application deployed onto infrastructure.

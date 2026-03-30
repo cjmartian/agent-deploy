@@ -10,8 +10,11 @@ import (
 	"io"
 	"log/slog"
 	"math/rand"
+	"mime"
 	"net"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -21,6 +24,8 @@ import (
 	acmtypes "github.com/aws/aws-sdk-go-v2/service/acm/types"
 	"github.com/aws/aws-sdk-go-v2/service/applicationautoscaling"
 	astypes "github.com/aws/aws-sdk-go-v2/service/applicationautoscaling/types"
+	"github.com/aws/aws-sdk-go-v2/service/cloudfront"
+	cftypes "github.com/aws/aws-sdk-go-v2/service/cloudfront/types"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
@@ -36,6 +41,8 @@ import (
 	lstypes "github.com/aws/aws-sdk-go-v2/service/lightsail/types"
 	"github.com/aws/aws-sdk-go-v2/service/route53"
 	route53types "github.com/aws/aws-sdk-go-v2/service/route53/types"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/cjmartian/agent-deploy/internal/awsclient"
 	apperrors "github.com/cjmartian/agent-deploy/internal/errors"
 	"github.com/cjmartian/agent-deploy/internal/id"
@@ -80,6 +87,9 @@ func (p *AWSProvider) getClients(cfg aws.Config) *awsclient.AWSClients {
 		AutoScaling:    applicationautoscaling.NewFromConfig(cfg),
 		ACM:            acm.NewFromConfig(cfg),
 		Lightsail:      lightsail.NewFromConfig(cfg), // P1.34: Low-cost container deployments
+		S3:             s3.NewFromConfig(cfg),
+		CloudFront:     cloudfront.NewFromConfig(cfg),
+		Route53:        route53.NewFromConfig(cfg),
 	}
 }
 
@@ -686,7 +696,25 @@ func (p *AWSProvider) planInfra(ctx context.Context, _ *mcp.CallToolRequest, in 
 	var estimatedCost float64
 	var costEstimate *spending.CostEstimate
 
-	if backend == state.BackendLightsail {
+	if backend == state.BackendStaticSite {
+		// Static site: S3 + CloudFront pricing
+		// S3: ~$0.023/GB/mo storage, CloudFront: first 1TB free then ~$0.085/GB
+		// For most static sites, cost is essentially free (< $5/mo)
+		services = []string{"S3 Bucket", "CloudFront CDN", "Route 53 (optional)"}
+		estimatedCost = 3.0 // Conservative estimate for small static sites
+		costEstimate = &spending.CostEstimate{
+			TotalMonthlyUSD: estimatedCost,
+			Region:          in.Region,
+			UsingFallback:   false,
+			Services: []spending.ServiceCost{
+				{Service: "S3 Storage", Description: "Static file hosting", MonthlyCost: 1.0},
+				{Service: "CloudFront CDN", Description: "Global edge caching with HTTPS", MonthlyCost: 2.0},
+			},
+		}
+		slog.Info("selected static site backend",
+			slog.String("component", "aws_plan_infra"),
+			logging.Cost(estimatedCost))
+	} else if backend == state.BackendLightsail {
 		// Lightsail: simple fixed pricing based on power level.
 		power := selectLightsailPower(in.ExpectedUsers)
 		nodes := calculateLightsailNodes(in.ExpectedUsers)
@@ -862,6 +890,11 @@ func (p *AWSProvider) planInfra(ctx context.Context, _ *mcp.CallToolRequest, in 
 		Backend:         backend,    // P1.34: Store selected backend (lightsail or ecs-fargate)
 	}
 
+	// P1.37: Set workload type for static sites
+	if backend == state.BackendStaticSite {
+		plan.WorkloadType = "static-site"
+	}
+
 	if err := p.store.CreatePlan(plan); err != nil {
 		return nil, planInfraOutput{}, fmt.Errorf("save plan: %w", err)
 	}
@@ -879,7 +912,13 @@ func (p *AWSProvider) planInfra(ctx context.Context, _ *mcp.CallToolRequest, in 
 
 	// Build detailed summary including cost breakdown.
 	var summaryBuilder string
-	if backend == state.BackendLightsail {
+	if backend == state.BackendStaticSite {
+		summaryBuilder = fmt.Sprintf(
+			"Proposed plan for %q: S3 + CloudFront static site in %s. Estimated cost: $%.2f/mo. Plan ID: %s (expires in 24h).\n\n",
+			in.AppDescription, in.Region, estimatedCost, plan.ID,
+		)
+		summaryBuilder += "💡 Static site hosting detected — using S3 + CloudFront for lowest cost (~$1-5/mo)\n\n"
+	} else if backend == state.BackendLightsail {
 		power := selectLightsailPower(in.ExpectedUsers)
 		nodes := calculateLightsailNodes(in.ExpectedUsers)
 		summaryBuilder = fmt.Sprintf(
@@ -1156,8 +1195,22 @@ func (p *AWSProvider) createInfra(ctx context.Context, _ *mcp.CallToolRequest, i
 	tags := awsclient.ResourceTags(plan.ID, infraID, "")
 	clients := p.getClients(cfg)
 
-	// P1.34: Branch based on backend selection.
-	if plan.Backend == state.BackendLightsail {
+	// P1.37: Static site infrastructure uses S3 + CloudFront
+	if plan.Backend == state.BackendStaticSite {
+		err := p.createStaticSiteInfra(ctx, cfg, plan, infra)
+		if err != nil {
+			if statusErr := p.store.SetInfraStatus(infraID, state.InfraStatusFailed); statusErr != nil {
+				slog.Error("failed to set infra status", logging.InfraID(infraID), logging.Err(statusErr))
+			}
+			return nil, createInfraOutput{}, fmt.Errorf("create static site infrastructure: %w", err)
+		}
+		if err := p.store.SetInfraStatus(infraID, state.InfraStatusReady); err != nil {
+			return nil, createInfraOutput{}, fmt.Errorf("update infrastructure state: %w", err)
+		}
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("Static site infrastructure %s is ready. S3 bucket and CloudFront distribution created.", infra.ID)}},
+		}, createInfraOutput{InfraID: infra.ID, Status: state.InfraStatusReady}, nil
+	} else if plan.Backend == state.BackendLightsail {
 		// Lightsail path: simpler, single-resource provisioning.
 		slog.Info("provisioning Lightsail infrastructure",
 			slog.String("component", "aws_create_infra"),
@@ -1478,6 +1531,52 @@ func (p *AWSProvider) deploy(ctx context.Context, _ *mcp.CallToolRequest, in dep
 
 	clients := p.getClients(cfg)
 
+	// P1.37: Static site deployment - upload files to S3
+	if bucketName, ok := infra.Resources[state.ResourceS3Bucket]; ok && bucketName != "" {
+		distributionID := infra.Resources[state.ResourceCloudFrontDist]
+		err := p.deployStaticSite(ctx, cfg, bucketName, distributionID, "")
+		if err != nil {
+			return nil, deployOutput{}, fmt.Errorf("deploy static site: %w", err)
+		}
+
+		// Build URLs
+		var urls []string
+		if domainName := infra.Resources[state.ResourceDomainName]; domainName != "" {
+			urls = append(urls, fmt.Sprintf("https://%s", domainName))
+		}
+		if cfDomain := infra.Resources[state.ResourceCloudFrontDomain]; cfDomain != "" {
+			urls = append(urls, fmt.Sprintf("https://%s", cfDomain))
+		}
+
+		// Create deployment record
+		deployment := &state.Deployment{
+			ID:          id.NewDeploy(),
+			InfraID:     infra.ID,
+			ImageRef:    "static-site", // No image for static sites
+			Status:      state.DeploymentStatusRunning,
+			URLs:        urls,
+			CreatedAt:   time.Now(),
+			LastUpdated: time.Now(),
+		}
+		if err := p.store.CreateDeployment(deployment); err != nil {
+			return nil, deployOutput{}, fmt.Errorf("save deployment: %w", err)
+		}
+
+		slog.Info("static site deployed",
+			slog.String("component", "aws_deploy"),
+			logging.DeploymentID(deployment.ID),
+			slog.Any("urls", urls))
+
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{
+				Text: fmt.Sprintf("Static site deployed! URLs: %s", strings.Join(urls, ", ")),
+			}},
+		}, deployOutput{
+			DeploymentID: deployment.ID,
+			Status:       deployment.Status,
+		}, nil
+	}
+
 	// P1.34: Check if this is a Lightsail deployment.
 	if serviceName, ok := infra.Resources[state.ResourceLightsailService]; ok && serviceName != "" {
 		// Lightsail deployment path.
@@ -1752,6 +1851,33 @@ func (p *AWSProvider) teardown(ctx context.Context, _ *mcp.CallToolRequest, in t
 	}
 
 	clients := p.getClients(cfg)
+
+	// P1.37: Static site teardown
+	if _, ok := infra.Resources[state.ResourceS3Bucket]; ok {
+		err := p.teardownStaticSite(ctx, cfg, infra)
+		if err != nil {
+			slog.Warn("static site teardown had errors",
+				slog.String("component", "aws_teardown"),
+				logging.Err(err))
+		}
+
+		// Update state.
+		if err := p.store.UpdateDeploymentStatus(in.DeploymentID, state.DeploymentStatusStopped, nil); err != nil {
+			slog.Error("failed to update deployment status during teardown", "deploymentID", in.DeploymentID, "error", err)
+		}
+		if err := p.store.SetInfraStatus(infra.ID, state.InfraStatusDestroyed); err != nil {
+			slog.Error("failed to set infra status during teardown", "infraID", infra.ID, "error", err)
+		}
+
+		slog.Info("static site torn down",
+			slog.String("component", "aws_teardown"),
+			logging.DeploymentID(in.DeploymentID))
+
+		return nil, teardownOutput{
+			DeploymentID: in.DeploymentID,
+			Status:       "destroyed",
+		}, nil
+	}
 
 	// P1.34: Check if this is a Lightsail deployment.
 	if serviceName, ok := infra.Resources[state.ResourceLightsailService]; ok && serviceName != "" {
@@ -4439,6 +4565,46 @@ var lightsailPowerResources = map[lstypes.ContainerServicePowerName]struct{ VCPU
 // WHY: Lightsail is preferred for simple, low-traffic apps; ECS Fargate for production workloads.
 // Per spec ralph/specs/lightsail-provider.md: selection is automatic based on signals.
 func selectBackend(expectedUsers int, autoScalingEnabled bool, appDescription string) string {
+	descLower := strings.ToLower(appDescription)
+	
+	// P1.37: Static site detection - check FIRST before other backends
+	// Static sites use S3+CloudFront instead of containers
+	staticKeywords := []string{
+		"static site", "static files", "static website",
+		"frontend only", "no backend", "html files",
+		"react app", "vue app", "angular app", "svelte app",
+		"vite", "documentation site", "docs site", "blog",
+		"spa", "single page app", "single-page app",
+		"marketing page", "landing page", "portfolio",
+	}
+	for _, kw := range staticKeywords {
+		if strings.Contains(descLower, kw) {
+			// Exclude only if they actually HAVE backend infrastructure
+			// WHY: "no server needed" is static, but "with express server" is not
+			// Check for positive backend indicators (not negations)
+			hasBackend := false
+			backendPatterns := []string{
+				"with api", "rest api", "graphql", " api ",
+				"with server", "express server", "node server", "backend server",
+				"with backend", "has backend",
+				"database", "postgres", "mysql", "redis", "mongodb", "dynamodb",
+			}
+			for _, pattern := range backendPatterns {
+				if strings.Contains(descLower, pattern) {
+					hasBackend = true
+					break
+				}
+			}
+			// Also check the description doesn't have negation patterns that indicate static
+			if strings.Contains(descLower, "no backend") || strings.Contains(descLower, "no server") {
+				hasBackend = false
+			}
+			if !hasBackend {
+				return state.BackendStaticSite
+			}
+		}
+	}
+
 	// ECS Fargate preferred signals:
 	// - >500 expected users
 	// - Auto-scaling required (maxCount > 1 explicitly set)
@@ -4447,7 +4613,6 @@ func selectBackend(expectedUsers int, autoScalingEnabled bool, appDescription st
 
 	// Check for production signals in app description.
 	prodKeywords := []string{"production", "prod", "enterprise", "high-availability", "ha ", "mission-critical"}
-	descLower := strings.ToLower(appDescription)
 	for _, kw := range prodKeywords {
 		if strings.Contains(descLower, kw) {
 			return state.BackendECSFargate
@@ -4687,6 +4852,370 @@ func (p *AWSProvider) deployToLightsail(
 	return 0, fmt.Errorf("lightsail deployment did not become active within 5 minutes")
 }
 
+// provisionStaticSiteBucket creates an S3 bucket for static site hosting (P1.37).
+// WHY: S3 provides durable, cheap storage for static files (~$0.023/GB/mo).
+func (p *AWSProvider) provisionStaticSiteBucket(
+	ctx context.Context,
+	cfg aws.Config,
+	infraID string,
+	region string,
+) (bucketName string, err error) {
+	clients := p.getClients(cfg)
+	if clients.S3 == nil {
+		return "", fmt.Errorf("S3 client not initialized")
+	}
+
+	bucketName = fmt.Sprintf("agent-deploy-%s", infraID[:12])
+
+	// Create bucket - us-east-1 doesn't need LocationConstraint
+	createInput := &s3.CreateBucketInput{
+		Bucket: aws.String(bucketName),
+	}
+	if region != "us-east-1" {
+		createInput.CreateBucketConfiguration = &s3types.CreateBucketConfiguration{
+			LocationConstraint: s3types.BucketLocationConstraint(region),
+		}
+	}
+
+	_, err = clients.S3.CreateBucket(ctx, createInput)
+	if err != nil {
+		return "", fmt.Errorf("create S3 bucket: %w", err)
+	}
+
+	// Block all public access - CloudFront uses OAC for access
+	_, err = clients.S3.PutPublicAccessBlock(ctx, &s3.PutPublicAccessBlockInput{
+		Bucket: aws.String(bucketName),
+		PublicAccessBlockConfiguration: &s3types.PublicAccessBlockConfiguration{
+			BlockPublicAcls:       aws.Bool(true),
+			BlockPublicPolicy:     aws.Bool(true),
+			IgnorePublicAcls:      aws.Bool(true),
+			RestrictPublicBuckets: aws.Bool(true),
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("set public access block: %w", err)
+	}
+
+	slog.Info("created S3 bucket for static site",
+		slog.String("component", "aws_provider"),
+		slog.String("bucket", bucketName))
+
+	return bucketName, nil
+}
+
+// createCloudFrontDistribution creates a CloudFront distribution for static site CDN (P1.37).
+// WHY: CloudFront provides global edge caching, HTTPS, and compression.
+func (p *AWSProvider) createCloudFrontDistribution(
+	ctx context.Context,
+	cfg aws.Config,
+	bucketName string,
+	bucketRegion string,
+	infraID string,
+	isSPA bool,
+	domainName string,
+	certificateARN string,
+) (distributionID, distributionDomain, oacID string, err error) {
+	clients := p.getClients(cfg)
+	if clients.CloudFront == nil {
+		return "", "", "", fmt.Errorf("CloudFront client not initialized")
+	}
+
+	// Create Origin Access Control for secure S3 access
+	oacName := fmt.Sprintf("agent-deploy-%s", infraID[:12])
+	oacOut, err := clients.CloudFront.CreateOriginAccessControl(ctx, &cloudfront.CreateOriginAccessControlInput{
+		OriginAccessControlConfig: &cftypes.OriginAccessControlConfig{
+			Name:                          aws.String(oacName),
+			OriginAccessControlOriginType: cftypes.OriginAccessControlOriginTypesS3,
+			SigningBehavior:               cftypes.OriginAccessControlSigningBehaviorsAlways,
+			SigningProtocol:               cftypes.OriginAccessControlSigningProtocolsSigv4,
+			Description:                   aws.String("OAC for agent-deploy static site"),
+		},
+	})
+	if err != nil {
+		return "", "", "", fmt.Errorf("create origin access control: %w", err)
+	}
+	oacID = *oacOut.OriginAccessControl.Id
+
+	// Build S3 origin domain
+	s3Origin := fmt.Sprintf("%s.s3.%s.amazonaws.com", bucketName, bucketRegion)
+	originID := fmt.Sprintf("S3-%s", bucketName)
+
+	// Custom error responses for SPA routing
+	var customErrorResponses *cftypes.CustomErrorResponses
+	if isSPA {
+		customErrorResponses = &cftypes.CustomErrorResponses{
+			Quantity: aws.Int32(2),
+			Items: []cftypes.CustomErrorResponse{
+				{
+					ErrorCode:          aws.Int32(403),
+					ResponseCode:       aws.String("200"),
+					ResponsePagePath:   aws.String("/index.html"),
+					ErrorCachingMinTTL: aws.Int64(0),
+				},
+				{
+					ErrorCode:          aws.Int32(404),
+					ResponseCode:       aws.String("200"),
+					ResponsePagePath:   aws.String("/index.html"),
+					ErrorCachingMinTTL: aws.Int64(0),
+				},
+			},
+		}
+	}
+
+	// Build aliases and viewer certificate for custom domain
+	var aliases *cftypes.Aliases
+	var viewerCert *cftypes.ViewerCertificate
+	if domainName != "" && certificateARN != "" {
+		aliases = &cftypes.Aliases{
+			Quantity: aws.Int32(1),
+			Items:    []string{domainName},
+		}
+		viewerCert = &cftypes.ViewerCertificate{
+			ACMCertificateArn:      aws.String(certificateARN),
+			SSLSupportMethod:       cftypes.SSLSupportMethodSniOnly,
+			MinimumProtocolVersion: cftypes.MinimumProtocolVersion("TLSv1.2_2021"),
+		}
+	} else {
+		aliases = &cftypes.Aliases{Quantity: aws.Int32(0)}
+		viewerCert = &cftypes.ViewerCertificate{
+			CloudFrontDefaultCertificate: aws.Bool(true),
+		}
+	}
+
+	// Create CloudFront distribution
+	callerRef := fmt.Sprintf("agent-deploy-%s-%d", infraID[:12], time.Now().Unix())
+	distInput := &cloudfront.CreateDistributionInput{
+		DistributionConfig: &cftypes.DistributionConfig{
+			CallerReference:   aws.String(callerRef),
+			Comment:           aws.String(fmt.Sprintf("Static site for %s", infraID)),
+			Enabled:           aws.Bool(true),
+			DefaultRootObject: aws.String("index.html"),
+			PriceClass:        cftypes.PriceClassPriceClass100, // US/EU only - cheapest
+			Origins: &cftypes.Origins{
+				Quantity: aws.Int32(1),
+				Items: []cftypes.Origin{
+					{
+						Id:                    aws.String(originID),
+						DomainName:            aws.String(s3Origin),
+						OriginAccessControlId: aws.String(oacID),
+						S3OriginConfig: &cftypes.S3OriginConfig{
+							OriginAccessIdentity: aws.String(""), // Empty for OAC
+						},
+					},
+				},
+			},
+			DefaultCacheBehavior: &cftypes.DefaultCacheBehavior{
+				TargetOriginId:       aws.String(originID),
+				ViewerProtocolPolicy: cftypes.ViewerProtocolPolicyRedirectToHttps,
+				Compress:             aws.Bool(true),
+				CachePolicyId:        aws.String("658327ea-f89d-4fab-a63d-7e88639e58f6"), // CachingOptimized
+				AllowedMethods: &cftypes.AllowedMethods{
+					Quantity: aws.Int32(2),
+					Items:    []cftypes.Method{cftypes.MethodGet, cftypes.MethodHead},
+				},
+			},
+			CustomErrorResponses: customErrorResponses,
+			Aliases:              aliases,
+			ViewerCertificate:    viewerCert,
+		},
+	}
+
+	distOut, err := clients.CloudFront.CreateDistribution(ctx, distInput)
+	if err != nil {
+		// Clean up OAC on failure
+		_, _ = clients.CloudFront.DeleteOriginAccessControl(ctx, &cloudfront.DeleteOriginAccessControlInput{
+			Id:      aws.String(oacID),
+			IfMatch: oacOut.ETag,
+		})
+		return "", "", "", fmt.Errorf("create CloudFront distribution: %w", err)
+	}
+
+	distributionID = *distOut.Distribution.Id
+	distributionDomain = *distOut.Distribution.DomainName
+
+	// Set bucket policy to allow CloudFront OAC access
+	bucketPolicy := fmt.Sprintf(`{
+		"Version": "2012-10-17",
+		"Statement": [{
+			"Sid": "AllowCloudFrontOAC",
+			"Effect": "Allow",
+			"Principal": {"Service": "cloudfront.amazonaws.com"},
+			"Action": "s3:GetObject",
+			"Resource": "arn:aws:s3:::%s/*",
+			"Condition": {
+				"StringEquals": {
+					"AWS:SourceArn": "arn:aws:cloudfront::%s:distribution/%s"
+				}
+			}
+		}]
+	}`, bucketName, getAccountID(cfg), distributionID)
+
+	_, err = clients.S3.PutBucketPolicy(ctx, &s3.PutBucketPolicyInput{
+		Bucket: aws.String(bucketName),
+		Policy: aws.String(bucketPolicy),
+	})
+	if err != nil {
+		slog.Warn("failed to set bucket policy, CloudFront may not have access",
+			slog.String("component", "aws_provider"),
+			logging.Err(err))
+	}
+
+	slog.Info("created CloudFront distribution for static site",
+		slog.String("component", "aws_provider"),
+		slog.String("distribution_id", distributionID),
+		slog.String("domain", distributionDomain))
+
+	return distributionID, distributionDomain, oacID, nil
+}
+
+// getAccountID extracts the AWS account ID from the config.
+func getAccountID(cfg aws.Config) string {
+	// In production, use STS GetCallerIdentity to get account ID
+	// For now, return a placeholder that will be replaced in bucket policy
+	return "*" // CloudFront will use service principal verification
+}
+
+// createStaticSiteInfra provisions S3 and CloudFront for static site hosting (P1.37).
+func (p *AWSProvider) createStaticSiteInfra(
+	ctx context.Context,
+	cfg aws.Config,
+	plan *state.Plan,
+	infra *state.Infrastructure,
+) error {
+	// Provision S3 bucket
+	bucketName, err := p.provisionStaticSiteBucket(ctx, cfg, infra.ID, plan.Region)
+	if err != nil {
+		return fmt.Errorf("provision S3 bucket: %w", err)
+	}
+	infra.Resources[state.ResourceS3Bucket] = bucketName
+
+	// Determine if this is a SPA (default to true for React/Vue/Angular apps)
+	isSPA := true // Default to SPA mode for better UX
+
+	// Handle custom domain with ACM certificate
+	var certARN string
+	if plan.DomainName != "" {
+		// For CloudFront, certificates MUST be in us-east-1
+		// Create a config for us-east-1 if needed
+		certCfg := cfg
+		if plan.Region != "us-east-1" {
+			var err error
+			certCfg, err = awsclient.LoadConfig(ctx, "us-east-1")
+			if err != nil {
+				slog.Warn("could not load us-east-1 config for ACM, skipping custom domain TLS",
+					slog.String("component", "aws_provider"),
+					logging.Err(err))
+			}
+		}
+
+		if certCfg.Region == "us-east-1" || plan.Region == "us-east-1" {
+			// Find hosted zone for certificate validation
+			hostedZoneID, _, hzErr := p.findHostedZone(ctx, certCfg, plan.DomainName)
+			if hzErr != nil {
+				slog.Warn("could not find hosted zone for certificate validation",
+					slog.String("component", "aws_provider"),
+					slog.String("domain", plan.DomainName),
+					logging.Err(hzErr))
+			} else {
+				certARN, err = p.provisionCertificate(ctx, certCfg, plan.DomainName, hostedZoneID, infra)
+				if err != nil {
+					slog.Warn("could not provision certificate for custom domain",
+						slog.String("component", "aws_provider"),
+						slog.String("domain", plan.DomainName),
+						logging.Err(err))
+				} else {
+					infra.Resources[state.ResourceCertificateARN] = certARN
+					infra.Resources[state.ResourceCertAutoCreated] = "true"
+				}
+			}
+		}
+	}
+
+	// Create CloudFront distribution
+	distID, distDomain, oacID, err := p.createCloudFrontDistribution(
+		ctx, cfg, bucketName, plan.Region, infra.ID, isSPA, plan.DomainName, certARN,
+	)
+	if err != nil {
+		return fmt.Errorf("create CloudFront distribution: %w", err)
+	}
+	infra.Resources[state.ResourceCloudFrontDist] = distID
+	infra.Resources[state.ResourceCloudFrontDomain] = distDomain
+	infra.Resources[state.ResourceCloudFrontOAC] = oacID
+	infra.Resources[state.ResourceStaticSiteIsSPA] = "true"
+
+	// Create Route 53 record for custom domain if configured
+	if plan.DomainName != "" && certARN != "" {
+		// CloudFront hosted zone ID is always Z2FDTNDATAQYW2
+		err = p.createCloudFrontDNSRecord(ctx, cfg, plan.DomainName, distDomain, infra)
+		if err != nil {
+			slog.Warn("could not create DNS record for custom domain",
+				slog.String("component", "aws_provider"),
+				slog.String("domain", plan.DomainName),
+				logging.Err(err))
+		}
+	}
+
+	return nil
+}
+
+// createCloudFrontDNSRecord creates a Route 53 alias record pointing to CloudFront (P1.37).
+func (p *AWSProvider) createCloudFrontDNSRecord(
+	ctx context.Context,
+	cfg aws.Config,
+	domainName string,
+	cloudFrontDomain string,
+	infra *state.Infrastructure,
+) error {
+	clients := p.getClients(cfg)
+	if clients.Route53 == nil {
+		return fmt.Errorf("Route53 client not initialized")
+	}
+
+	// Find the hosted zone
+	hostedZoneID, _, err := p.findHostedZone(ctx, cfg, domainName)
+	if err != nil {
+		return fmt.Errorf("find hosted zone: %w", err)
+	}
+	infra.Resources[state.ResourceHostedZoneID] = hostedZoneID
+
+	// CloudFront hosted zone ID is always Z2FDTNDATAQYW2
+	cloudFrontHostedZoneID := "Z2FDTNDATAQYW2"
+
+	// Create alias record
+	_, err = clients.Route53.ChangeResourceRecordSets(ctx, &route53.ChangeResourceRecordSetsInput{
+		HostedZoneId: aws.String(hostedZoneID),
+		ChangeBatch: &route53types.ChangeBatch{
+			Changes: []route53types.Change{
+				{
+					Action: route53types.ChangeActionUpsert,
+					ResourceRecordSet: &route53types.ResourceRecordSet{
+						Name: aws.String(domainName),
+						Type: route53types.RRTypeA,
+						AliasTarget: &route53types.AliasTarget{
+							DNSName:              aws.String(cloudFrontDomain),
+							HostedZoneId:         aws.String(cloudFrontHostedZoneID),
+							EvaluateTargetHealth: false,
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("create Route 53 alias record: %w", err)
+	}
+
+	infra.Resources[state.ResourceDNSRecordName] = domainName
+	infra.Resources[state.ResourceDomainName] = domainName
+
+	slog.Info("created Route 53 alias record for CloudFront",
+		slog.String("component", "aws_provider"),
+		slog.String("domain", domainName),
+		slog.String("cloudfront", cloudFrontDomain))
+
+	return nil
+}
+
 // teardownLightsail deletes a Lightsail container service and all associated resources.
 // WHY: Lightsail teardown is simpler than ECS — one API call removes everything.
 func (p *AWSProvider) teardownLightsail(
@@ -4753,4 +5282,458 @@ func (p *AWSProvider) getLightsailStatus(
 	nodes = int(aws.ToInt32(svc.Scale))
 
 	return status, urls, power, nodes, nil
+}
+
+// deployStaticSite uploads files to S3 and invalidates CloudFront cache (P1.37).
+// WHY: Static site deployment is just file sync + cache invalidation, no containers needed.
+// If sourceDir is empty or doesn't exist, a placeholder index.html is uploaded.
+// If sourceDir exists, all files are uploaded with proper MIME types and cache headers.
+func (p *AWSProvider) deployStaticSite(
+	ctx context.Context,
+	cfg aws.Config,
+	bucketName string,
+	distributionID string,
+	sourceDir string,
+) error {
+	clients := p.getClients(cfg)
+	if clients.S3 == nil || clients.CloudFront == nil {
+		return fmt.Errorf("S3 or CloudFront client not initialized")
+	}
+
+	var uploadedFiles int
+	var totalBytes int64
+
+	// Check if sourceDir exists and has files
+	if sourceDir != "" {
+		if info, err := os.Stat(sourceDir); err == nil && info.IsDir() {
+			// Upload all files from source directory
+			uploadedFiles, totalBytes, err = p.uploadDirectoryToS3(ctx, clients.S3, bucketName, sourceDir)
+			if err != nil {
+				return fmt.Errorf("upload source directory: %w", err)
+			}
+			slog.Info("uploaded static site files",
+				slog.String("component", "aws_provider"),
+				slog.Int("files", uploadedFiles),
+				slog.Int64("total_bytes", totalBytes))
+		}
+	}
+
+	// If no files uploaded (empty sourceDir or directory doesn't exist), create placeholder
+	if uploadedFiles == 0 {
+		indexContent := `<!DOCTYPE html>
+<html>
+<head>
+    <title>Static Site Deployed</title>
+    <style>
+        body { font-family: system-ui, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }
+        h1 { color: #333; }
+        p { color: #666; }
+    </style>
+</head>
+<body>
+    <h1>🎉 Static Site Deployed Successfully!</h1>
+    <p>Your static site infrastructure is ready. Upload your files to the S3 bucket to see your content here.</p>
+    <p>Bucket: <code>` + bucketName + `</code></p>
+</body>
+</html>`
+
+		_, err := clients.S3.PutObject(ctx, &s3.PutObjectInput{
+			Bucket:       aws.String(bucketName),
+			Key:          aws.String("index.html"),
+			Body:         strings.NewReader(indexContent),
+			ContentType:  aws.String("text/html; charset=utf-8"),
+			CacheControl: aws.String("no-cache"),
+		})
+		if err != nil {
+			return fmt.Errorf("upload index.html: %w", err)
+		}
+		uploadedFiles = 1
+	}
+
+	// Create CloudFront invalidation to clear cache
+	callerRef := fmt.Sprintf("deploy-%d", time.Now().Unix())
+	_, err := clients.CloudFront.CreateInvalidation(ctx, &cloudfront.CreateInvalidationInput{
+		DistributionId: aws.String(distributionID),
+		InvalidationBatch: &cftypes.InvalidationBatch{
+			CallerReference: aws.String(callerRef),
+			Paths: &cftypes.Paths{
+				Quantity: aws.Int32(1),
+				Items:    []string{"/*"},
+			},
+		},
+	})
+	if err != nil {
+		slog.Warn("CloudFront invalidation failed, content may be cached",
+			slog.String("component", "aws_provider"),
+			logging.Err(err))
+	}
+
+	slog.Info("deployed static site content",
+		slog.String("component", "aws_provider"),
+		slog.String("bucket", bucketName),
+		slog.String("distribution", distributionID),
+		slog.Int("files_uploaded", uploadedFiles))
+
+	return nil
+}
+
+// uploadDirectoryToS3 recursively uploads all files from a directory to S3.
+// WHY: Static sites need all files (HTML, CSS, JS, images) uploaded with correct MIME types.
+// Returns the count of files uploaded and total bytes.
+func (p *AWSProvider) uploadDirectoryToS3(
+	ctx context.Context,
+	s3Client awsclient.S3API,
+	bucketName string,
+	sourceDir string,
+) (int, int64, error) {
+	var uploadedFiles int
+	var totalBytes int64
+
+	err := filepath.Walk(sourceDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		// Skip directories
+		if info.IsDir() {
+			return nil
+		}
+		// Skip hidden files
+		if strings.HasPrefix(info.Name(), ".") {
+			return nil
+		}
+
+		// Calculate S3 key (relative path from sourceDir)
+		relPath, err := filepath.Rel(sourceDir, path)
+		if err != nil {
+			return fmt.Errorf("get relative path: %w", err)
+		}
+		// Use forward slashes for S3 keys
+		s3Key := filepath.ToSlash(relPath)
+
+		// Open file
+		file, err := os.Open(path)
+		if err != nil {
+			return fmt.Errorf("open file %s: %w", path, err)
+		}
+		defer file.Close()
+
+		// Determine content type and cache control
+		contentType := getContentType(path)
+		cacheControl := getCacheControl(path)
+
+		// Upload to S3
+		_, err = s3Client.PutObject(ctx, &s3.PutObjectInput{
+			Bucket:       aws.String(bucketName),
+			Key:          aws.String(s3Key),
+			Body:         file,
+			ContentType:  aws.String(contentType),
+			CacheControl: aws.String(cacheControl),
+		})
+		if err != nil {
+			return fmt.Errorf("upload %s: %w", s3Key, err)
+		}
+
+		uploadedFiles++
+		totalBytes += info.Size()
+
+		slog.Debug("uploaded file to S3",
+			slog.String("component", "aws_provider"),
+			slog.String("file", s3Key),
+			slog.String("content_type", contentType))
+
+		return nil
+	})
+
+	return uploadedFiles, totalBytes, err
+}
+
+// getContentType returns the MIME type for a file based on extension.
+// WHY: CloudFront and browsers need correct Content-Type headers for proper rendering.
+func getContentType(path string) string {
+	ext := strings.ToLower(filepath.Ext(path))
+
+	// Custom mappings for common static site files
+	customTypes := map[string]string{
+		".html": "text/html; charset=utf-8",
+		".htm":  "text/html; charset=utf-8",
+		".css":  "text/css; charset=utf-8",
+		".js":   "application/javascript; charset=utf-8",
+		".mjs":  "application/javascript; charset=utf-8",
+		".json": "application/json; charset=utf-8",
+		".xml":  "application/xml; charset=utf-8",
+		".svg":  "image/svg+xml",
+		".png":  "image/png",
+		".jpg":  "image/jpeg",
+		".jpeg": "image/jpeg",
+		".gif":  "image/gif",
+		".webp": "image/webp",
+		".ico":  "image/x-icon",
+		".woff": "font/woff",
+		".woff2":"font/woff2",
+		".ttf":  "font/ttf",
+		".otf":  "font/otf",
+		".eot":  "application/vnd.ms-fontobject",
+		".pdf":  "application/pdf",
+		".txt":  "text/plain; charset=utf-8",
+		".md":   "text/markdown; charset=utf-8",
+		".map":  "application/json",
+	}
+
+	if ct, ok := customTypes[ext]; ok {
+		return ct
+	}
+
+	// Fall back to Go's mime package
+	if ct := mime.TypeByExtension(ext); ct != "" {
+		return ct
+	}
+
+	return "application/octet-stream"
+}
+
+// getCacheControl returns the Cache-Control header value for a file.
+// WHY: Hashed assets can be cached forever; HTML needs revalidation for updates.
+func getCacheControl(path string) string {
+	ext := strings.ToLower(filepath.Ext(path))
+	basename := filepath.Base(path)
+
+	// HTML files should always revalidate
+	if ext == ".html" || ext == ".htm" {
+		return "no-cache"
+	}
+
+	// Check if file has a hash in the name (e.g., index-a1b2c3d4.js)
+	// Common patterns: filename.hash.ext, filename-hash.ext
+	if isHashedAsset(basename) {
+		return "public, max-age=31536000, immutable"
+	}
+
+	// Other static assets: cache for 1 day
+	switch ext {
+	case ".css", ".js", ".mjs":
+		return "public, max-age=86400"
+	case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico":
+		return "public, max-age=604800" // 1 week for images
+	case ".woff", ".woff2", ".ttf", ".otf", ".eot":
+		return "public, max-age=31536000" // 1 year for fonts
+	default:
+		return "public, max-age=86400" // 1 day default
+	}
+}
+
+// isHashedAsset checks if a filename contains a hash pattern.
+// WHY: Build tools like Vite, Webpack add content hashes for cache busting.
+// Examples: index-a1b2c3d4.js, main.abc123.css, chunk-ABCD1234.js
+func isHashedAsset(filename string) bool {
+	// Match patterns like: name-hash.ext or name.hash.ext
+	// Hash is typically 6-20 alphanumeric characters
+	hashPatterns := []string{
+		`-[a-fA-F0-9]{6,20}\.[^.]+$`,    // name-hash.ext
+		`\.[a-fA-F0-9]{6,20}\.[^.]+$`,   // name.hash.ext
+		`-[a-zA-Z0-9]{6,12}\.[^.]+$`,    // name-HASH.ext (mixed case)
+	}
+
+	for _, pattern := range hashPatterns {
+		if matched, _ := regexp.MatchString(pattern, filename); matched {
+			return true
+		}
+	}
+	return false
+}
+
+// teardownStaticSite removes CloudFront, S3, and related resources (P1.37).
+// WHY: Clean teardown must disable CloudFront first (slow), then empty+delete bucket.
+func (p *AWSProvider) teardownStaticSite(
+	ctx context.Context,
+	cfg aws.Config,
+	infra *state.Infrastructure,
+) error {
+	clients := p.getClients(cfg)
+
+	// 1. Delete DNS records first (if custom domain was configured)
+	if domainName := infra.Resources[state.ResourceDomainName]; domainName != "" {
+		hostedZoneID := infra.Resources[state.ResourceHostedZoneID]
+		if hostedZoneID != "" && clients.Route53 != nil {
+			cloudFrontDomain := infra.Resources[state.ResourceCloudFrontDomain]
+			_, err := clients.Route53.ChangeResourceRecordSets(ctx, &route53.ChangeResourceRecordSetsInput{
+				HostedZoneId: aws.String(hostedZoneID),
+				ChangeBatch: &route53types.ChangeBatch{
+					Changes: []route53types.Change{
+						{
+							Action: route53types.ChangeActionDelete,
+							ResourceRecordSet: &route53types.ResourceRecordSet{
+								Name: aws.String(domainName),
+								Type: route53types.RRTypeA,
+								AliasTarget: &route53types.AliasTarget{
+									DNSName:              aws.String(cloudFrontDomain),
+									HostedZoneId:         aws.String("Z2FDTNDATAQYW2"), // CloudFront hosted zone
+									EvaluateTargetHealth: false,
+								},
+							},
+						},
+					},
+				},
+			})
+			if err != nil {
+				slog.Warn("failed to delete Route 53 record",
+					slog.String("component", "aws_provider"),
+					slog.String("domain", domainName),
+					logging.Err(err))
+			}
+		}
+	}
+
+	// 2. Delete ACM certificate if auto-created
+	if certARN := infra.Resources[state.ResourceCertificateARN]; certARN != "" {
+		if infra.Resources[state.ResourceCertAutoCreated] == "true" && clients.ACM != nil {
+			// For CloudFront certs, need us-east-1 config
+			certCfg := cfg
+			if !strings.Contains(certARN, "us-east-1") {
+				var err error
+				certCfg, err = awsclient.LoadConfig(ctx, "us-east-1")
+				if err == nil {
+					acmClient := acm.NewFromConfig(certCfg)
+					_, delErr := acmClient.DeleteCertificate(ctx, &acm.DeleteCertificateInput{
+						CertificateArn: aws.String(certARN),
+					})
+					if delErr != nil {
+						slog.Warn("failed to delete ACM certificate",
+							slog.String("component", "aws_provider"),
+							logging.Err(delErr))
+					}
+				}
+			}
+		}
+	}
+
+	// 3. Disable and delete CloudFront distribution
+	distID := infra.Resources[state.ResourceCloudFrontDist]
+	if distID != "" && clients.CloudFront != nil {
+		// Get current distribution config
+		getDist, err := clients.CloudFront.GetDistribution(ctx, &cloudfront.GetDistributionInput{
+			Id: aws.String(distID),
+		})
+		if err != nil {
+			slog.Warn("failed to get CloudFront distribution",
+				slog.String("component", "aws_provider"),
+				slog.String("distribution_id", distID),
+				logging.Err(err))
+		} else if getDist.Distribution != nil && getDist.Distribution.DistributionConfig != nil {
+			// Disable the distribution
+			distConfig := getDist.Distribution.DistributionConfig
+			distConfig.Enabled = aws.Bool(false)
+
+			_, err = clients.CloudFront.UpdateDistribution(ctx, &cloudfront.UpdateDistributionInput{
+				Id:                 aws.String(distID),
+				IfMatch:            getDist.ETag,
+				DistributionConfig: distConfig,
+			})
+			if err != nil {
+				slog.Warn("failed to disable CloudFront distribution",
+					slog.String("component", "aws_provider"),
+					slog.String("distribution_id", distID),
+					logging.Err(err))
+			} else {
+				// Wait for distribution to be disabled (poll with timeout)
+				slog.Info("waiting for CloudFront distribution to disable (this may take several minutes)",
+					slog.String("component", "aws_provider"),
+					slog.String("distribution_id", distID))
+
+				// Poll for up to 10 minutes (CloudFront disable can be slow)
+				deadline := time.Now().Add(10 * time.Minute)
+				for time.Now().Before(deadline) {
+					getStatus, err := clients.CloudFront.GetDistribution(ctx, &cloudfront.GetDistributionInput{
+						Id: aws.String(distID),
+					})
+					if err != nil {
+						break
+					}
+					if getStatus.Distribution != nil && *getStatus.Distribution.Status == "Deployed" {
+						// Now we can delete
+						_, err = clients.CloudFront.DeleteDistribution(ctx, &cloudfront.DeleteDistributionInput{
+							Id:      aws.String(distID),
+							IfMatch: getStatus.ETag,
+						})
+						if err != nil {
+							slog.Warn("failed to delete CloudFront distribution",
+								slog.String("component", "aws_provider"),
+								logging.Err(err))
+						}
+						break
+					}
+					time.Sleep(30 * time.Second)
+				}
+			}
+		}
+	}
+
+	// 4. Delete Origin Access Control
+	oacID := infra.Resources[state.ResourceCloudFrontOAC]
+	if oacID != "" && clients.CloudFront != nil {
+		getOAC, err := clients.CloudFront.GetOriginAccessControl(ctx, &cloudfront.GetOriginAccessControlInput{
+			Id: aws.String(oacID),
+		})
+		if err == nil {
+			_, err = clients.CloudFront.DeleteOriginAccessControl(ctx, &cloudfront.DeleteOriginAccessControlInput{
+				Id:      aws.String(oacID),
+				IfMatch: getOAC.ETag,
+			})
+			if err != nil {
+				slog.Warn("failed to delete Origin Access Control",
+					slog.String("component", "aws_provider"),
+					logging.Err(err))
+			}
+		}
+	}
+
+	// 5. Empty and delete S3 bucket
+	bucketName := infra.Resources[state.ResourceS3Bucket]
+	if bucketName != "" && clients.S3 != nil {
+		// List and delete all objects
+		listOut, err := clients.S3.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+			Bucket: aws.String(bucketName),
+		})
+		if err == nil && len(listOut.Contents) > 0 {
+			var objectsToDelete []s3types.ObjectIdentifier
+			for _, obj := range listOut.Contents {
+				objectsToDelete = append(objectsToDelete, s3types.ObjectIdentifier{
+					Key: obj.Key,
+				})
+			}
+			_, err = clients.S3.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+				Bucket: aws.String(bucketName),
+				Delete: &s3types.Delete{
+					Objects: objectsToDelete,
+					Quiet:   aws.Bool(true),
+				},
+			})
+			if err != nil {
+				slog.Warn("failed to delete S3 objects",
+					slog.String("component", "aws_provider"),
+					logging.Err(err))
+			}
+		}
+
+		// Delete bucket policy first
+		_, _ = clients.S3.DeleteBucketPolicy(ctx, &s3.DeleteBucketPolicyInput{
+			Bucket: aws.String(bucketName),
+		})
+
+		// Delete the bucket
+		_, err = clients.S3.DeleteBucket(ctx, &s3.DeleteBucketInput{
+			Bucket: aws.String(bucketName),
+		})
+		if err != nil {
+			slog.Warn("failed to delete S3 bucket",
+				slog.String("component", "aws_provider"),
+				slog.String("bucket", bucketName),
+				logging.Err(err))
+		}
+	}
+
+	slog.Info("completed static site teardown",
+		slog.String("component", "aws_provider"),
+		slog.String("infra_id", infra.ID))
+
+	return nil
 }

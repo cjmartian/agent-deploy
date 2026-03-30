@@ -93,7 +93,7 @@ func TestPlanInfra_LightsailBackendSelection(t *testing.T) {
 		{
 			name: "small app selects Lightsail",
 			input: planInfraInput{
-				AppDescription: "Simple blog",
+				AppDescription: "Simple REST service for users", // Use a non-static description
 				ExpectedUsers:  50,
 				LatencyMS:      200,
 				Region:         "us-east-1",
@@ -4011,4 +4011,315 @@ func TestNilStoreGuard(t *testing.T) {
 			t.Errorf("unexpected error: %v", err)
 		}
 	})
+}
+
+// TestSelectBackend_StaticSite tests static site detection in backend selection (P1.37).
+// WHY: Static sites should be detected from description keywords and use S3+CloudFront.
+func TestSelectBackend_StaticSite(t *testing.T) {
+	tests := []struct {
+		name           string
+		appDescription string
+		expectedUsers  int
+		autoScaling    bool
+		wantBackend    string
+	}{
+		{
+			name:           "static site keyword",
+			appDescription: "Deploy this static site for my portfolio",
+			expectedUsers:  100,
+			autoScaling:    false,
+			wantBackend:    state.BackendStaticSite,
+		},
+		{
+			name:           "react app keyword",
+			appDescription: "This is a React app with no backend",
+			expectedUsers:  100,
+			autoScaling:    false,
+			wantBackend:    state.BackendStaticSite,
+		},
+		{
+			name:           "documentation site",
+			appDescription: "Host my documentation site built with Docusaurus",
+			expectedUsers:  500,
+			autoScaling:    false,
+			wantBackend:    state.BackendStaticSite,
+		},
+		{
+			name:           "frontend only",
+			appDescription: "Frontend only app, no server needed",
+			expectedUsers:  200,
+			autoScaling:    false,
+			wantBackend:    state.BackendStaticSite,
+		},
+		{
+			name:           "SPA keyword",
+			appDescription: "Deploy my SPA built with Vue",
+			expectedUsers:  100,
+			autoScaling:    false,
+			wantBackend:    state.BackendStaticSite,
+		},
+		{
+			name:           "vite app",
+			appDescription: "Vite + React app for marketing",
+			expectedUsers:  100,
+			autoScaling:    false,
+			wantBackend:    state.BackendStaticSite,
+		},
+		{
+			name:           "blog",
+			appDescription: "My personal blog with Hugo",
+			expectedUsers:  50,
+			autoScaling:    false,
+			wantBackend:    state.BackendStaticSite,
+		},
+		{
+			name:           "landing page",
+			appDescription: "Product landing page for marketing campaign",
+			expectedUsers:  1000,
+			autoScaling:    false,
+			wantBackend:    state.BackendStaticSite,
+		},
+		// Exclusion tests - these should NOT be static sites
+		{
+			name:           "static with API excludes",
+			appDescription: "Static site with API backend",
+			expectedUsers:  100,
+			autoScaling:    false,
+			wantBackend:    state.BackendLightsail, // Has "api" keyword
+		},
+		{
+			name:           "react with server excludes",
+			appDescription: "React app with Express server",
+			expectedUsers:  100,
+			autoScaling:    false,
+			wantBackend:    state.BackendLightsail, // Has "server" keyword
+		},
+		{
+			name:           "frontend with database excludes",
+			appDescription: "Frontend app connected to PostgreSQL database",
+			expectedUsers:  100,
+			autoScaling:    false,
+			wantBackend:    state.BackendLightsail, // Has "database" keyword
+		},
+		// Regular container workloads should still work
+		{
+			name:           "web service no static keywords",
+			appDescription: "A REST service for user management",
+			expectedUsers:  100,
+			autoScaling:    false,
+			wantBackend:    state.BackendLightsail,
+		},
+		{
+			name:           "production app",
+			appDescription: "Production grade enterprise application",
+			expectedUsers:  100,
+			autoScaling:    false,
+			wantBackend:    state.BackendECSFargate, // "production" keyword
+		},
+		{
+			name:           "high traffic",
+			appDescription: "Simple web app for many users",
+			expectedUsers:  1000,
+			autoScaling:    false,
+			wantBackend:    state.BackendECSFargate, // >500 users
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := selectBackend(tt.expectedUsers, tt.autoScaling, tt.appDescription)
+			if got != tt.wantBackend {
+				t.Errorf("selectBackend() = %v, want %v", got, tt.wantBackend)
+			}
+		})
+	}
+}
+
+// TestPlanInfra_StaticSite tests planning for static site workloads (P1.37).
+// WHY: Static site planning should return S3+CloudFront services and low cost estimate.
+func TestPlanInfra_StaticSite(t *testing.T) {
+	// Create temp directory for state
+	tempDir := t.TempDir()
+	store, err := state.NewStore(tempDir)
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+
+	provider := NewAWSProvider(store)
+
+	tests := []struct {
+		name            string
+		appDescription  string
+		expectedUsers   int
+		wantBackend     string
+		wantWorkload    string
+		wantServices    []string
+		wantCostLessThan float64
+	}{
+		{
+			name:             "static site plan",
+			appDescription:   "Deploy my static site portfolio",
+			expectedUsers:    100,
+			wantBackend:      state.BackendStaticSite,
+			wantWorkload:     "static-site",
+			wantServices:     []string{"S3 Bucket", "CloudFront CDN"},
+			wantCostLessThan: 10.0, // Static sites are very cheap
+		},
+		{
+			name:             "documentation site",
+			appDescription:   "Host documentation site built with Hugo",
+			expectedUsers:    500,
+			wantBackend:      state.BackendStaticSite,
+			wantWorkload:     "static-site",
+			wantServices:     []string{"S3 Bucket", "CloudFront CDN"},
+			wantCostLessThan: 10.0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := planInfraInput{
+				AppDescription: tt.appDescription,
+				ExpectedUsers:  tt.expectedUsers,
+				LatencyMS:      100,
+				Region:         "us-east-1",
+			}
+
+			_, output, err := provider.planInfra(context.Background(), nil, input)
+			if err != nil {
+				t.Fatalf("planInfra() error = %v", err)
+			}
+
+			// Get the plan to check backend
+			plan, err := store.GetPlan(output.PlanID)
+			if err != nil {
+				t.Fatalf("GetPlan() error = %v", err)
+			}
+
+			if plan.Backend != tt.wantBackend {
+				t.Errorf("Backend = %v, want %v", plan.Backend, tt.wantBackend)
+			}
+
+			// Check services contain expected ones
+			for _, wantSvc := range tt.wantServices {
+				found := false
+				for _, svc := range plan.Services {
+					if strings.Contains(svc, wantSvc) || svc == wantSvc {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("Services %v missing expected service %q", plan.Services, wantSvc)
+				}
+			}
+
+			// Check cost is reasonable for static site
+			if plan.EstimatedCostMo > tt.wantCostLessThan {
+				t.Errorf("EstimatedCostMo = %.2f, want < %.2f", plan.EstimatedCostMo, tt.wantCostLessThan)
+			}
+		})
+	}
+}
+
+// TestGetContentType tests MIME type detection for static site files (P1.37).
+func TestGetContentType(t *testing.T) {
+tests := []struct {
+path     string
+wantType string
+}{
+{"index.html", "text/html; charset=utf-8"},
+{"styles.css", "text/css; charset=utf-8"},
+{"app.js", "application/javascript; charset=utf-8"},
+{"data.json", "application/json; charset=utf-8"},
+{"logo.svg", "image/svg+xml"},
+{"photo.png", "image/png"},
+{"image.jpg", "image/jpeg"},
+{"image.jpeg", "image/jpeg"},
+{"icon.gif", "image/gif"},
+{"modern.webp", "image/webp"},
+{"favicon.ico", "image/x-icon"},
+{"font.woff", "font/woff"},
+{"font.woff2", "font/woff2"},
+{"font.ttf", "font/ttf"},
+		{"document.pdf", "application/pdf"},
+		{"readme.txt", "text/plain; charset=utf-8"},
+		{"docs.md", "text/markdown; charset=utf-8"},
+		{"app.js.map", "application/json"},
+		{"unknown.qzx", "application/octet-stream"},
+	}
+
+for _, tt := range tests {
+t.Run(tt.path, func(t *testing.T) {
+got := getContentType(tt.path)
+if got != tt.wantType {
+t.Errorf("getContentType(%q) = %q, want %q", tt.path, got, tt.wantType)
+}
+})
+}
+}
+
+// TestGetCacheControl tests cache header generation for static site files (P1.37).
+func TestGetCacheControl(t *testing.T) {
+tests := []struct {
+path      string
+wantCache string
+}{
+// HTML should not be cached
+{"index.html", "no-cache"},
+{"about.htm", "no-cache"},
+// Hashed assets should be immutable
+{"app-a1b2c3d4.js", "public, max-age=31536000, immutable"},
+{"styles.abc123.css", "public, max-age=31536000, immutable"},
+{"chunk-ABCD1234.js", "public, max-age=31536000, immutable"},
+// Non-hashed CSS/JS cached for 1 day
+{"styles.css", "public, max-age=86400"},
+{"app.js", "public, max-age=86400"},
+// Images cached for 1 week
+{"logo.png", "public, max-age=604800"},
+{"hero.jpg", "public, max-age=604800"},
+// Fonts cached for 1 year
+{"font.woff2", "public, max-age=31536000"},
+}
+
+for _, tt := range tests {
+t.Run(tt.path, func(t *testing.T) {
+got := getCacheControl(tt.path)
+if got != tt.wantCache {
+t.Errorf("getCacheControl(%q) = %q, want %q", tt.path, got, tt.wantCache)
+}
+})
+}
+}
+
+// TestIsHashedAsset tests detection of hashed filenames (P1.37).
+func TestIsHashedAsset(t *testing.T) {
+tests := []struct {
+filename string
+wantHash bool
+}{
+// Hashed patterns (should match)
+{"index-a1b2c3d4.js", true},
+{"styles.abc123ef.css", true},
+{"chunk-ABCDEF12.js", true},
+{"vendor-deadbeef.js", true},
+// Non-hashed (should not match)
+{"index.html", false},
+{"styles.css", false},
+{"app.js", false},
+{"logo.png", false},
+{"font.woff2", false},
+// Edge cases
+{"a-b.js", false},       // Too short to be a hash
+{"file-abc.css", false}, // 3 chars is too short
+}
+
+for _, tt := range tests {
+t.Run(tt.filename, func(t *testing.T) {
+got := isHashedAsset(tt.filename)
+if got != tt.wantHash {
+t.Errorf("isHashedAsset(%q) = %v, want %v", tt.filename, got, tt.wantHash)
+}
+})
+}
 }

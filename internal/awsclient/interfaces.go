@@ -6,6 +6,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/acm"
 	"github.com/aws/aws-sdk-go-v2/service/applicationautoscaling"
+	"github.com/aws/aws-sdk-go-v2/service/cloudfront"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ecr"
@@ -14,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/lightsail"
 	"github.com/aws/aws-sdk-go-v2/service/route53"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
 // EC2API defines the EC2 API methods used by agent-deploy.
@@ -169,6 +171,46 @@ type LightsailAPI interface {
 	DeleteCertificate(ctx context.Context, params *lightsail.DeleteCertificateInput, optFns ...func(*lightsail.Options)) (*lightsail.DeleteCertificateOutput, error)
 }
 
+// S3API defines the S3 API methods used by agent-deploy for static site hosting (P1.37).
+// WHY: Static sites use S3 for storage at ~$0.023/GB/month, far cheaper than container hosting.
+type S3API interface {
+	// Bucket operations
+	CreateBucket(ctx context.Context, params *s3.CreateBucketInput, optFns ...func(*s3.Options)) (*s3.CreateBucketOutput, error)
+	DeleteBucket(ctx context.Context, params *s3.DeleteBucketInput, optFns ...func(*s3.Options)) (*s3.DeleteBucketOutput, error)
+	HeadBucket(ctx context.Context, params *s3.HeadBucketInput, optFns ...func(*s3.Options)) (*s3.HeadBucketOutput, error)
+	
+	// Public access configuration
+	PutPublicAccessBlock(ctx context.Context, params *s3.PutPublicAccessBlockInput, optFns ...func(*s3.Options)) (*s3.PutPublicAccessBlockOutput, error)
+	
+	// Bucket policy for CloudFront OAC
+	PutBucketPolicy(ctx context.Context, params *s3.PutBucketPolicyInput, optFns ...func(*s3.Options)) (*s3.PutBucketPolicyOutput, error)
+	DeleteBucketPolicy(ctx context.Context, params *s3.DeleteBucketPolicyInput, optFns ...func(*s3.Options)) (*s3.DeleteBucketPolicyOutput, error)
+	
+	// Object operations for deploy
+	PutObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error)
+	DeleteObject(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
+	ListObjectsV2(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
+	DeleteObjects(ctx context.Context, params *s3.DeleteObjectsInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error)
+}
+
+// CloudFrontAPI defines the CloudFront API methods used by agent-deploy for static site CDN (P1.37).
+// WHY: CloudFront provides global edge caching, HTTPS, and compression for static sites at ~$0.085/GB.
+type CloudFrontAPI interface {
+	// Distribution operations
+	CreateDistribution(ctx context.Context, params *cloudfront.CreateDistributionInput, optFns ...func(*cloudfront.Options)) (*cloudfront.CreateDistributionOutput, error)
+	GetDistribution(ctx context.Context, params *cloudfront.GetDistributionInput, optFns ...func(*cloudfront.Options)) (*cloudfront.GetDistributionOutput, error)
+	UpdateDistribution(ctx context.Context, params *cloudfront.UpdateDistributionInput, optFns ...func(*cloudfront.Options)) (*cloudfront.UpdateDistributionOutput, error)
+	DeleteDistribution(ctx context.Context, params *cloudfront.DeleteDistributionInput, optFns ...func(*cloudfront.Options)) (*cloudfront.DeleteDistributionOutput, error)
+	
+	// Origin Access Control for secure S3 access
+	CreateOriginAccessControl(ctx context.Context, params *cloudfront.CreateOriginAccessControlInput, optFns ...func(*cloudfront.Options)) (*cloudfront.CreateOriginAccessControlOutput, error)
+	DeleteOriginAccessControl(ctx context.Context, params *cloudfront.DeleteOriginAccessControlInput, optFns ...func(*cloudfront.Options)) (*cloudfront.DeleteOriginAccessControlOutput, error)
+	GetOriginAccessControl(ctx context.Context, params *cloudfront.GetOriginAccessControlInput, optFns ...func(*cloudfront.Options)) (*cloudfront.GetOriginAccessControlOutput, error)
+	
+	// Cache invalidation after deploy
+	CreateInvalidation(ctx context.Context, params *cloudfront.CreateInvalidationInput, optFns ...func(*cloudfront.Options)) (*cloudfront.CreateInvalidationOutput, error)
+}
+
 // AWSClients holds all AWS service clients used by the provider.
 // This struct can be populated with either real clients or mocks for testing.
 type AWSClients struct {
@@ -181,5 +223,7 @@ type AWSClients struct {
 	AutoScaling    AutoScalingAPI
 	ACM            ACMAPI
 	Route53        Route53API
-	Lightsail      LightsailAPI // P1.34: Low-cost container deployments
+	Lightsail      LightsailAPI      // P1.34: Low-cost container deployments
+	S3             S3API             // P1.37: Static site storage
+	CloudFront     CloudFrontAPI     // P1.37: Static site CDN
 }

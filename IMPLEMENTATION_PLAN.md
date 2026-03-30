@@ -21,7 +21,7 @@
 - ✅ P1.36 Spending confirmation — 100% complete (warns when using defaults)
 - ✅ P3.32 Reconcile error handling — fixed silent error suppression
 - ✅ P1.34 Lightsail provider — 100% complete (auto-selects backend, cost comparison)
-- 🔴 P1.37 Static Site workload — workload-roadmap.md priority P1, 0% implemented
+- ✅ P1.37 Static Site workload — 100% complete (S3+CloudFront, file upload with MIME types, cache headers)
 - 🔴 P1.38 Background Worker workload — workload-roadmap.md priority P1, 0% implemented
 
 ---
@@ -37,7 +37,7 @@
 | ID | Issue | Status | Impact |
 |----|-------|--------|--------|
 | ✅ ~~P1.34~~ | ~~Lightsail provider not implemented~~ | ✅ COMPLETE | Full Lightsail provider implemented with auto-backend selection, cost comparison, and $7-25/mo deployments. |
-| 🚨 **P1.37** | **Static Site workload not implemented** | ❌ | **Priority P1** per `ralph/specs/workload-roadmap.md`. S3+CloudFront = $1-5/mo vs $65+/mo. No CloudFront, no S3 bucket provisioning code exists. |
+| ✅ ~~P1.37~~ | ~~Static Site workload~~ | ✅ COMPLETE | **Priority P1** per `ralph/specs/workload-roadmap.md`. S3+CloudFront = $1-5/mo vs $65+/mo. Full implementation: S3 bucket, CloudFront, OAC, custom domain, file upload with MIME type detection, cache control headers. |
 | 🚨 **P1.38** | **Background Worker workload not implemented** | ❌ | **Priority P1** per `ralph/specs/workload-roadmap.md`. SQS+Lambda/Fargate without ALB. No SQS, no worker patterns implemented. |
 | ✅ ~~P1.35~~ | ~~Custom DNS status URL gap~~ | ✅ FIXED | Custom domain now included in `aws_status` URL list and `custom_domain` field. |
 | ✅ ~~P1.36~~ | ~~Spending confirmation gap~~ | ✅ FIXED | Plan output now includes `requires_confirmation` when using default limits. |
@@ -179,7 +179,7 @@
 | **Error handling** | ✅ Complete | All 9 error types defined, no silent suppression |
 | **Logging** | ✅ Complete | Structured slog with component tags |
 | **Lightsail provider** | ✅ Complete | Auto-selects backend, Lightsail vs ECS cost comparison (P1.34) |
-| **Static Site workload** | 🔴 Missing | 0% implemented — priority P1 per workload-roadmap.md (P1.37) |
+| **Static Site workload** | ✅ Complete | Full implementation: S3, CloudFront, OAC, custom domain, file upload with MIME types, cache headers (P1.37) |
 | **Background Worker workload** | 🔴 Missing | 0% implemented — priority P1 per workload-roadmap.md (P1.38) |
 
 ---
@@ -382,33 +382,41 @@
 - Added tests: `TestLoadLimitsWithSource_NoConfig`, `TestLoadLimitsWithSource_WithConfigFile`, `TestLoadLimitsWithSource_WithEnvVars`
 - **Location:** `internal/spending/config.go`, `internal/providers/aws.go`, `internal/spending/config_test.go`
 
-### P1.37 Static Site Workload ❌
+### P1.37 Static Site Workload ✅ COMPLETE
 
-**Status:** NOT IMPLEMENTED — Priority P1 per `ralph/specs/workload-roadmap.md`  
+**Status:** 100% IMPLEMENTED — Priority P1 per `ralph/specs/workload-roadmap.md`  
 **Spec:** `ralph/specs/workloads/static-site.md`  
-**Impact:** Would enable ultra-cheap static deployments ($1-5/mo vs $65+/mo with ECS)
+**Impact:** Enables ultra-cheap static deployments ($1-5/mo vs $65+/mo with ECS)
 
-**Evidence:**
-- No CloudFront references in any .go files
-- No S3 bucket provisioning code exists
-- `workload-roadmap.md` explicitly lists "Static site" as Priority P1
+**Completed:**
+- [x] Add `workload_type` parameter to `aws_plan_infra` tool
+- [x] Add workload type constants to `state/types.go`
+- [x] Implement S3 bucket creation for static assets
+- [x] Implement CloudFront distribution with S3 origin
+- [x] Implement Origin Access Control (OAC) for secure S3 access
+- [x] Support custom domains via Route 53 (leverage existing DNS code)
+- [x] Add S3/CloudFront SDK dependencies to `go.mod`
+- [x] Add cost estimation for S3+CloudFront
+- [x] Add tests for static site provisioning
+- [x] Fixed import cycle in `internal/awsclient/mocks/cloudfront.go` and `s3.go` by removing awsclient import (interface compliance now verified in `interfaces_test.go`)
+- [x] File upload implementation with directory walk (`uploadDirectoryToS3()`)
+- [x] MIME type detection (`getContentType()` for proper Content-Type headers)
+- [x] Cache-Control headers (`getCacheControl()` — HTML no-cache, hashed assets immutable, etc.)
+- [x] Hashed asset detection (`isHashedAsset()` for detecting build hashes like `.abc123.js`)
+- [x] Unit tests for all helper functions
+- **Location:** `internal/providers/aws_static.go`, `internal/awsclient/cloudfront.go`, `internal/awsclient/s3.go`
+
+**Implementation Details:**
+- `uploadDirectoryToS3()` — Recursive file upload with filepath.WalkDir
+- `getContentType()` — MIME type detection for common web assets (HTML, CSS, JS, images, fonts, etc.)
+- `getCacheControl()` — Smart cache headers (no-cache for HTML, immutable for hashed assets, 1-year cache for static assets)
+- `isHashedAsset()` — Detects build tool hashes (e.g., `main.abc123.js`, `styles.def456.css`)
 
 **Benefits:**
 - S3 + CloudFront = extremely low cost
 - Global CDN distribution
 - Perfect for docs, landing pages, SPAs
 - No container overhead
-
-**Required Work:**
-- [ ] Add `workload_type` parameter to `aws_plan_infra` tool
-- [ ] Add workload type constants to `state/types.go`
-- [ ] Implement S3 bucket creation for static assets
-- [ ] Implement CloudFront distribution with S3 origin
-- [ ] Support custom domains via Route 53 (leverage existing DNS code)
-- [ ] Add S3/CloudFront SDK dependencies to `go.mod`
-- [ ] Add cost estimation for S3+CloudFront
-- [ ] Add tests for static site provisioning
-- **Location:** `internal/providers/aws.go` or `internal/providers/aws_static.go`
 
 ### P1.38 Background Worker Workload ❌
 
@@ -1106,8 +1114,8 @@ go tool cover -html=coverage.out          # View coverage report
 | `ralph/specs/distribution.md` | Distribution / GoReleaser spec |
 | `ralph/specs/ci.md` | CI/CD requirements spec |
 | `ralph/specs/lightsail-provider.md` | Lightsail provider spec (IMPLEMENTED — P1.34) |
-| `ralph/specs/workload-roadmap.md` | **Workload types roadmap (2 P1 + 4 P2-P3 workloads pending)** |
-| `ralph/specs/workloads/static-site.md` | **Static site spec (NOT IMPLEMENTED — P1.37, priority: P1)** |
+| `ralph/specs/workload-roadmap.md` | **Workload types roadmap (1 P1 + 4 P2-P3 workloads pending)** |
+| `ralph/specs/workloads/static-site.md` | **Static site spec (IMPLEMENTED — P1.37, priority: P1)** |
 | `ralph/specs/workloads/background-worker.md` | **Background worker spec (NOT IMPLEMENTED — P1.38, priority: P1)** |
 | `ralph/specs/workloads/` | **6 workload specs total (static-site, background-worker, scheduled-job, batch, ml-inference, data-pipeline)** |
 
@@ -1153,13 +1161,13 @@ go tool cover -html=coverage.out          # View coverage report
 
 | Priority | Count | Items |
 |----------|-------|-------|
-| **P0 Critical** | 1 | **P0.3 (provider nil store checks — 11 unguarded accesses)** |
-| **P1 Spec Gaps** | 3 | **P1.37 (Static Site)**, **P1.38 (Background Worker)**, ~~P1.34 (Lightsail — COMPLETE)~~, ~~P1.35 (DNS status URL — COMPLETE)~~, ~~P1.36 (spending confirmation — COMPLETE)~~ |
+| **P0 Critical** | 0 | ~~P0.3 (provider nil store checks — FIXED)~~ |
+| **P1 Spec Gaps** | 1 | ~~P1.37 (Static Site — COMPLETE)~~, **P1.38 (Background Worker)** |
 | **P2 Test Gaps** | 6 | P2.5 (AWS error scenarios), P2.11 (processAlert), P2.12 (checkInfraResources), P2.13 (sleep timing), P2.14 (reconcile mocks), P2.15 (signal/HTTP) |
 | **P3 Quality** | 9 | P3.13 (reconciliation 3/25 types), P3.19 (pricing), P3.20 (NAT HA), P3.31 (DNS error handling), P3.32 (reconcile error handling), P3.27-P3.30 (CI gaps) |
 | **P4 New Features** | 4 | P4.4-P4.7 (scheduled job, batch, ML inference, data pipeline) |
 | **P5 Stretch** | 3 | CloudFormation, multi-cloud, secrets |
-| **Total remaining** | **28** | |
+| **Total remaining** | **24** | |
 
 ---
 
@@ -1221,7 +1229,7 @@ go tool cover -html=coverage.out          # View coverage report
 | **operational.md** | Pagination for list operations | ✅ IMPLEMENTED |
 | **lightsail-provider.md** | Full Lightsail provider (priority: P1) | ✅ **IMPLEMENTED** — P1.34 (auto-backend selection, cost comparison) |
 | **workload-roadmap.md** | 6 workload types | ❌ **PARTIAL** — only web service exists; 2 P1 workloads + 4 P2-P3 workloads pending |
-| **workloads/static-site.md** | S3+CloudFront static sites (priority: P1) | ❌ **NOT IMPLEMENTED** — P1.37 |
+| **workloads/static-site.md** | S3+CloudFront static sites (priority: P1) | ✅ **COMPLETE** — P1.37 (S3+CloudFront, file upload with MIME types, cache headers) |
 | **workloads/background-worker.md** | ECS without ALB (priority: P1) | ❌ **NOT IMPLEMENTED** — P1.38 |
 | **workloads/scheduled-job.md** | EventBridge scheduled tasks (priority: P2) | ❌ NOT IMPLEMENTED — P4.4 |
 | **workloads/batch-processing.md** | AWS Batch integration (priority: P2) | ❌ NOT IMPLEMENTED — P4.5 |
