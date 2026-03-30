@@ -19,10 +19,10 @@
 - ✅ All P0 critical issues resolved (P0.1, P0.2, P0.3)
 - ✅ P1.29 Custom DNS — 100% complete (P1.35 status URL gap fixed)
 - ✅ P1.36 Spending confirmation — 100% complete (warns when using defaults)
+- ✅ P3.32 Reconcile error handling — fixed silent error suppression
 - 🔴 P1.34 Lightsail provider — spec has `priority: P1` in YAML frontmatter, 0% implemented
 - 🔴 P1.37 Static Site workload — workload-roadmap.md priority P1, 0% implemented
 - 🔴 P1.38 Background Worker workload — workload-roadmap.md priority P1, 0% implemented
-- 🟡 P3.32: Reconcile error handling — errors silently ignored in multiple reconcile functions
 
 ---
 
@@ -59,7 +59,7 @@
 | **P3.19** | Hardcoded ALB/NAT/CloudWatch pricing | ⚠️ | Cost estimation inaccurate; Pricing API not wired into EstimateCosts() |
 | **P3.20** | NAT Gateway single AZ | ⚠️ | Single point of failure for private subnet traffic; no HA |
 | **P3.31** | `deleteDNSResources()` error not checked | ❌ | Called without error checking in `teardown()` (~line 1510); should return and propagate error |
-| **P3.32** | Reconcile error handling issues | ❌ | Errors silently ignored at lines 143-155, 272, 293, 301, 309 in reconcile.go |
+| ✅ ~~P3.32~~ | ~~Reconcile error handling issues~~ | ✅ FIXED | Errors now logged/returned instead of silently ignored |
 
 ### CI/CD GAPS (P3)
 | ID | Issue | Status | Impact |

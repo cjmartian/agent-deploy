@@ -140,15 +140,20 @@ func (r *Reconciler) findOrphanedResources(ctx context.Context) ([]OrphanedResou
 	localDeployIDs := make(map[string]bool)
 	localInfraIDs := make(map[string]bool)
 
+	// P3.32: Log errors instead of silently ignoring them.
 	deployments, err := r.store.ListDeployments()
-	if err == nil {
+	if err != nil {
+		errors = append(errors, "list deployments: "+err.Error())
+	} else {
 		for _, d := range deployments {
 			localDeployIDs[d.ID] = true
 		}
 	}
 
 	infras, err := r.store.ListInfra()
-	if err == nil {
+	if err != nil {
+		errors = append(errors, "list infra: "+err.Error())
+	} else {
 		for _, i := range infras {
 			localInfraIDs[i.ID] = true
 		}
@@ -269,8 +274,11 @@ func (r *Reconciler) findStaleEntries(ctx context.Context) ([]StaleEntry, []stri
 
 			// Check if ECS service exists
 			if deploy.ServiceARN != "" {
-				exists, _ := r.ecsServiceExists(ctx, infra.Resources[ResourceECSCluster], deploy.ServiceARN)
-				if !exists {
+				// P3.32: Log errors from service existence check instead of silently ignoring.
+				exists, svcErr := r.ecsServiceExists(ctx, infra.Resources[ResourceECSCluster], deploy.ServiceARN)
+				if svcErr != nil {
+					errors = append(errors, "check ECS service "+deploy.ServiceARN+": "+svcErr.Error())
+				} else if !exists {
 					stale = append(stale, StaleEntry{
 						EntryType:        "deployment",
 						EntryID:          deploy.ID,
@@ -285,29 +293,46 @@ func (r *Reconciler) findStaleEntries(ctx context.Context) ([]StaleEntry, []stri
 }
 
 // checkInfraResources verifies AWS resources exist for an infrastructure record.
+// P3.32: Now logs errors instead of silently ignoring them with _, _ pattern.
 func (r *Reconciler) checkInfraResources(ctx context.Context, infra *Infrastructure) []string {
 	var missing []string
+	log := logging.WithComponent("reconciler")
 
 	// Check VPC
 	if vpcID := infra.Resources[ResourceVPC]; vpcID != "" {
-		exists, _ := r.vpcExists(ctx, vpcID)
-		if !exists {
+		exists, err := r.vpcExists(ctx, vpcID)
+		if err != nil {
+			log.Warn("error checking VPC existence",
+				logging.InfraID(infra.ID),
+				slog.String("vpc_id", vpcID),
+				logging.Err(err))
+		} else if !exists {
 			missing = append(missing, "vpc")
 		}
 	}
 
 	// Check ECS cluster
 	if clusterARN := infra.Resources[ResourceECSCluster]; clusterARN != "" {
-		exists, _ := r.ecsClusterExists(ctx, clusterARN)
-		if !exists {
+		exists, err := r.ecsClusterExists(ctx, clusterARN)
+		if err != nil {
+			log.Warn("error checking ECS cluster existence",
+				logging.InfraID(infra.ID),
+				slog.String("cluster_arn", clusterARN),
+				logging.Err(err))
+		} else if !exists {
 			missing = append(missing, "ecs_cluster")
 		}
 	}
 
 	// Check ALB
 	if albARN := infra.Resources[ResourceALB]; albARN != "" {
-		exists, _ := r.albExists(ctx, albARN)
-		if !exists {
+		exists, err := r.albExists(ctx, albARN)
+		if err != nil {
+			log.Warn("error checking ALB existence",
+				logging.InfraID(infra.ID),
+				slog.String("alb_arn", albARN),
+				logging.Err(err))
+		} else if !exists {
 			missing = append(missing, "alb")
 		}
 	}
